@@ -30,6 +30,7 @@ struct orz_state {
 	_osr_bytes replay_data{};
 
 	std::vector<u8> output;
+	const char* error{}; // why the encoder made no output
 	size_t input_size{};
 	std::vector<_osr_frame> input;
 	std::string text;

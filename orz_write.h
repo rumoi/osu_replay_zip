@@ -218,7 +218,7 @@ void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state&
 
 bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);
 
-static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u32 flags, orz_state& state) {
+static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, const u32 header_info, orz_state& state) {
 
 	{
 
@@ -231,8 +231,43 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	}
 
+	if (is_orz(raw_file)) {
+
+		state.error = "already an .orz file";
+
+		return;
+	}
+
+	// header info stands in for missing .osr headers, never next to them
+	const bool header{ starts_with_osr_header(raw_file) }, given{ (header_info & HEADER_INFO_GIVEN) != 0 };
+	const u32 info_mode{ (header_info >> 1) & 3 };
+	bool relax{ ((header_info >> 3) & 1) != 0 };
+
+	if (header && given) {
+
+		state.error = "the input has .osr headers, so header info must not be given";
+
+		return;
+	}
+
+	if (!header && !given) {
+
+		state.error = "the input has no .osr headers, and no header info (game mode, relax) was given";
+
+		return;
+	}
+
+	if (!header && info_mode == 3 && relax) {
+
+		state.error = "osu!mania has no relax";
+
+		return;
+	}
+
 	if (raw_file.size() < 128)
 		return;
+
+	u32 flags{ header ? (u32)ORZ_FLAG::has_osr_header : 1u << info_mode };
 
 	const size_t file_size{ raw_file.size() };
 
@@ -277,14 +312,9 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	size_t lzma_offset{}, lzma_size{ file_size };
 
-	bool relax{ (state.options & ENCODE_RELAX) != 0 };
-
 	auto& header_bytes{ state.osr_header };
 
-	if (flags & ORZ_FLAG::has_osr_header) {
-
-		if (raw_file[0] > 3) // if the osr isnt for one of the main 4 game modes, abort
-			return;
+	if (header) {
 
 		flags |= 1u << raw_file[0];
 
@@ -317,7 +347,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 		if (!skip(sizeof(_osr_header_values)))
 			return;
 
-		relax |= (header_values->mods & OSR_MOD_RELAX) != 0;
+		relax = (header_values->mods & OSR_MOD_RELAX) != 0;
 
 		const size_t life_start{ pos };
 
@@ -475,23 +505,31 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 }
 
-// an .osr (or bare replay data) in memory: the .orz goes to state.output
-void osr_to_orz(const std::vector<u8>& input, const u32 flags, orz_state& state) {
+// an .osr, or bare replay data with header_info saying what it is (header_info()), in memory: the .orz goes to
+// state.output; when there is none, state.error says why
+void osr_to_orz(const std::vector<u8>& input, const u32 header_info, orz_state& state) {
 
 	try {
-		encode_osr(input, "", flags, state);
+		encode_osr(input, "", header_info, state);
 	} catch (const std::exception&) {
 		state.output.clear(); // nothing is written for input the encoder can not handle
 	}
 
+	if (state.output.empty() && !state.error)
+		state.error = "not a valid replay";
+
 }
 
-void osr_to_orz(const char* in_file, const char* out_file, const u32 flags, orz_state& state) {
+void osr_to_orz(const char* in_file, const char* out_file, const u32 header_info, orz_state& state) {
 
 	try {
-		encode_osr(read_file(in_file), out_file, flags, state);
+		encode_osr(read_file(in_file), out_file, header_info, state);
 	} catch (const std::exception&) {
 		state.output.clear();
+		state.error = nullptr;
 	}
+
+	if (state.output.empty() && !state.error)
+		state.error = "not a valid replay";
 
 }

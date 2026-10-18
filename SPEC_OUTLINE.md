@@ -108,9 +108,10 @@ So exactly one of `frames` and `osr_replay_data` is present, and it is the last 
 | 7 | osu!mania | osu!mania form (§7) |
 
 Relax does not exist in osu!mania, and autopilot only in osu!. Relax selects the relax prior sets (§5.6) and is only
-needed to decode the osu!standard form. The game mode is the `.osr`'s, or the one given with bare replay data, with
-osu! when none is given; it is not needed to decode. osu!mania replays that do not fit the column form are stored as
-kind 0, and so are autopilot replays the path model does not fit (the encoder decides from the frames).
+needed to decode the osu!standard form. The game mode and relax are read from the `.osr` header; bare replay data has
+no header, so the caller gives them. The game mode is not needed to decode. osu!mania replays that do not fit the
+column form are stored as kind 0, and so are autopilot replays the path model does not fit (the encoder decides from
+the frames).
 
 ### 3.4 CRC
 

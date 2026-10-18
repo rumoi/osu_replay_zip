@@ -597,7 +597,7 @@ namespace {
 	}
 
 	// mode flags for a replay file: .osr carries them, headerless data names them
-	u32 flags_of(const std::string& path) {
+	u32 header_info_of(const std::string& path) {
 
 		constexpr const char* NAMES[]{ "replay-osu-", "replay-taiko-", "replay-fruits-", "replay-mania-" };
 
@@ -605,9 +605,9 @@ namespace {
 
 		for (u32 m{}; m < 4; ++m)
 			if (name.starts_with(NAMES[m]))
-				return 1u << m;
+				return header_info(m, false);
 
-		return ORZ_FLAG::has_osr_header;
+		return 0;
 	}
 
 	template<typename T>
@@ -687,7 +687,7 @@ int main(int argc, char** argv) {
 
 					orz_state state{};
 
-					osr_to_orz(paths[i].c_str(), "", flags_of(paths[i]), state);
+					osr_to_orz(paths[i].c_str(), "", header_info_of(paths[i]), state);
 
 					encoded[i] = std::move(state.output);
 

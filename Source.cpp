@@ -7,10 +7,6 @@
 
 #include <filesystem>
 
-static bool is_orz(const std::vector<u8>& data) {
-	return data.size() >= 2 && data[0] == ORZ_MAGIC;
-}
-
 static int run(const int param_count, char** param) {
 
 	const auto usage = []() {
@@ -85,11 +81,11 @@ static int run(const int param_count, char** param) {
 
 		orz_state st{};
 
-		osr_to_orz(in_s.c_str(), out_s.c_str(), ORZ_FLAG::has_osr_header, st);
+		osr_to_orz(in_s.c_str(), out_s.c_str(), 0, st);
 
 		if (st.output.empty()) {
 
-			fprintf(stderr, "error: %s is not a valid .osr file\n", in_s.c_str());
+			fprintf(stderr, "error: %s: %s\n", in_s.c_str(), st.error);
 
 			return 1;
 		}

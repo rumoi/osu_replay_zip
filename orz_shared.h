@@ -119,12 +119,32 @@ enum ORZ_OPTION : u32 {
 
 	DECODE_SKIP_CRC = 1 << 2,
 
-	ENCODE_RELAX = 1 << 3,
 	ENCODE_AUTOPILOT = 1 << 4,
 
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
+
+// what headerless replay data is, from the caller, since only an .osr's header says: bit 0 set when given, bits 1-2
+// the game mode, bit 3 relax. 0 gives none, for input with .osr headers
+constexpr u32 HEADER_INFO_GIVEN{ 1 };
+
+constexpr u32 header_info(u32 mode, bool relax) {
+	return HEADER_INFO_GIVEN | (mode & 3) << 1 | u32(relax) << 3;
+}
+
+// an .osr starts with its game mode and the client version (yyyymmdd); bare replay data starts with LZMA properties
+inline bool starts_with_osr_header(std::span<const u8> data) {
+
+	if (data.size() < 5 || data[0] > 3)
+		return false;
+
+	i32 version;
+
+	memcpy(&version, data.data() + 1, 4);
+
+	return version >= 20070000 && version <= 30070000;
+}
 
 enum class orz_tag : u8 {
 
@@ -605,6 +625,10 @@ u32 read_length_bucket(const _bit_view input, size_t& i) {
 }
 
 constexpr u8 ORZ_MAGIC{ 'r' };
+
+inline bool is_orz(std::span<const u8> data) {
+	return data.size() >= 2 && data[0] == ORZ_MAGIC;
+}
 
 // tuned to sessions under around 4.7 hours
 constexpr u32 ORZ_SEED_LENGTH{ 18 };
