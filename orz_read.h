@@ -64,15 +64,16 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 	std::vector<_osr_frame> R(header->frame_count);
 
 	const bool other_mode{ kind_other_frames(info_kind(header->flags)) };
+	const bool verbatim{ (header->flags & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
 
-	if (!(other_mode ? modes::decode(header, stream_data, R) : standard::decode(header, stream_data, R)))
+	if (!verbatim && !(other_mode ? modes::decode(header, stream_data, R) : standard::decode(header, stream_data, R)))
 		return false;
 
 	// readd the closing seed frame
 	if (header->seeded)
 		R.push_back({ -12345, 0.f, 0.f, header->seed });
 
-	if (header->flags & ORZ_ENCODE_INFO::replay_verbatim) {
+	if (verbatim) {
 
 		const auto& data{ stream_data[orz_tag::osr_replay_data] };
 
