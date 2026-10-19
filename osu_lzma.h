@@ -14,6 +14,8 @@
 #include <span>
 #include <vector>
 
+#include "orz_types.h"
+
 namespace orz {
 
 namespace osu_lzma {

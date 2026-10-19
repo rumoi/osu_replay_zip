@@ -4,11 +4,10 @@
 #include "orz_life.h"
 #include "orz_parts.h"
 #include "orz_text.h"
+#include "orz_encoder_std.h"
+#include "orz_modes.h"
 
 namespace orz {
-
-namespace standard { bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R); }
-namespace modes { bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R); }
 
 // the data of tag, empty when the file has none
 static std::span<const u8> container_data(const _orz_file& file, orz_tag tag) {
@@ -194,7 +193,3 @@ bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want) {
 }
 
 }
-
-#include "orz_time.h"
-#include "orz_encoder_std.h"
-#include "orz_modes.h"

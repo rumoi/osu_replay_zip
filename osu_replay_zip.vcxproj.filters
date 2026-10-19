@@ -59,6 +59,9 @@
     <ClInclude Include="orz_state.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="orz_types.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="orz_shared.h">
       <Filter>Header Files</Filter>
     </ClInclude>

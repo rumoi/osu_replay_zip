@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "orz_state.h"
+#include "orz_write.h"
+#include "orz_time.h"
 #include "orz_frames.h"
 #include "orz_device_std.h"
 

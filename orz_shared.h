@@ -16,6 +16,11 @@
 #include <string>
 #include <vector>
 
+// replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
+#include "LzmaDec.h"
+#include "orz_types.h"
+#include "osu_lzma.h"
+
 namespace orz {
 
 #if defined(_M_FP_FAST) || defined(_M_FP_CONTRACT) || defined(__FAST_MATH__)
@@ -33,16 +38,6 @@ static_assert(FLT_EVAL_METHOD == 0, "float must not use extended precision (x87)
 #define FORCEINLINE inline __attribute__((always_inline))
 #define TARGET_SSE42 __attribute__((target("sse4.2"))) // the CRC instructions, without building everything for SSE 4.2
 #endif
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-
-typedef int8_t i8;
-typedef int16_t i16;
-typedef int32_t i32;
-typedef int64_t i64;
 
 // MSVC generates terrible code for std::bit_cast<float>(u32) - have to use this
 FORCEINLINE float float_from_bits(u32 bits) {
@@ -123,14 +118,6 @@ enum class orz_tag : u8 {
 	osr_verbatim,
 
 };
-
-} // namespace orz
-
-// replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
-#include "LzmaDec.h"
-#include "osu_lzma.h"
-
-namespace orz {
 
 struct _lzma_block_cache {
 

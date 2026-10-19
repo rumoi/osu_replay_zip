@@ -5,6 +5,8 @@
 #include <span>
 #include <vector>
 
+#include "orz_shared.h"
+
 namespace orz {
 
 namespace frame_time {
