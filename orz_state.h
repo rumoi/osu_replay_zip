@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "orz_shared.h"
+#include "orz_tables.h"
 
 namespace orz {
 
@@ -34,6 +35,8 @@ struct orz_state {
 	std::string text;
 
 	// not reset by reset_volatile
+	_table_memory tables{}; // can be reused by the next encode/decode
+
 	struct {
 		bool disable_device{};
 	} debug;

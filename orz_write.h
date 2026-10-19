@@ -108,7 +108,7 @@ void encode_replay(_osr& r, orz_state& state) {
 	standard::encode(r, state);
 }
 
-bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want);
+bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want, _table_memory& tables);
 
 // an .osr's header: the e_mode its frames are coded as, and the parts the decoder needs to rebuild the file
 struct _osr_header {
@@ -340,7 +340,7 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 
 	const bool coded{ !(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim) };
 
-	if (coded && (state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text))
+	if (coded && (state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text, state.tables))
 		write_verbatim(state);
 
 }

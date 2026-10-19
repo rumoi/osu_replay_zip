@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "orz_state.h"
+#include "orz_tables.h"
 #include "orz_write.h"
 #include "orz_time.h"
 #include "orz_frames.h"
@@ -18,8 +19,6 @@
 namespace orz {
 
 namespace modes {
-
-	enum kind : u32 { taiko, fruits, mania };
 
 	// the frames form of an e_mode uses_modes_coder sends here
 	FORCEINLINE kind mode_of(e_mode m) {
@@ -36,9 +35,6 @@ namespace modes {
 
 	// valid catcher residuals are far below 2^40, only damaged files reach it
 	constexpr i64 MAX_RES{ 1ll << 40 };
-
-	// catcher residual decisions: 0 zero, 1 sign, 2 length gate, 3-34 length up, 35-63 length down
-	constexpr u32 RES_STEPS{ 64 };
 
 	FORCEINLINE float taiko_x(u32 keys) {
 		return (keys & 3) ? 0.f : ((keys & 12) ? 640.f : 320.f);
@@ -72,38 +68,6 @@ namespace modes {
 		frame_time::_time_grid grid{ 0 };
 		int bits{ frames::KEY_BITS };    // keys modelled one by one (osu!mania: columns)
 		bool exact_text{};
-	};
-
-	struct _models {
-
-		frames::_models keys_time;
-		cm::model moved, dir, res, res_bits;
-
-		void init(size_t frames, kind mode, bool record_keys = false) {
-
-			keys_time.init_keys_time(frames, record_keys);
-
-			if (mode != fruits)
-				return;
-
-			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
-
-			moved.init(6, std::clamp(b + 3, 12, 20 + extra), 1, 64, 64, record_keys);
-			dir.init(4, std::clamp(b + 1, 10, 18 + extra), 1, 16, 16, record_keys);
-			res.init(5, std::clamp(b, 10, 18 + extra), RES_STEPS, RES_STEPS, RES_STEPS, record_keys);
-			res_bits.init(2, std::clamp(b + 1, 10, 18 + extra), 1, 8, 8, record_keys);
-
-		}
-
-		// in frames_prior.h order
-		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
-			return { &keys_time.keys_changed, &keys_time.keys_bits, &keys_time.keys_high, &keys_time.time, &moved, &dir, &res, &res_bits };
-		}
-
-		void seed(kind mode) {
-			frames::seed(all(), frames::builtin_prior(frames::set_taiko + mode));
-		}
-
 	};
 
 	// escaped frames and their positions (count, then per frame the gap to it and whether it sits at the start position,
@@ -566,7 +530,7 @@ namespace modes {
 
 		frame_time::write_table(head, side.table, grid);
 
-		_models M{};
+		_models& M{ state.tables.modes };
 
 		M.init(R.size(), mode);
 		M.seed(mode);
@@ -591,7 +555,7 @@ namespace modes {
 
 	}
 
-	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R) {
+	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_bit_view head{ data };
 
@@ -620,7 +584,7 @@ namespace modes {
 
 		}
 
-		_models M{};
+		_models& M{ tables.modes };
 
 		M.init(R.size(), side.mode);
 		M.seed(side.mode);

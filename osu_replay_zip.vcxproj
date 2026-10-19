@@ -176,6 +176,7 @@
     <ClInclude Include="orz_read.h" />
     <ClInclude Include="orz_shared.h" />
     <ClInclude Include="orz_state.h" />
+    <ClInclude Include="orz_tables.h" />
     <ClInclude Include="orz_types.h" />
     <ClInclude Include="orz_text.h" />
     <ClInclude Include="orz_time.h" />

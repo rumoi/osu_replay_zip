@@ -831,7 +831,7 @@ namespace standard {
 
 			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, is_relax(state.mode()), ap, shared.std_default_time };
 
-			add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text()));
+			add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
 
 			return head.data;
 		};
@@ -981,6 +981,132 @@ namespace standard {
 
 	}
 
+	// x's device on y (the same window, y's offset), taken when it misses at most 0.1% of y's samples
+	inline bool device_from_x(orz_state& state, const std::vector<float>& vals, const std::vector<int>& dt, const dspace::axis_params& px,
+		dspace::axis_params& py, dspace::axis_streams& streams) {
+
+		std::vector<dspace::axis_params> cands;
+
+		if (px.mode == dspace::axis_mode::rational) {
+
+			// the same lattice, the offset from the most common residue
+			const i64 D{ px.rational.D }, A{ px.rational.a };
+
+			std::map<i64, size_t> res;
+
+			for (size_t i{ 2 }; i < vals.size(); i += std::max<size_t>(1, vals.size() / 2000))
+				++res[((std::llround((double)vals[i] * D) % A) + A) % A];
+
+			i64 B{};
+			size_t bc{};
+
+			for (const auto& [v, n] : res) {
+
+				if (n > bc) {
+
+					bc = n;
+					B = v;
+
+				}
+
+			}
+
+			auto q{ px };
+
+			q.rational.b = (int)B;
+
+			cands.push_back(q);
+
+		} else if (px.mode == dspace::axis_mode::mouse ||
+			(px.mode == dspace::axis_mode::absolute && px.tablet.mapping == dspace::tablet_mapping::window)) {
+
+			for (const auto& [W, H] : PM_RES) {
+
+				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+				if (ratio != px.field.scale)
+					continue;
+
+				auto q{ px };
+
+				q.field.off = oy;
+
+				if (q.mode == dspace::axis_mode::absolute) {
+
+					q.tablet.half = (float)(H / 2);
+					q.tablet.span = (float)H;
+
+				}
+
+				cands.push_back(q);
+
+			}
+
+		}
+
+		const size_t limit{ vals.size() / 1000 };
+
+		for (const auto& q : cands) {
+
+			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), {}, limit + 1) };
+
+			if (st.escapes.size() + st.repeats <= limit) {
+
+				py = q;
+				streams = std::move(st);
+
+				return true;
+			}
+
+		}
+
+		return false;
+	}
+
+	inline void share_mouse(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
+
+		dspace::axis_params* p[2]{ &px, &py };
+
+		for (int m{}; m < 2; ++m) {
+
+			const int a{ 1 - m };
+
+			if (p[m]->mode != dspace::axis_mode::mouse || p[a]->mode == dspace::axis_mode::mouse || p[a]->mode == dspace::axis_mode::none)
+				continue;
+
+			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
+
+			for (const auto& [W, H] : PM_RES) {
+
+				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+				if (ratio != p[m]->field.scale)
+					continue;
+
+				auto q{ *p[m] };
+
+				q.field.off = a ? oy : ox;
+
+				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
+
+				if (st.escapes.size() * 2 > vals[a].size())
+					continue;
+
+				if (const size_t c{ axis_cost(st, dt, a, state.exact_text()) }; c < best) {
+
+					best = c;
+					*p[a] = q;
+					ws[a] = std::move(st);
+
+				}
+
+			}
+
+		}
+
+	}
+
 	inline bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
 		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
@@ -995,9 +1121,13 @@ namespace standard {
 
 			px = detect_axis_model(state, vals[0], dt, 0, nullptr, ws[0]);
 
-			if (px.mode != dspace::axis_mode::none)
-				py = detect_axis_model(state, vals[1], dt, 1, &px, ws[1]);
-			else {
+			// y's own search only when x's device does not fit it (not osu!catch, whose y is the catcher's fixed height)
+			if (px.mode != dspace::axis_mode::none) {
+
+				if (game_mode(state.mode()) == 2 || !device_from_x(state, vals[1], dt, px, py, ws[1]))
+					py = detect_axis_model(state, vals[1], dt, 1, &px, ws[1]);
+
+			} else {
 
 				// x found nothing: detect y on its own, then retry x with y's mapping
 				py = detect_axis_model(state, vals[1], dt, 1, nullptr, ws[1]);
@@ -1011,6 +1141,7 @@ namespace standard {
 				refine_window(state, vals, dt, px, py, ws);
 
 			try_other_mouse(state, vals, dt, px, py, ws);
+			share_mouse(state, vals, dt, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
@@ -1211,7 +1342,7 @@ namespace standard {
 		return true;
 	}
 
-	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R) {
+	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_frames_head head{};
 
@@ -1231,7 +1362,7 @@ namespace standard {
 		side.std_default_time = head.std_default_time;
 
 		frames::_frame_data fd{};
-		frames::_reader reader{ head.rest, fd, side, R.size() };
+		frames::_reader reader{ tables.standard, head.rest, fd, side, R.size() };
 
 		const auto sample{ repeat::sample_of(fd.repeated) };
 

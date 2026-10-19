@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "device_space.h"
+#include "orz_time.h"
 #include "cm.h"
 #include "frames_prior.h"
 #include "orz_autopilot.h"
@@ -59,6 +60,9 @@ namespace frames {
 		bool std_default_time{};
 	};
 
+	// tables stop growing at this many frames - replays gain little for more (+0.001%)
+	constexpr size_t TABLE_FRAMES{ 1 << 14 };
+
 	struct _models {
 
 		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape, escape_value, ap_event, ap_value;
@@ -68,11 +72,11 @@ namespace frames {
 			return { &keys_changed, &keys_bits, &keys_high, &time, &repeat, &move, &move_bits, &slack, &escape, &escape_value, &ap_event, &ap_value };
 		}
 
-		// tables follow the replay's length up to a cap (the frame count of a file to decode is untrusted),
-		// and are larger when training priors. The keys and time models, which every mode uses:
+		// tables follow the replay's length up to TABLE_FRAMES (the frame count of a file to decode is untrusted), and are
+		// larger when training priors. The keys and time models, which every mode uses:
 		void init_keys_time(size_t frames, bool record_keys = false) {
 
-			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
+			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
 			// single decision models: a counter per line; time / move / slack: a line of counters per context
 			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
@@ -84,12 +88,12 @@ namespace frames {
 
 		void init(size_t frames, bool record_keys = false) {
 
-			const int b{ (int)std::bit_width(frames) }, extra{ record_keys ? 4 : 0 };
+			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
 			init_keys_time(frames, record_keys);
 
 			repeat.init(8, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			move.init(6, std::clamp(b + 3, 12, 19 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
+			move.init(6, std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
 			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
 			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
@@ -1088,10 +1092,8 @@ namespace frames {
 	}
 
 	// the frames, then each axis's escape values in order
-	inline std::vector<u8> encode(_frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
+	inline std::vector<u8> encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
 		bool exact_text) {
-
-		_models M{};
 
 		M.init(frames);
 		seed_priors(M, side);
@@ -1115,11 +1117,11 @@ namespace frames {
 	// decodes the frames on construction, then hands out the escape values as decode_axis asks for them
 	struct _reader {
 
-		_models M;
+		_models& M;
 		cm::bit_decoder d;
 		int prev_len[2]{};
 
-		_reader(std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : d{ data } {
+		_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
 
 			M.init(frames);
 			seed_priors(M, side);

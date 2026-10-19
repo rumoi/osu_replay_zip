@@ -138,7 +138,9 @@ namespace {
 		if (frames::prior_set(r.side) != set)
 			return false;
 
-		frames::_reader reader{ head.rest, r.fd, r.side, r.frames };
+		frames::_models models{};
+
+		frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames };
 
 		return true;
 	}
