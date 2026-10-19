@@ -682,8 +682,16 @@ struct _orz_file {
 
 		}
 
-		if(bs.read_bits<1>())
-			container_custom.resize(1 + bs.read_bucket<4>());
+		if (bs.read_bits<1>()) {
+
+			const u64 custom_count{ 1ull + bs.read_bucket<4>() };
+			
+			if (custom_count > bytes.size() * 8 / 21)
+				return 0;
+
+			container_custom.resize(custom_count);
+
+		}
 
 		for (auto& con : container_custom) {
 
@@ -700,6 +708,9 @@ struct _orz_file {
 			con.data.resize(container_size);
 
 		}
+
+		if (bs.in > bs.max_size())
+			return 0;
 
 		auto data_block{ bs.get_tail() };
 
@@ -732,6 +743,11 @@ struct _orz_file {
 	bool encode(std::vector<u8>& output_orz) {
 
 		output_orz.clear();
+		
+		for (const auto& con : container_custom)
+			for (const u8 c : con.name)
+				if (c > 127)
+					return 0;
 
 		bit_stream bs{};
 
@@ -785,7 +801,7 @@ struct _orz_file {
 				bs.write_bits<5>(con.name.size());
 
 				for (const auto& c : con.name)
-					bs.write_bits<7>(c & 127);
+					bs.write_bits<7>(c);
 
 				bs.write_bucket(con.data.size(), 16);
 				add_to_u8(output_orz, con.data);
