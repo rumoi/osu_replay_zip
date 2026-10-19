@@ -6,6 +6,8 @@
 // and model (frames::_models::all, modes::_models::all). Counters are keyed by the low 32 bits of their context hash,
 // value = p | confidence << 16 | slot << 24; then each model's mixer weights and apm table
 
+namespace orz {
+
 constexpr uint32_t FRAMES_PRIOR_SETS{ 11 };
 constexpr uint32_t FRAMES_PRIOR_MODELS{ 12 };
 
@@ -123578,3 +123580,4 @@ constexpr uint16_t FRAMES_PRIOR_APM[643731]{
 	170, 138, 98, 186, 169, 254, 429, 715, 1208, 1963, 3071, 4912, 7775, 11847, 17501, 24613, 32613, 40781, 47870, 53518, 57712, 60560, 62416, 63600, 64352, 64800, 65088, 65264, 65360, 65424, 65472, 65488, 65520,
 };
 
+}

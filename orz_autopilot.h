@@ -10,6 +10,10 @@
 #include <span>
 #include <vector>
 
+#include "device_space.h"
+
+namespace orz {
+
 namespace autopilot {
 
 	// game ms between eased samples (1000 / 60 at the replay's speed): normal, double time, half time
@@ -802,5 +806,7 @@ namespace autopilot {
 
 		return best;
 	}
+
+}
 
 }

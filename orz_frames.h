@@ -5,15 +5,18 @@
 // follow the frames. Every value is a sequence of binary decisions coded with context mixing (cm.h), and one templated
 // loop serves encoder, decoder and prior training.
 
-#include "cm.h"
-#include "frames_prior.h"
-#include "orz_autopilot.h"
-
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <span>
 #include <vector>
+
+#include "device_space.h"
+#include "cm.h"
+#include "frames_prior.h"
+#include "orz_autopilot.h"
+
+namespace orz {
 
 namespace frames {
 
@@ -53,7 +56,7 @@ namespace frames {
 		frame_time::_time_grid grid{ 0 };
 		bool relax{};
 		autopilot::_params ap{};
-		bool start_time{};
+		bool std_default_time{};
 	};
 
 	struct _models {
@@ -523,11 +526,10 @@ namespace frames {
 		return negative ? -(i64)out : (i64)out;
 	}
 
-	// mouse slack in ulps (|slack| <= MOUSE_SLACK_RANGE), unary on its zigzag
+	// mouse slack: the candidate index (<= 2 * MOUSE_SLACK_RANGE), unary
 	template<typename Coder>
-	int slack_value(Coder& c, cm::model& m, int s, int axis, i64 d) {
+	int slack_value(Coder& c, cm::model& m, int k, int axis, i64 d) {
 
-		const u64 z{ rc::zz(s) };
 		const u64 ctx[1]{ (u64)axis * 64 + (u64)bit_length(d) };
 
 		m.bind(ctx);
@@ -538,14 +540,14 @@ namespace frames {
 
 			const u32 slot{ (u32)std::min<u64>(v, 15) };
 
-			if (!m.code(c, z > v, slot, slot, slot))
+			if (!m.code(c, (u64)k > v, slot, slot, slot))
 				break;
 
 			++v;
 
 		}
 
-		return (int)rc::unzz(v);
+		return (int)v;
 	}
 
 	// an autopilot move's field: zero, sign, bit length (unary), then the bits under the leading one, the first two modelled.
@@ -592,7 +594,7 @@ namespace frames {
 
 		i64 diff{};
 
-		const bool near{ encoding && (exact_text ? dspace::escape_ulps(x, pred, diff) : dspace::escape_digits(x, pred, diff)) };
+		const bool near{ encoding && dspace::escape_diff(x, pred, exact_text, diff) };
 		const u64 kind{ (u64)a * 2 + exact_text };
 		const u64 ctx[2]{ kind, kind * 64 + (u64)prev_len };
 
@@ -630,7 +632,7 @@ namespace frames {
 
 		const i64 d{ std::clamp<i64>(rc::unzz(((u64(1) << n) | raw(c, v, n)) - 1), -(1ll << 31), 1ll << 31) };
 
-		return exact_text ? float_from_bits(u32((i64)std::bit_cast<u32>(pred) + d)) : dspace::escape_from_digits(pred, d);
+		return dspace::escape_from_diff(pred, d, exact_text);
 	}
 
 	// autopilot, off the knots: the line through the last two new positions, in 7 digit ordinals against prev_K
@@ -744,7 +746,7 @@ namespace frames {
 		// moves
 		dspace::move_predictor mp{};
 		_axis_history history[2]{};
-		size_t i{}, escape_at[2]{}, slack_at[2]{};
+		size_t i{}, escape_at[2]{}, slack_at[2]{}, segment_at[2]{};
 		i64 elapsed{}, first_res{};
 
 		// autopilot
@@ -775,7 +777,7 @@ namespace frames {
 				// the repeat flags of the last three frames (2 before the first)
 				const u64 r{ ((f >= 1 ? (u64)fd.repeated[f - 1] : 2) * 3 + (f >= 2 ? (u64)fd.repeated[f - 2] : 2)) * 3 + (f >= 3 ? (u64)fd.repeated[f - 3] : 2) };
 
-				if (side.start_time && f < 2)
+				if (side.std_default_time && f < 2)
 					fd.delta[f] = f ? -1 : 0;
 				else
 					fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
@@ -894,7 +896,7 @@ namespace frames {
 					if (side.ap.on)
 						pr = ap_known ? ap_pred[a] - prev_K : ap_extrapolate(ap.seen, now + d_f, a, prev_K);
 
-					const dspace::axis_params& params{ side.axis[a].at(i) };
+					const dspace::axis_params& params{ side.axis[a].at(i, segment_at[a]) };
 
 					_move_features mf{};
 
@@ -1131,5 +1133,7 @@ namespace frames {
 		}
 
 	};
+
+}
 
 }

@@ -4,6 +4,8 @@
 #include <charconv>
 #include <cmath>
 
+namespace orz {
+
 namespace orz_decimal {
 
 	// (q + rest) * 2^e2 to the nearest float, ties to even; sticky = rest > 0 (q then needs 25+ bits)
@@ -100,5 +102,7 @@ namespace orz_decimal {
 
 		return v;
 	}
+
+}
 
 }

@@ -10,6 +10,8 @@
 #include <span>
 #include <vector>
 
+namespace orz {
+
 namespace cm {
 
 	// 4096 / (1 + e^(-d / 256)), d clamped to +-2047
@@ -370,5 +372,7 @@ namespace cm {
 		}
 
 	};
+
+}
 
 }

@@ -1,14 +1,53 @@
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "orz_shared.h"
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <string_view>
+#include <vector>
 
+#include "orz_shared.h"
 #include "orz_write.h"
 #include "orz_read.h"
 
-#include <filesystem>
+template<typename T>
+bool write_file(const char* file_name, const T& data) {
 
-static bool is_orz(const std::vector<u8>& data) {
-	return data.size() >= 2 && data[0] == ORZ_MAGIC;
+	std::ofstream file(file_name, std::ios::binary);
+
+	if (!file.is_open())
+		return false;
+
+	file.write((const char*)data.data(), data.size());
+
+	return file.good();
+}
+
+std::vector<orz::u8> read_file(const char* file_name) {
+
+	std::ifstream file(file_name, std::ios::binary | std::ios::ate | std::ios::in);
+
+	if (!file.is_open()) [[unlikely]]
+		return {};
+
+	const size_t file_size{ (size_t)file.tellg() };
+
+	std::vector<orz::u8> ret(file_size);
+
+	if (file_size) [[likely]] {
+
+		file.seekg(0, std::ios::beg);
+		file.read((char*)ret.data(), file_size);
+
+	}
+
+	return ret;
+}
+
+static bool is_orz(const std::vector<orz::u8>& data) {
+	return data.size() >= 2 && data[0] == orz::ORZ_MAGIC;
 }
 
 static int run(const int param_count, char** param) {
@@ -67,13 +106,15 @@ static int run(const int param_count, char** param) {
 
 	const std::string out_s{ out.string() };
 
+	std::vector<orz::u8> result;
+
 	if (decode) {
 
-		if (!orz_to_osr(in_s.c_str(), out_s.c_str())) {
+		if (!orz::orz_to_osr(data, result)) {
 
-			if (read_container(data).newer)
+			if (orz::is_newer_orz(data))
 				fprintf(stderr, "error: %s was made by a newer version of orz\n", in_s.c_str());
-			else if (_decoded_orz d; orz_decode_frames(data, d, DECODE_SKIP_CRC))
+			else if (orz::_decoded_orz d; orz::orz_decode_frames(data, d, orz::DECODE_SKIP_CRC))
 				fprintf(stderr, "error: %s fails its CRC check (damaged, or written by an incompatible orz build)\n", in_s.c_str());
 			else
 				fprintf(stderr, "error: %s is not a valid .orz file\n", in_s.c_str());
@@ -83,21 +124,26 @@ static int run(const int param_count, char** param) {
 
 	} else {
 
-		orz_state st{};
+		orz::orz_state state{};
 
-		osr_to_orz(in_s.c_str(), out_s.c_str(), ORZ_ENCODE_INFO::has_osr_header, st);
-
-		if (st.output.empty()) {
+		if (!orz::osr_to_orz(data, result, state)) {
 
 			fprintf(stderr, "error: %s is not a valid .osr file\n", in_s.c_str());
 
 			return 1;
 		}
 
-		printf("%s -> %s (reduction %ld%%)\n", in_s.c_str(), out_s.c_str(),
-			std::lround(100.0 - 100.0 * st.output.size() / data.size()));
-
 	}
+
+	if (!write_file(out_s.c_str(), result)) {
+
+		fprintf(stderr, "error: can not write %s\n", out_s.c_str());
+
+		return 1;
+	}
+
+	if (!decode)
+		printf("%s -> %s (reduction %ld%%)\n", in_s.c_str(), out_s.c_str(), std::lround(100.0 - 100.0 * result.size() / data.size()));
 
 	return 0;
 }

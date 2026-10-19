@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace orz {
+
 namespace rc {
 
 	constexpr u32 RC_TOP{ 1u << 24 }, RC_BOT{ 1u << 16 };
@@ -408,5 +410,7 @@ namespace rc {
 
 		return std::min(31, 8 + 2 * (63 - std::countl_zero(m - 7)));
 	}
+
+}
 
 }

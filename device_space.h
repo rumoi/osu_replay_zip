@@ -6,13 +6,17 @@
 
 #include <bit>
 #include <climits>
-#include "rc.h"
-#include "orz_text.h"
-#include "orz_decimal.h"
 #include <cmath>
 #include <algorithm>
 #include <span>
 #include <vector>
+
+#include "orz_shared.h"
+#include "rc.h"
+#include "orz_text.h"
+#include "orz_decimal.h"
+
+namespace orz {
 
 namespace dspace {
 
@@ -63,7 +67,7 @@ namespace dspace {
 		text = 4,
 	};
 
-	enum class tablet_mapping : u8 { desktop, window };  // window is stables sAbsoluteToOsuWindow
+	enum class tablet_mapping : u8 { desktop, window };  // window is stable's sAbsoluteToOsuWindow
 	enum class float_unit : u8 { sse, x87 };
 
 	// window pixels -> playfield
@@ -151,9 +155,7 @@ namespace dspace {
 		axis_model() = default;
 		explicit axis_model(const axis_params& p) : seg{ { 0u, p } } {}
 
-		const axis_params& at(size_t frame) const {
-
-			size_t k{};
+		const axis_params& at(size_t frame, size_t& k) const {
 
 			while (k + 1 < seg.size() && seg[k + 1].start <= frame)
 				++k;
@@ -192,7 +194,7 @@ namespace dspace {
 		return round_i64(((double)x * p.rational.D - p.rational.b) / p.rational.a);
 	}
 
-	// tablet/touch screen - all absolute postional devices
+	// tablet/touch screen - all absolute positional devices
 	inline float absolute_window_pos(const axis_params& p, i64 L) {
 
 		// all taken from osu!stable
@@ -253,50 +255,6 @@ namespace dspace {
 		return same_bits(height / 384.f, p.field.scale) ? (double)height / 384.0 : (double)p.field.scale;
 	}
 
-	inline float to_field(const axis_params& p, float pos) {
-
-		if (p.field.wide && (p.mode == axis_mode::mouse || p.mode == axis_mode::absolute))
-			return (float)(((double)pos - (double)p.field.off) * (1.0 / (double)p.field.scale));
-
-		const float d{ pos - p.field.off };
-
-		if (p.mode == axis_mode::mouse || (p.mode == axis_mode::absolute && p.tablet.fp == float_unit::x87))
-			return (float)((double)d / field_ratio_x87(p));
-
-		const float inv{ 1.f / p.field.scale };
-
-		return d * inv;
-	}
-
-	inline float absolute_field(const axis_params& p, i64 L) {
-
-		return to_field(p, absolute_window_pos(p, L));
-	}
-
-	inline i64 absolute_L_guess(const axis_params& p, float x) {
-
-		double pos{ (double)x * p.field.scale + p.field.off };
-
-		if (p.tablet.mapping == tablet_mapping::window)
-			return round_i64(((pos / p.tablet.span) * 65536.0 - 32768.0) / p.tablet.speed + 32768.0);
-
-		if (p.tablet.speed != 1.f)
-			pos = (pos - p.tablet.half) / p.tablet.speed + p.tablet.half;
-
-		return round_i64((pos - p.tablet.origin) * 65536.0 / p.tablet.span);
-	}
-
-	constexpr i64 MOUSE_MAX_REPORTS{ 1ll << 16 };
-
-	inline i64 mouse_reports(const axis_params& p, i64 dk, int dt) {
-
-		const i64 n{ dk < 0 ? -dk : dk };
-
-		const double want{ std::clamp((double)dt * p.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
-
-		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
-	}
-
 	inline float window_size(const axis_params& p) {
 
 		const int H{ (int)std::lround((double)p.field.scale * 480.0) };
@@ -320,28 +278,78 @@ namespace dspace {
 		return 0.f;
 	}
 
-	inline float mouse_advance_m(const axis_params& p, float X, i64 dk, i64 m);
+	struct _axis {
 
-	inline float mouse_advance(const axis_params& p, float X, i64 dk, int dt) {
+		axis_params param;
 
-		return dk == 0 ? X : mouse_advance_m(p, X, dk, mouse_reports(p, dk, dt));
+		double ratio_x87;
+		float window;
+
+		explicit _axis(const axis_params& p) : param{ p }, ratio_x87{ field_ratio_x87(p) }, window{ window_size(p) } {}
+
+	};
+
+	inline float to_field(const _axis& a, float pos) {
+
+		const axis_params& p{ a.param };
+
+		if (p.field.wide && (p.mode == axis_mode::mouse || p.mode == axis_mode::absolute))
+			return (float)(((double)pos - (double)p.field.off) * (1.0 / (double)p.field.scale));
+
+		const float d{ pos - p.field.off };
+
+		if (p.mode == axis_mode::mouse || (p.mode == axis_mode::absolute && p.tablet.fp == float_unit::x87))
+			return (float)((double)d / a.ratio_x87);
+
+		const float inv{ 1.f / p.field.scale };
+
+		return d * inv;
 	}
 
-	inline float mouse_advance_m(const axis_params& p, float X, i64 dk, i64 m) {
+	inline float absolute_field(const _axis& a, i64 L) {
+
+		return to_field(a, absolute_window_pos(a.param, L));
+	}
+
+	inline i64 absolute_L_guess(const axis_params& p, float x) {
+
+		double pos{ (double)x * p.field.scale + p.field.off };
+
+		if (p.tablet.mapping == tablet_mapping::window)
+			return round_i64(((pos / p.tablet.span) * 65536.0 - 32768.0) / p.tablet.speed + 32768.0);
+
+		if (p.tablet.speed != 1.f)
+			pos = (pos - p.tablet.half) / p.tablet.speed + p.tablet.half;
+
+		return round_i64((pos - p.tablet.origin) * 65536.0 / p.tablet.span);
+	}
+
+	constexpr i64 MOUSE_MAX_REPORTS{ 1ll << 16 };
+
+	inline i64 mouse_reports(const axis_params& p, i64 dk, int dt) {
+
+		const i64 n{ std::abs(dk) };
+
+		const double want{ std::clamp((double)dt * p.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
+
+		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
+	}
+
+	inline float mouse_advance_m(const _axis& a, float X, i64 dk, i64 m) {
 
 		if (dk == 0)
 			return X;
 
-		const i64 n{ dk < 0 ? -dk : dk }, sgn{ dk < 0 ? -1 : 1 };
+		const i64 n{ std::abs(dk) }, sgn{ dk < 0 ? -1 : 1 };
 
 		// while playing the cursor is clamped to the window after every report (RawMouseHandler)
-		const float size{ window_size(p) };
+		const float size{ a.window };
 
 		for (i64 q{}; q < m; ++q) {
 
 			const i64 c{ n / m + (q < n % m) };
 
-			X = (float)((double)X + (double)(sgn * c) * (double)p.mouse.sens);
+			X = (float)((double)X + (double)(sgn * c) * (double)a.param.mouse.sens);
 
 			if (size > 0.f)
 				X = std::clamp(X, 0.f, size - 1.f);
@@ -351,12 +359,15 @@ namespace dspace {
 		return X;
 	}
 
+	inline float mouse_advance(const _axis& a, float X, i64 dk, int dt) {
+
+		return dk == 0 ? X : mouse_advance_m(a, X, dk, mouse_reports(a.param, dk, dt));
+	}
+
 	constexpr int MOUSE_SEED_RANGE{ 64 };
 	constexpr int MOUSE_SLACK_RANGE{ 24 };
 
 	inline float nudge(float Y, int j) {
-
-		j = std::clamp(j, -MOUSE_SLACK_RANGE, MOUSE_SLACK_RANGE);
 
 		for (int q{}; q < (j < 0 ? -j : j); ++q)
 			Y = j < 0 ? next_down(Y) : next_up(Y);
@@ -371,29 +382,29 @@ namespace dspace {
 
 	struct _mouse_candidates {
 
-		const axis_params& p;
+		const _axis& a;
 		float X;
 		i64 dk, n, m;
 		float list[20];
 		int count{}, next_split{};
-				
-		_mouse_candidates(const axis_params& p_, float X_, i64 dk_, int dt, float first) : p{ p_ }, X{ X_ }, dk{ dk_ } {
+
+		_mouse_candidates(const _axis& a_, float X_, i64 dk_, int dt, float first) : a{ a_ }, X{ X_ }, dk{ dk_ } {
 
 			list[count++] = first;
 			next_split = 1;
 
-			n = dk < 0 ? -dk : dk;
-			
+			n = std::abs(dk);
+
 			if (dk == 0) {
 
 				m = 1;
 				next_split = 99;
 
 			} else
-				m = mouse_reports(p, dk, dt);
+				m = mouse_reports(a.param, dk, dt);
 
 		}
-				
+
 		bool get(int k, float& out) {
 
 			if (k > 2 * MOUSE_SLACK_RANGE)
@@ -408,7 +419,7 @@ namespace dspace {
 				if (r < 1 || r > n || r > MOUSE_MAX_REPORTS)
 					continue;
 
-				const float v{ mouse_advance_m(p, X, dk, r) };
+				const float v{ mouse_advance_m(a, X, dk, r) };
 
 				bool seen{};
 
@@ -427,25 +438,12 @@ namespace dspace {
 				return true;
 			}
 
-			const int j{ k - count + 1 };
-
-			if (j > 2 * MOUSE_SLACK_RANGE)
-				return false;
-
-			out = nudge(list[0], slack_at(j));
+			out = nudge(list[0], slack_at(k - count + 1));
 
 			return true;
 		}
 
 	};
-	
-	FORCEINLINE int slack_of_index(int k) {
-		return (int)rc::unzz((u64)k);
-	}
-
-	FORCEINLINE int slack_index(int v) {
-		return (int)rc::zz(v);
-	}
 
 	// first float within range ulps of Y (slack_at order) that fits, j = its offset; false leaves Y unchanged
 	template<typename Fits>
@@ -487,14 +485,17 @@ namespace dspace {
 		return false;
 	}
 
-	inline float mouse_seed(const axis_params& p, float x, bool exact_text) {
+	inline float mouse_seed(const _axis& a, float x, bool exact_text) {
 
 		const dotnet::text_bounds b{ x, exact_text };
 
-		float Y{ (float)((double)x * p.field.scale + p.field.off) };
+		float Y{ (float)((double)x * a.param.field.scale + a.param.field.off) };
 		int j;
 
-		ulp_search(Y, MOUSE_SEED_RANGE, j, [&](float v) { return b.contains(to_field(p, v)); });
+		ulp_search(Y, MOUSE_SEED_RANGE, j, [&](float v) {
+
+			return b.contains(to_field(a, v));
+		});
 
 		return Y;
 	}
@@ -510,7 +511,7 @@ namespace dspace {
 			if (!cand.get(k, Y))
 				return false;
 
-			if (b.contains(to_field(cand.p, Y)))
+			if (b.contains(to_field(cand.a, Y)))
 				return true;
 
 		}
@@ -523,14 +524,14 @@ namespace dspace {
 		return k == 0 ? 0.3 : 2.0 + std::log2(1.0 + k);
 	}
 
-	inline double mouse_next_cost(const axis_params& p, float X, float x1, const dotnet::text_bounds& b1, int dt1) {
+	inline double mouse_next_cost(const _axis& a, float X, float x1, const dotnet::text_bounds& b1, int dt1) {
 
-		const i64 dk{ mouse_dk(p, x1, X) };
+		const i64 dk{ mouse_dk(a.param, x1, X) };
 
 		if (dk == 0)
-			return b1.contains(to_field(p, X)) ? 0.0 : 40.0;
+			return b1.contains(to_field(a, X)) ? 0.0 : 40.0;
 
-		_mouse_candidates cand{ p, X, dk, dt1, mouse_advance(p, X, dk, dt1) };
+		_mouse_candidates cand{ a, X, dk, dt1, mouse_advance(a, X, dk, dt1) };
 
 		int k{};
 		float Y{};
@@ -538,11 +539,11 @@ namespace dspace {
 		return first_fit(cand, b1, k, Y) ? slack_cost(k) : 40.0;
 	}
 
-	// quickly check surrounding cand's to see if there is a better fit
+	// quickly check surrounding candidates to see if there is a better fit
 	inline void mouse_finalize(_mouse_candidates& cand, const dotnet::text_bounds& b, float x1, const dotnet::text_bounds& b1, int dt1,
 		int& k, float& Y) {
 
-		const double first_next{ mouse_next_cost(cand.p, Y, x1, b1, dt1) };
+		const double first_next{ mouse_next_cost(cand.a, Y, x1, b1, dt1) };
 
 		if (first_next <= slack_cost(0))
 			return;
@@ -553,7 +554,7 @@ namespace dspace {
 
 		for (int q{ k + 1 }, fits{ 1 }; fits < 6 && first_fit(cand, b, q, v); ++q, ++fits) {
 
-			if (const double c{ slack_cost(q) + mouse_next_cost(cand.p, v, x1, b1, dt1) }; c < best) {
+			if (const double c{ slack_cost(q) + mouse_next_cost(cand.a, v, x1, b1, dt1) }; c < best) {
 
 				best = c;
 				Y = v;
@@ -576,11 +577,21 @@ namespace dspace {
 
 	};
 
-	// escape value: 7 digit mantissa difference from the model's prediction, false (raw) if exponents differ
-	FORCEINLINE bool escape_digits(float x, float pred, i64& diff) {
+	// escape value: 7 digit mantissa difference from the model's prediction (exact text: ulp distance), false (raw) if too far
+	FORCEINLINE bool escape_diff(float x, float pred, bool exact_text, i64& diff) {
 
 		if (!std::isfinite(pred))
 			return false;
+
+		if (exact_text) {
+
+			if (!std::isfinite(x) || std::signbit(x) != std::signbit(pred))
+				return false;
+
+			diff = (i64)std::bit_cast<u32>(x) - (i64)std::bit_cast<u32>(pred);
+
+			return diff > -(1ll << 30) && diff < (1ll << 30);
+		}
 
 		const auto [mx, ex] { dotnet::digits7(x) };
 
@@ -594,22 +605,66 @@ namespace dspace {
 		return true;
 	}
 
-	inline float escape_from_digits(float pred, i64 diff) {
+	inline float escape_from_diff(float pred, i64 diff, bool exact_text) {
+
+		if (exact_text)
+			return float_from_bits(u32((i64)std::bit_cast<u32>(pred) + diff));
 
 		const auto [mp, ep] { dotnet::digits7(pred) };
 
 		return orz_decimal::to_float(mp + diff, ep - 6);
 	}
 
-	// exact text: ulp distance from the prediction
-	inline bool escape_ulps(float x, float pred, i64& diff) {
+	inline bool absolute_fit(const _axis& a, float x, const dotnet::text_bounds& b, bool rising, i64& L, float& v) {
 
-		if (!std::isfinite(pred) || !std::isfinite(x) || std::signbit(x) != std::signbit(pred))
+		const i64 L0{ absolute_L_guess(a.param, x) };
+
+		L = L0;
+		v = absolute_field(a, L0);
+
+		if (b.contains(v))
+			return true;
+
+		if (rising) {
+
+			const int dir{ b.side(v) > 0 ? -1 : 1 };
+
+			for (int j{ 1 }; j <= 2; ++j) {
+
+				const float fj{ absolute_field(a, L0 + dir * j) };
+				const int sd{ b.side(fj) };
+
+				if (sd == 0) {
+
+					L = L0 + dir * j;
+					v = fj;
+
+					return true;
+				}
+
+				if (sd == dir)
+					return false;
+
+			}
+
 			return false;
+		}
 
-		diff = (i64)std::bit_cast<u32>(x) - (i64)std::bit_cast<u32>(pred);
+		for (int s{ 1 }; s < 5; ++s) {
 
-		return diff > -(1ll << 30) && diff < (1ll << 30);
+			const float fs{ absolute_field(a, L0 + slack_at(s)) };
+
+			if (b.contains(fs)) {
+
+				L = L0 + slack_at(s);
+				v = fs;
+
+				return true;
+			}
+
+		}
+
+		return false;
 	}
 
 	// bounds: optional precomputed text_bounds of vals
@@ -621,7 +676,12 @@ namespace dspace {
 		axis_streams o{};
 		o.K.resize(vals.size());
 
-		const auto out = [&](size_t i, float v) { if (decoded) decoded[i] = v; };
+		const auto out = [&](size_t i, float v) {
+
+			if (decoded)
+				decoded[i] = v;
+
+		};
 
 		// held: after an escape, frames with an unchanged K repeat the value instead of escaping again
 
@@ -694,103 +754,21 @@ namespace dspace {
 			return o;
 		}
 
-		if (p.mode == axis_mode::absolute) {
+		const _axis a{ p };
 
-			const bool rising{ p.tablet.span > 0.f && p.tablet.speed > 0.f && p.field.scale > 0.f };
-
-			for (size_t i{}; i < vals.size(); ++i) {
-
-				if (o.escapes.size() > max_escapes)
-					return o;
-
-				const dotnet::text_bounds b{ bound(i) };
-
-				const i64 L0{ absolute_L_guess(p, vals[i]) };
-				const float f0{ absolute_field(p, L0) };
-
-				i64 L{ L0 };
-				float fl{ f0 };
-
-				bool found{ b.contains(f0) };
-
-				if (!found) {
-
-					if (rising) {
-
-						const int dir{ b.side(f0) > 0 ? -1 : 1 };
-
-						for (int j{ 1 }; j <= 2; ++j) {
-
-							const float fj{ absolute_field(p, L0 + dir * j) };
-							const int sd{ b.side(fj) };
-
-							if (sd == 0) {
-
-								L = L0 + dir * j;
-								fl = fj;
-								found = true;
-
-								break;
-							}
-
-							if (sd == dir)
-								break;
-
-						}
-
-					} else {
-
-						for (int s{ 1 }; s < 5 && !found; ++s) {
-
-							const float fs{ absolute_field(p, L0 + slack_at(s)) };
-
-							if (b.contains(fs)) {
-
-								L = L0 + slack_at(s);
-
-								fl = fs;
-								found = true;
-
-							}
-
-						}
-
-					}
-
-				}
-
-				o.K[i] = L;
-
-				if (held && i && L == o.K[i - 1]) {
-
-					still(i, b, fl);
-
-					continue;
-				}
-
-				if (found) {
-
-					held = false;
-					out(i, fl);
-
-				} else
-					escape(i, f0);
-
-			}
-
-			return o;
-		}
-
-		if (p.mode == axis_mode::rational) {
+		const auto lattice = [&](auto fit) {
 
 			for (size_t i{}; i < vals.size(); ++i) {
 
 				if (o.escapes.size() > max_escapes)
-					return o;
+					return;
 
 				const dotnet::text_bounds b{ bound(i) };
-				const i64 k{ rational_k(p, vals[i]) };
-				const float v{ rational_value(p, k) };
+
+				i64 k;
+				float v;
+
+				const bool found{ fit(vals[i], b, k, v) };
 
 				o.K[i] = k;
 
@@ -801,7 +779,7 @@ namespace dspace {
 					continue;
 				}
 
-				if (b.contains(v)) {
+				if (found) {
 
 					held = false;
 					out(i, v);
@@ -810,6 +788,30 @@ namespace dspace {
 					escape(i, v);
 
 			}
+
+		};
+
+		if (p.mode == axis_mode::absolute) {
+
+			const bool rising{ p.tablet.span > 0.f && p.tablet.speed > 0.f && p.field.scale > 0.f };
+
+			lattice([&](float x, const dotnet::text_bounds& b, i64& k, float& v) {
+
+				return absolute_fit(a, x, b, rising, k, v);
+			});
+
+			return o;
+		}
+
+		if (p.mode == axis_mode::rational) {
+
+			lattice([&](float x, const dotnet::text_bounds& b, i64& k, float& v) {
+
+				k = rational_k(p, x);
+				v = rational_value(p, k);
+
+				return b.contains(v);
+			});
 
 			return o;
 		}
@@ -836,18 +838,18 @@ namespace dspace {
 
 				o.K[i] = K;
 
-				if (still(i, b, to_field(p, X))) // what decode_axis predicts for an escape with dk = 0
-					X = mouse_seed(p, x, exact_text);
+				if (still(i, b, to_field(a, X))) // what decode_axis predicts for an escape with dk = 0
+					X = mouse_seed(a, x, exact_text);
 
 				continue;
 			}
 
 			if (!escaped) {
 
-				const float Y0{ mouse_advance(p, X, dk, dt[i]) };
-				pred = to_field(p, Y0);
+				const float Y0{ mouse_advance(a, X, dk, dt[i]) };
+				pred = to_field(a, Y0);
 
-				_mouse_candidates cand{ p, X, dk, dt[i], Y0 };
+				_mouse_candidates cand{ a, X, dk, dt[i], Y0 };
 
 				float Y{};
 				int k{};
@@ -858,7 +860,7 @@ namespace dspace {
 						mouse_finalize(cand, b, vals[i + 1], bound(i + 1), dt[i + 1], k, Y);
 
 					if (dk != 0)
-						o.slack.push_back(slack_of_index(k));
+						o.slack.push_back(k);
 
 					X = Y;
 
@@ -870,12 +872,12 @@ namespace dspace {
 			if (escaped) {
 
 				escape(i, pred);
-				X = mouse_seed(p, x, exact_text);
+				X = mouse_seed(a, x, exact_text);
 
 			} else {
 
 				held = false;
-				out(i, to_field(p, X));
+				out(i, to_field(a, X));
 
 			}
 
@@ -906,8 +908,7 @@ namespace dspace {
 					exact_text, {}, SIZE_MAX, o.decoded.data() + from)
 			};
 
-			for (size_t i{}; i < part.K.size(); ++i)
-				o.K[from + i] = part.K[i];
+			std::copy(part.K.begin(), part.K.end(), o.K.begin() + from);
 
 			o.slack.insert(o.slack.end(), part.slack.begin(), part.slack.end());
 			o.repeats += part.repeats;
@@ -940,6 +941,11 @@ namespace dspace {
 		i64 budget{ MOUSE_DECODE_BUDGET };
 		bool held{};
 
+		std::vector<_axis> axis_;
+
+		for (const auto& seg : m.seg)
+			axis_.emplace_back(seg.p);
+
 		size_t sg{};
 
 		for (size_t i{}; i < K.size(); ++i) {
@@ -947,7 +953,8 @@ namespace dspace {
 			while (sg + 1 < m.seg.size() && m.seg[sg + 1].start <= i)
 				++sg;
 
-			const axis_params& p{ m.seg[sg].p };
+			const _axis& a{ axis_[sg] };
+			const axis_params& p{ a.param };
 			const bool segment_start{ m.seg[sg].start == i };
 
 			const bool escaped{ e < escapes.size() && escapes[e] == i };
@@ -990,7 +997,7 @@ namespace dspace {
 
 			if (p.mode == axis_mode::rational || p.mode == axis_mode::absolute) {
 
-				const float v{ p.mode == axis_mode::rational ? rational_value(p, K[i]) : absolute_field(p, K[i]) };
+				const float v{ p.mode == axis_mode::rational ? rational_value(p, K[i]) : absolute_field(a, K[i]) };
 
 				out[i] = escaped ? escape_value(v) : v;
 
@@ -999,26 +1006,26 @@ namespace dspace {
 
 			if (escaped) {
 
-				out[i] = escape_value(segment_start ? NAN : to_field(p, mouse_advance(p, X, dk, dt[i])));
+				out[i] = escape_value(segment_start ? NAN : to_field(a, mouse_advance(a, X, dk, dt[i])));
 
-				X = mouse_seed(p, out[i], exact_text);
+				X = mouse_seed(a, out[i], exact_text);
 
 				continue;
 			}
 
-			const float Y0{ mouse_advance(p, X, dk, dt[i]) };
+			const float Y0{ mouse_advance(a, X, dk, dt[i]) };
 
 			if (dk != 0) {
 
-				_mouse_candidates cand{ p, X, dk, dt[i], Y0 };
+				_mouse_candidates cand{ a, X, dk, dt[i], Y0 };
 
-				if (!cand.get(slack_index(s < slack.size() ? slack[s++] : 0), X))
+				if (!cand.get(s < slack.size() ? slack[s++] : 0, X))
 					return false;
 
 			} else
 				X = Y0;
 
-			out[i] = to_field(p, X);
+			out[i] = to_field(a, X);
 
 		}
 
@@ -1027,8 +1034,8 @@ namespace dspace {
 
 	// model parameters: small integers + the playfield floats
 
-	inline void write_u(u32 v, bit_stream& o) { write_bucket(v, o, 4, 8, 16); }
-	inline u32 read_u(const _bit_view in, size_t& i) { return read_bucket(in, i, 4, 8, 16); }
+	inline void write_u(u32 v, bit_stream& o) { o.write_bucket(v, 4, 8, 16); }
+	inline u32 read_u(_bit_view& in) { return in.read_bucket<4, 8, 16>(); }
 
 	inline u32 hundredths(float v) { return (u32)std::lround((double)v * 100.0); }
 	inline float from_hundredths(u32 v) { return (float)((double)v / 100.0); }
@@ -1046,16 +1053,16 @@ namespace dspace {
 		if (grid)
 			write_u(hundredths(v), o);
 		else
-			write_float(v, o);
+			o.write_float(v);
 
 	}
 
-	inline float read_setting(const _bit_view in, size_t& i) {
+	inline float read_setting(_bit_view& in) {
 
-		if (!in[i++])
-			return from_hundredths(read_u(in, i));
+		if (!in.read_bits<1>())
+			return from_hundredths(read_u(in));
 
-		return read_float(in, i);
+		return in.read_float();
 	}
 
 	constexpr int WINDOW_BITS{ 5 };
@@ -1084,31 +1091,27 @@ namespace dspace {
 
 		if (r < 0) {
 
-			write_float(f.scale, o);
-			write_float(f.off, o);
+			o.write_float(f.scale);
+			o.write_float(f.off);
 
 			return;
 		}
 
-		for (int b{}; b < WINDOW_BITS; ++b)
-			o.push_back((r >> b) & 1);
+		o.write_bits<WINDOW_BITS>(r);
 
 	}
 
-	inline bool read_field(const _bit_view in, size_t& i, int axis, field_map& f) {
+	inline bool read_field(_bit_view& in, int axis, field_map& f) {
 
-		if (!in[i++]) {
+		if (!in.read_bits<1>()) {
 
-			f.scale = read_float(in, i);
-			f.off = read_float(in, i);
+			f.scale = in.read_float();
+			f.off = in.read_float();
 
 			return true;
 		}
 
-		int r{};
-
-		for (int b{}; b < WINDOW_BITS; ++b)
-			r |= (int)in[i++] << b;
+		const int r{ (int)in.read_bits<WINDOW_BITS>() };
 
 		if (r >= (int)std::size(PM_RES))
 			return false;
@@ -1120,9 +1123,11 @@ namespace dspace {
 
 		return true;
 	}
-	
+
 	constexpr u32 POLL_RATES[]{ 125, 250, 500, 1000, 2000, 4000, 8000 };
-	
+
+	static_assert(std::size(POLL_RATES) == 7);
+
 	inline void write_poll(float poll, bit_stream& o) {
 
 		u32 k{};
@@ -1130,38 +1135,26 @@ namespace dspace {
 		while (k < std::size(POLL_RATES) && (float)POLL_RATES[k] != poll)
 			++k;
 
-		for (int b{}; b < 3; ++b)
-			o.push_back((k >> b) & 1);
+		o.write_bits<3>(k);
 
 		if (k == std::size(POLL_RATES))
-			for (int b{}; b < 16; ++b)
-				o.push_back(((u32)poll >> b) & 1);
+			o.write_bits<16>((u32)poll);
 
 	}
 
-	inline float read_poll(const _bit_view in, size_t& i) {
+	inline float read_poll(_bit_view& in) {
 
-		u32 k{};
-
-		for (int b{}; b < 3; ++b)
-			k |= (u32)in[i++] << b;
+		const u32 k{ (u32)in.read_bits<3>() };
 
 		if (k < std::size(POLL_RATES))
 			return (float)POLL_RATES[k];
 
-		u32 v{};
-
-		for (int b{}; b < 16; ++b)
-			v |= (u32)in[i++] << b;
-
-		return (float)v;
+		return (float)in.read_bits<16>();
 	}
-
-	static_assert(std::size(POLL_RATES) == 7);
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
-		write_bucket((u32)p.mode, o, 2);
+		o.write_bucket((u32)p.mode, 2);
 
 		if (p.mode == axis_mode::rational) {
 
@@ -1196,43 +1189,54 @@ namespace dspace {
 
 	}
 
-	inline axis_params read_params(const _bit_view in, size_t& i, int axis, bool& ok) {
+	inline bool read_params(_bit_view& in, int axis, axis_params& p) {
 
-		axis_params p{};
+		p = {};
 
-		p.mode = (axis_mode)read_bucket(in, i, 2);
+		p.mode = (axis_mode)in.read_bucket<2>();
+
+		if (p.mode > axis_mode::text)
+			return false; // no detector produces these
 
 		if (p.mode == axis_mode::rational) {
 
-			p.rational.D = (int)read_u(in, i);
-			p.rational.a = (int)read_u(in, i);
-			p.rational.b = (int)rc::unzz(read_u(in, i));
+			p.rational.D = (int)read_u(in);
+			p.rational.a = (int)read_u(in);
+			p.rational.b = (int)rc::unzz(read_u(in));
 
 		}
 
 		if (p.mode == axis_mode::mouse) {
 
-			p.mouse.sens = read_setting(in, i);
-			p.mouse.poll = read_poll(in, i);
-			p.field.wide = in[i++] != 0;
-			ok &= read_field(in, i, axis, p.field);
+			p.mouse.sens = read_setting(in);
+			p.mouse.poll = read_poll(in);
+
+			if (p.mouse.poll > 8000.f)
+				return false;
+
+			p.field.wide = in.read_bits<1>() != 0;
+
+			if (!read_field(in, axis, p.field))
+				return false;
 
 		}
 
 		if (p.mode == axis_mode::absolute) {
 
-			p.tablet.mapping = in[i++] ? tablet_mapping::window : tablet_mapping::desktop;
-			p.tablet.fp = in[i++] ? float_unit::x87 : float_unit::sse;
-			p.field.wide = in[i++] != 0;
-			p.tablet.span = (float)read_u(in, i);
-			p.tablet.origin = (float)rc::unzz(read_u(in, i));
-			p.tablet.half = (float)read_u(in, i);
-			p.tablet.speed = read_setting(in, i);
-			ok &= read_field(in, i, axis, p.field);
+			p.tablet.mapping = in.read_bits<1>() ? tablet_mapping::window : tablet_mapping::desktop;
+			p.tablet.fp = in.read_bits<1>() ? float_unit::x87 : float_unit::sse;
+			p.field.wide = in.read_bits<1>() != 0;
+			p.tablet.span = (float)read_u(in);
+			p.tablet.origin = (float)rc::unzz(read_u(in));
+			p.tablet.half = (float)read_u(in);
+			p.tablet.speed = read_setting(in);
+
+			if (!read_field(in, axis, p.field))
+				return false;
 
 		}
 
-		return p;
+		return true;
 	}
 
 	inline bool y_from_x(const axis_params& x, axis_params& y) {
@@ -1269,26 +1273,17 @@ namespace dspace {
 
 				const bool same{ y_from_x(m.axis[0].seg[0].p, y) && y == ax.seg[0].p };
 
-				o.push_back(same);
-
-				if (same)
+				if (o.emplace_back(same))
 					continue;
 
 			}
 
-			u32 prev{};
+			for (size_t k{}; k < ax.seg.size(); ++k) {
 
-			bool writing_segment{};
+				if (k)
+					write_u(ax.seg[k].start - ax.seg[k - 1].start, o);
 
-			for (const auto& sg : ax.seg) {
-
-				if (writing_segment)
-					write_u(sg.start - prev, o);
-				else
-					writing_segment = true;
-
-				prev = sg.start;
-				write_params(sg.p, a, o);
+				write_params(ax.seg[k].p, a, o);
 
 			}
 
@@ -1296,8 +1291,8 @@ namespace dspace {
 
 	}
 
-	// from bit i of in, which ends past it
-	inline bool read_info(const _bit_view in, size_t& i, _model_info& out) {
+	// from in's cursor, in ends past it
+	inline bool read_info(_bit_view& in, _model_info& out) {
 
 		_model_info m{};
 
@@ -1305,14 +1300,14 @@ namespace dspace {
 
 			auto& ax{ m.axis[a] };
 
-			const u32 n{ read_u(in, i) };
+			const u32 n{ read_u(in) };
 
 			if (n == 0 || n > 100000)
 				return false;
 
 			ax.seg.resize(n);
 
-			if (a == 1 && n == 1 && m.axis[0].seg.size() == 1 && in[i++]) {
+			if (a == 1 && n == 1 && m.axis[0].seg.size() == 1 && in.read_bits<1>()) {
 
 				if (!y_from_x(m.axis[0].seg[0].p, ax.seg[0].p))
 					return false;
@@ -1320,33 +1315,14 @@ namespace dspace {
 				continue;
 			}
 
-			u32 prev{};
+			for (size_t k{}; k < n; ++k) {
 
-			bool writing_segment{};
+				ax.seg[k].start = k ? ax.seg[k - 1].start + read_u(in) : 0;
 
-			for (auto& sg : ax.seg) {
+				if (!read_params(in, a, ax.seg[k].p))
+					return false;
 
-				if (writing_segment)
-					sg.start = prev += read_u(in, i);
-				else {
-
-					sg.start = 0;
-
-					writing_segment = true;
-
-				}
-
-				bool ok{ true };
-
-				sg.p = read_params(in, i, a, ok);
-
-				if (!ok || sg.p.mode > axis_mode::text ||
-					(sg.p.mode == axis_mode::mouse && !(sg.p.mouse.poll >= 0.f && sg.p.mouse.poll <= 8000.f)))
-						return false; // no detector produces these
 			}
-
-			if (ax.seg[0].start != 0)
-				return false;
 
 		}
 
@@ -1425,37 +1401,37 @@ namespace dspace {
 			return round_div(pred * A, B);
 		}
 
-		void push(int a, i64 d) {
+		template<typename T>
+		static void shift_in(T (&v)[WINDOW_FRAMES], T x) {
 
 			for (size_t j{ WINDOW_FRAMES - 1 }; j > 0; --j)
-				hist[a][j] = hist[a][j - 1];
+				v[j] = v[j - 1];
 
-			hist[a][0] = d;
+			v[0] = x;
 
+		}
+
+		void push(int a, i64 d) {
+			shift_in(hist[a], d);
 		}
 
 		void advance(int dt) {
 
-			for (size_t j{ WINDOW_FRAMES - 1 }; j > 0; --j)
-				hist_dt[j] = hist_dt[j - 1];
-
-			hist_dt[0] = dt;
+			shift_in(hist_dt, dt);
 			++n;
 
 		}
 
 		void rest(int gap) {
 
-			for (int a{}; a < 2; ++a)
-				for (size_t j{ WINDOW_FRAMES - 1 }; j > 0; --j)
-					hist[a][j] = hist[a][j - 1];
-
-			hist[0][0] = hist[1][0] = 0;
-
+			push(0, 0);
+			push(1, 0);
 			advance(gap);
 
 		}
 
 	};
+
+}
 
 }

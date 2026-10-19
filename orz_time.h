@@ -5,6 +5,8 @@
 #include <span>
 #include <vector>
 
+namespace orz {
+
 namespace frame_time {
 
 	struct _grid_period {
@@ -105,6 +107,28 @@ namespace frame_time {
 
 	inline bool table_unused(u8 x, u64 used) {
 		return x >= TABLE_RANKED || !((used >> x) & 1);
+	}
+
+	// counts of each value, in the order they first appear
+	inline std::pair<u32, u32>& unique_add(u32 v, std::vector<std::pair<u32, u32>>& b) {
+
+		for (auto& t : b) {
+
+			if (t.first == v) {
+
+				++t.second;
+
+				return t;
+			}
+
+		}
+
+		return b.emplace_back(v, 1);
+	}
+
+	// most counted first
+	inline bool pair_sort(const std::pair<u32, u32>& x, const std::pair<u32, u32>& y) {
+		return x.second > y.second;
 	}
 
 	inline std::vector<int> build_table(std::span<const int> delta) {
@@ -239,15 +263,15 @@ namespace frame_time {
 
 	}
 
-	inline bool read_gamma(const _bit_view t, size_t& bit, u32 max, u32& r) {
+	inline bool read_gamma(_bit_view& t, u32 max, u32& r) {
 
 		const int limit{ (int)std::bit_width(max + 1) };
 
 		int n{ 1 };
 
-		while (bit < t.max_size() && !t[bit]) {
+		while (t.in < t.max_size() && !t[t.in]) {
 
-			++bit;
+			++t.in;
 
 			if (++n > limit)
 				return false;
@@ -257,7 +281,7 @@ namespace frame_time {
 		u32 v{};
 
 		for (int b{}; b < n; ++b)
-			v = (v << 1) | small_read<1>(t, bit);
+			v = (v << 1) | (u32)t.read_bits<1>();
 
 		r = v - 1;
 
@@ -267,7 +291,7 @@ namespace frame_time {
 	// the delta table and time grid, at the front of the stream holding the times
 	inline void write_table(bit_stream& t, const std::vector<int>& table, u32 grid) {
 
-		small_write<5>((u32)table.size(), t);
+		t.small_write<5>((u32)table.size());
 
 		u64 used{};
 		u32 at{ TABLE_FIRST };
@@ -309,21 +333,21 @@ namespace frame_time {
 
 	}
 
-	// from bit `bit` of t, which ends past it
-	inline std::vector<int> read_table(const _bit_view t, size_t& bit, u32& grid) {
+	// from t's cursor, t ends past it
+	inline std::vector<int> read_table(_bit_view& t, u32& grid) {
 
-		const size_t n{ small_read<5>(t, bit) };
+		const size_t n{ t.small_read<5>() };
 
 		std::vector<int> table;
 
 		u64 used{};
 		u32 at{ TABLE_FIRST };
 
-		for (size_t k{}; k < n && bit < t.max_size(); ++k) {
+		for (size_t k{}; k < n && t.in < t.max_size(); ++k) {
 
 			u32 r;
 
-			if (!read_gamma(t, bit, TABLE_SYMBOLS - 1, r))
+			if (!read_gamma(t, TABLE_SYMBOLS - 1, r))
 				break;
 
 			u32 sym{ TABLE_SYMBOLS };
@@ -348,7 +372,7 @@ namespace frame_time {
 				u32 m{ 1 };
 
 				for (u32 b{ (sym - TABLE_RANKED) >> 1 }; b > 0; --b)
-					m = (m << 1) | small_read<1>(t, bit);
+					m = (m << 1) | (u32)t.read_bits<1>();
 
 				v = std::bit_cast<int>(sym & 1 ? 0u - m : m);
 
@@ -362,9 +386,11 @@ namespace frame_time {
 		grid = 0;
 
 		for (int b{}; b < 3; ++b)
-			grid |= (u32)small_read<1>(t, bit) << b;
+			grid |= (u32)t.read_bits<1>() << b;
 
 		return table;
 	}
+
+}
 
 }

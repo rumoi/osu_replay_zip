@@ -14,6 +14,8 @@
 #include <span>
 #include <vector>
 
+namespace orz {
+
 namespace osu_lzma {
 
 	constexpr u32 DICTIONARY_SIZE{ 1u << 21 }, NUM_FAST_BYTES{ 255 };
@@ -1948,5 +1950,7 @@ namespace osu_lzma {
 
 		return out;
 	}
+
+}
 
 }

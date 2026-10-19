@@ -3,244 +3,137 @@
 #include <algorithm>
 #include <cmath>
 
-void add_to_u8(std::vector<u8>& output, u32 input) {
+#include "orz_shared.h"
+#include "orz_state.h"
+#include "orz_life.h"
+#include "orz_parts.h"
+#include "orz_text.h"
 
-	const auto i{ output.size() };
+namespace orz {
 
-	output.resize(i + 4);
+// a stream as a container of the file (an empty one is left out)
+inline void add_container(_orz_file& file, orz_tag tag, std::span<const u8> data) {
 
-	memcpy(output.data() + i, &input, 4);
+	if (data.size())
+		file.container.push_back({ std::vector<u8>(data.begin(), data.end()), tag });
+
 }
 
-void add_to_u8(std::vector<u8>& output, const void* src, size_t size) {
+// the .osr parts in state as containers of its file: the bytes around the replay data with the life bar, and verbatim replay data
+inline void add_osr_parts(orz_state& st) {
 
-	const auto i{ output.size() };
+	if (st.osr_header.size() || st.after_life.size() || st.tail.size()) {
 
-	output.resize(i + size);
+		const auto parts{ osr_parts::encode({ st.osr_header, st.after_life, st.tail,
+			st.life.present ? life::encode(st.life.text, st.input) : std::vector<u8>{} }) };
 
-	memcpy(output.data() + i, src, size);
+		add_container(st.file, orz_tag::osr_meta_data, parts);
+
+	}
+
+	if (st.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim)
+		add_container(st.file, orz_tag::osr_verbatim, st.lzma);
+
 }
 
-template<typename T>
-void add_to_u8(std::vector<u8>& output, const std::vector<T>& input) {
+// the CRC of the frames as the decoder returns them, the closing seed frame included
+inline u32 frames_crc(std::span<const _osr_frame> frames, const _seed_frame& seed) {
 
-	constexpr auto SIZE{ sizeof(T) };
+	u32 crc{ crc32c(ORZ_CRC_SEED, frames.data(), frames.size() * sizeof(_osr_frame)) };
 
-	const auto i{ output.size() };
+	if (seed.present)
+		crc = crc32c_frame(crc, { -12345, 0.f, 0.f, seed.value });
 
-	output.resize(i + input.size() * SIZE);
-
-	memcpy(output.data() + i, input.data(), input.size() * SIZE);
+	return crc;
 }
 
-std::pair<u32, u32>& unique_add(u32 v, std::vector<std::pair<u32, u32>>& b) {
+inline void write_verbatim(orz_state& state);
 
-	for (auto& t : b) {
+// state.file with its .osr parts and header (the CRC continuing from crc over the .osr parts and the encode info) into
+// state.output
+inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 
-		if (t.first == v) {
+	// degenerate cases could exist, if the .orz frame stream is larger than the input LZMA stream, fall back to verbatim
+	if (!(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim)) {
 
-			++t.second;
-
-			return t;
-		}
+		for (const auto& c : state.file.container)
+			if (c.tag == orz_tag::frames && c.data.size() >= state.lzma.size())
+				return write_verbatim(state);
 
 	}
 
-	return b.emplace_back(v, 1);
+	add_osr_parts(state);
+
+	_orz_file& file{ state.file };
+
+	file.version = ORZ_VERSION;
+	file.seeded = state.seed.present;
+	file.seed = state.seed.value;
+	file.frame_count = frame_count;
+
+	// the CRC continues over the stored .osr parts, in CRC_PART_TAGS order
+	for (const orz_tag tag : CRC_PART_TAGS)
+		for (const auto& c : file.container)
+			if (c.tag == tag && c.data.size())
+				crc = crc32c_part(crc, c.data.data(), c.data.size());
+
+	file.CRC = crc32c(crc, &file.encode_info, sizeof(file.encode_info));
+
+	file.encode(state.output);
+
 }
 
-const auto pair_sort = [](const auto& x, const auto& y) {
+// state.file as the LZMA replay data as it is: no frames, no seed, no text flags
+inline void write_verbatim(orz_state& state) {
 
-	return x.second > y.second;
-};
+	state.seed = {};
 
-struct _orz_construct {
+	state.file.container.clear();
+	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest);
+	state.file.encode_info |= ORZ_ENCODE_INFO::replay_verbatim;
 
-	constexpr static size_t MAX_ELEMENTS{ 256 };
+	finish_orz_file(0, frames_crc(state.input, {}), state);
 
-	orz_state* state;
+}
 
-	u32 flags{}, frame_count{}, data_count{};
-	u32 frames_crc{};
+namespace standard { void encode(const _osr& r, orz_state& state); }
+namespace modes { void encode(const _osr& r, orz_state& state); }
 
-	orz_tag tag_table[MAX_ELEMENTS];
-	u32 size_table[MAX_ELEMENTS];
+// the e_mode picks the coder: osu!catch relax maps the catcher to the cursor's x, so it goes through osu!standard's
+void encode_replay(_osr& r, orz_state& state) {
 
-	std::vector<u8> file_data;
+	if (uses_modes_coder(state.mode()))
+		return modes::encode(r, state);
 
-	void add_stream(orz_tag tag, const void* src, size_t size) {
+	standard::encode(r, state);
+}
 
-		if (data_count == 255 || size == 0) [[unlikely]]
-			return;
+bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want);
 
-		ON_SCOPE_EXIT( ++data_count; );
+// an .osr's header: the e_mode its frames are coded as, and the parts the decoder needs to rebuild the file
+struct _osr_header {
 
-		tag_table[data_count] = tag;
-		size_table[data_count] = (u32)size;
+	e_mode mode;
 
-		add_to_u8(file_data, src, size);
-
-	}
-
-	void append(const _orz_construct& o) {
-
-		for (size_t i{}; i < o.data_count && data_count < 255; ++i) {
-
-			tag_table[data_count] = o.tag_table[i];
-			size_table[data_count] = o.size_table[i];
-
-			++data_count;
-
-		}
-
-		add_to_u8(file_data, o.file_data);
-
-	}
-
-	void write(const char* output_file) {
-
-		add_osr_parts();
-		finish(output_file);
-
-	}
-
-	void add_osr_parts() {
-
-		const auto& st{ *state };
-
-		if (st.osr_header.size() || st.after_life.size() || st.tail.size()) {
-
-			const auto parts{ osr_parts::encode({ st.osr_header, st.after_life, st.tail,
-				st.life.present ? life::encode(st.life.text, st.input) : std::vector<u8>{} }) };
-
-			add_stream(orz_tag::osr_parts, parts.data(), parts.size());
-
-		}
-
-		if (st.replay_data.present)
-			add_stream(orz_tag::osr_replay_data, st.replay_data.bytes.data(), st.replay_data.bytes.size());
-
-	}
-
-	static u32 crc_of(std::span<const _osr_frame> frames, const _seed_frame& seed) {
-
-		u32 crc{ crc32c(ORZ_CRC_SEED, frames.data(), frames.size() * sizeof(_osr_frame)) };
-
-		if (seed.present)
-			crc = crc32c_frame(crc, { -12345, 0.f, 0.f, seed.value });
-
-		return crc;
-	}
-
-	void finish(const char* output_file) {
-
-		// a stream's bytes, empty when absent
-		const auto stream = [&](orz_tag tag) {
-
-			size_t offset{};
-
-			for (size_t i{}; i < data_count; offset += size_table[i++])
-				if (tag_table[i] == tag)
-					return std::span<const u8>{ file_data.data() + offset, size_table[i] };
-
-			return std::span<const u8>{};
-		};
-
-		// the CRC continues over the stored .osr parts, in CRC_PART_TAGS order
-		u32 crc{ frames_crc };
-
-		for (const orz_tag tag : CRC_PART_TAGS)
-			if (const auto part{ stream(tag) }; part.size())
-				crc = crc32c_part(crc, part.data(), part.size());
-
-		crc = crc32c(crc, &flags, sizeof(flags));
-
-		bit_stream h{};
-
-		write_bucket(ORZ_VERSION, h, 4, 8);
-		write_bucket(flags, h, ORZ_ENCODE_INFO_BITS);
-
-		for (int k{}; k < 32; ++k)
-			h.push_back((crc >> k) & 1);
-
-		h.push_back(state->seed.present);
-
-		if (state->seed.present)
-			write_length_bucket<3, ORZ_SEED_LENGTH>(state->seed.value, h);
-
-		write_bucket(frame_count, h, 16);
-
-		// the streams go in a fixed order, so the flags say which are there: with an .osr its parts (life bar included),
-		// then the replay (verbatim or frames), which runs to the end of the file
-		const auto parts{ stream(orz_tag::osr_parts) };
-		const auto replay{ stream((flags & ORZ_ENCODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) };
-
-		// parts in the fields form take 44 to 72 bytes, and most with a life bar stay under 127
-		if (flags & ORZ_ENCODE_INFO::has_osr_header)
-			write_bucket((u32)parts.size(), h, 7);
-
-		std::vector<u8> final_file{};
-
-		final_file.reserve(1 + h.data.size() + file_data.size());
-
-		final_file.push_back(ORZ_MAGIC);
-
-		add_to_u8(final_file, h.data);
-
-		for (const auto s : { parts, replay })
-			add_to_u8(final_file, s.data(), s.size());
-
-		if (strlen(output_file))
-			write_file(output_file, final_file);
-
-		state->output = std::move(final_file);
-
-	}
+	std::span<const u8> before_life; // the game mode up to the mods, stored as they are
+	_life_bar life;
+	std::span<const u8> after_life;  // the time stamp
+	std::span<const u8> replay_data; // the LZMA replay data
+	std::span<const u8> tail;        // what follows the replay data (online score id, extra data)
 
 };
 
-namespace standard { void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state); }
-namespace modes { void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state); }
+// false for anything that is not an .osr of one of the four game modes
+inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 
-void encode_replay(const char* output_file, _osr& r, const u32 flags, orz_state& state, bool relax) {
-
-	const u32 mode{ kind_mode(info_kind(flags)) };
-
-	// osu!mania has no relax
-	const u32 f{ relax && mode != 3 ? with_kind(flags, (orz_kind)((u32)orz_kind::osu_relax + mode)) : flags };
-
-	// CTB replays with relax map the catcher to the x of the cursor, encode the replay through the standard encoder to catch this
-	if (kind_other_frames(info_kind(f)))
-		return modes::encode(output_file, r, f, state);
-
-	standard::encode(output_file, r, f, state);
-}
-
-bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want);
-
-static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u32 flags, orz_state& state) {
-
-	{
-
-		orz_state fresh{};
-
-		fresh.options = state.options;
-		fresh.debug = state.debug;
-
-		state = std::move(fresh);
-
-	}
-
-	if (raw_file.size() < 128)
-		return;
-
-	const size_t file_size{ raw_file.size() };
+	if (osr.size() < 128 || osr[0] > 3)
+		return false;
 
 	size_t pos{};
 
 	const auto skip = [&](size_t n) {
 
-		if (n > file_size - pos)
+		if (n > osr.size() - pos)
 			return false;
 
 		pos += n;
@@ -250,20 +143,20 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	const auto skip_string = [&]() {
 
-		if (pos >= file_size)
+		if (pos >= osr.size())
 			return false;
 
-		if (raw_file[pos++] != 0x0b)
+		if (osr[pos++] != 0x0b)
 			return true;
 
 		u32 len{};
 
 		for (int k{}; ; ++k) {
 
-			if (pos >= file_size || k == 5)
+			if (pos >= osr.size() || k == 5)
 				return false;
 
-			const u8 c{ raw_file[pos++] };
+			const u8 c{ osr[pos++] };
 
 			len |= u32(c & 0x7f) << (7 * k);
 
@@ -275,123 +168,106 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 		return skip(len);
 	};
 
-	size_t lzma_offset{}, lzma_size{ file_size };
+	const bool ok {
+		skip(1) && skip(4) && // gamemode, game version
+		skip_string() && skip_string() && skip_string() // beatmap hash, player name, replay hash
+	};
 
-	bool relax{ (state.options & ENCODE_RELAX) != 0 };
+	if (!ok)
+		return false;
 
-	auto& header_bytes{ state.osr_header };
+	#pragma pack(push, 1)
 
-	if (flags & ORZ_ENCODE_INFO::has_osr_header) {
+	struct _osr_header_values {
 
-		if (raw_file[0] > 3) // if the osr isnt for one of the main 4 game modes, abort
-			return;
+		i16 hit_300, hit_100, hit_50, geki, katsu, misses;
 
-		flags = with_kind(flags, (orz_kind)raw_file[0]);
+		i32 score;
+		u16 combo;
+		u8 perfect;
 
-		const bool ok {
-			skip(1) && skip(4) && // gamemode, game version
-			skip_string() && skip_string() && skip_string() // beatmap hash, player name, replay hash
-		};
-
-		if (!ok)
-			return;
-
-		#pragma pack(push, 1)
-
-		struct _osr_header_values {
-
-			i16 hit_300, hit_100, hit_50, geki, katsu, misses;
-
-			i32 score;
-			u16 combo;
-			u8 perfect;
-
-			u32 mods;
-
-		};
-
-		#pragma pack(pop)
-
-		const auto* header_values{ (const _osr_header_values*)(raw_file.data() + pos) };
-
-		if (!skip(sizeof(_osr_header_values)))
-			return;
-
-		relax |= (header_values->mods & OSR_MOD_RELAX) != 0;
-
-		const size_t life_start{ pos };
-
-		if (!skip_string())
-			return;
-
-		const size_t life_end{ pos };
-
-		if (life_end - life_start >= 2 && raw_file[life_start] == 0x0b) {
-
-			size_t q{ life_start + 1 };
-
-			while (q < life_end && (raw_file[q] & 0x80))
-				++q;
-
-			if (q < life_end)
-				++q;
-
-			state.life = { true, std::string((const char*)raw_file.data() + q, (const char*)raw_file.data() + life_end) };
-
-		}
-
-		if (!skip(8)) // time stamp
-			return;
-
-		header_bytes.assign(raw_file.begin(), raw_file.begin() + life_start);
-
-		state.after_life.assign(raw_file.begin() + life_end, raw_file.begin() + pos);
-
-		if (!state.life.present && life_end > life_start && raw_file[life_start] != 0)
-			state.life = { true, std::string() };
-
-		if (pos + 4 > file_size)
-			return;
-
-		u32 compressed{};
-
-		memcpy(&compressed, raw_file.data() + pos, 4);
-
-		pos += 4;
-
-		lzma_offset = pos;
-		lzma_size = file_size - pos;
-
-		if (compressed <= lzma_size) {
-
-			state.tail.assign(raw_file.begin() + pos + compressed, raw_file.end());
-			lzma_size = compressed;
-
-		}
-
-	}
-
-	const u8* const lzma_start{ raw_file.data() + lzma_offset };
-
-	const auto write_verbatim = [&]() {
-
-		state.seed = {};
-		state.exact_text = false;
-		state.replay_data = { true, std::vector<u8>(lzma_start, lzma_start + lzma_size) };
-
-		_orz_construct result{ &state };
-
-		result.flags = flags | ORZ_ENCODE_INFO::replay_verbatim;
-		result.frames_crc = _orz_construct::crc_of(state.input, {});
-		result.write(out_file);
+		u32 mods;
 
 	};
 
-	state.input_size = lzma_size;
+	#pragma pack(pop)
 
-	if (!decompress_osr_string(lzma_start, lzma_size, state.text)) {
+	const auto* header_values{ (const _osr_header_values*)(osr.data() + pos) };
 
-		write_verbatim();
+	if (!skip(sizeof(_osr_header_values)))
+		return false;
+
+	// osu!mania has no relax
+	const u32 game_mode{ osr[0] };
+	const bool relax{ (header_values->mods & OSR_MOD_RELAX) != 0 && game_mode != 3 };
+
+	h.mode = (e_mode)(relax ? (u32)e_mode::osu_relax + game_mode : game_mode);
+
+	const size_t life_start{ pos };
+
+	if (!skip_string())
+		return false;
+
+	const size_t life_end{ pos };
+
+	h.life = {};
+
+	if (life_end - life_start >= 2 && osr[life_start] == 0x0b) {
+
+		size_t q{ life_start + 1 };
+
+		while (q < life_end && (osr[q] & 0x80))
+			++q;
+
+		if (q < life_end)
+			++q;
+
+		h.life = { true, std::string((const char*)osr.data() + q, (const char*)osr.data() + life_end) };
+
+	}
+
+	if (!h.life.present && life_end > life_start && osr[life_start] != 0)
+		h.life = { true, std::string() };
+
+	if (!skip(8)) // time stamp
+		return false;
+
+	h.before_life = osr.first(life_start);
+	h.after_life = osr.subspan(life_end, pos - life_end);
+
+	if (pos + 4 > osr.size())
+		return false;
+
+	u32 compressed{};
+
+	memcpy(&compressed, osr.data() + pos, 4);
+
+	pos += 4;
+
+	h.replay_data = osr.subspan(pos);
+	h.tail = {};
+
+	if (compressed <= h.replay_data.size()) {
+
+		h.tail = h.replay_data.subspan(compressed);
+		h.replay_data = h.replay_data.first(compressed);
+
+	}
+
+	return true;
+}
+
+// LZMA replay data into state.output, with the e_mode of state.file (and the .osr parts in state, when it has them)
+static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
+
+	// the span is the caller's, it does not outlive this encode
+	state.lzma = lzma;
+
+	ON_SCOPE_EXIT(state.lzma = {}; );
+
+	if (!decompress_osr_string(lzma.data(), lzma.size(), state.text)) {
+
+		write_verbatim(state);
 
 		return;
 	}
@@ -404,9 +280,7 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 		replay_stream.clear(); // format can not store this many frames
 
 	// only trust the frames if the text writer gives back this exact text, else the replay data is stored as is
-	u32 text_flags{};
-
-	state.exact_text = false;
+	bool verbatim{};
 
 	{
 
@@ -414,23 +288,17 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 		if (body.size() && body.back() == ',') {
 
-			text_flags |= ORZ_ENCODE_INFO::trailing_comma;
+			state.file.encode_info |= ORZ_ENCODE_INFO::trailing_comma;
 			body.remove_suffix(1);
 
 		}
 
-		if (replay_stream.empty() || orz_text::frames_text(replay_stream, state.exact_text) != body) {
+		if (replay_stream.empty() || orz_text::frames_text(replay_stream, false) != body) {
 
-			state.exact_text = true;
-
-			if (orz_text::frames_text(replay_stream, state.exact_text) == body)
-				text_flags |= ORZ_ENCODE_INFO::text_shortest;
-			else {
-
-				state.exact_text = false;
-				text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
-
-			}
+			if (orz_text::frames_text(replay_stream, true) == body)
+				state.file.encode_info |= ORZ_ENCODE_INFO::text_shortest;
+			else
+				verbatim = true;
 
 		}
 
@@ -438,17 +306,17 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	{
 
-		const float x_limit{ info_kind(flags) == orz_kind::mania ? 16777216.f : 131072.f };
+		const float x_limit{ state.mode() == e_mode::mania ? 16777216.f : 131072.f };
 
 		for (const auto& f : replay_stream)
 			if (!(std::abs(f.x) <= x_limit) || !(std::abs(f.y) <= 131072.f)) // catches NaN too
-				text_flags |= ORZ_ENCODE_INFO::replay_verbatim;
+				verbatim = true;
 
 	}
 
-	if (text_flags & ORZ_ENCODE_INFO::replay_verbatim) {
+	if (verbatim) {
 
-		write_verbatim();
+		write_verbatim(state);
 
 		return;
 	}
@@ -468,30 +336,63 @@ static void encode_osr(const std::vector<u8>& raw_file, const char* out_file, u3
 
 	}
 
-	encode_replay(out_file, replay_stream, flags | text_flags, state, relax);
+	encode_replay(replay_stream, state);
 
-	if ((state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text))
-		write_verbatim();
+	const bool coded{ !(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim) };
 
-}
-
-// an .osr (or bare replay data) in memory: the .orz goes to state.output
-void osr_to_orz(const std::vector<u8>& input, const u32 flags, orz_state& state) {
-
-	try {
-		encode_osr(input, "", flags, state);
-	} catch (const std::exception&) {
-		state.output.clear(); // nothing is written for input the encoder can not handle
-	}
+	if (coded && (state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text))
+		write_verbatim(state);
 
 }
 
-void osr_to_orz(const char* in_file, const char* out_file, const u32 flags, orz_state& state) {
+// raw replay data (the LZMA chunk of an .osr) of a replay of the given e_mode into an .orz; false (out empty) for input the
+// encoder can not handle
+bool replay_data_to_orz(std::span<const u8> lzma, e_mode mode, std::vector<u8>& out, orz_state& state) {
 
 	try {
-		encode_osr(read_file(in_file), out_file, flags, state);
+
+		state.reset_volatile();
+
+		state.file.encode_info = set_e_mode(0, mode);
+
+		encode_replay_data(lzma, state);
+
 	} catch (const std::exception&) {
 		state.output.clear();
 	}
+
+	out = std::move(state.output);
+
+	return !out.empty();
+}
+
+// an .osr into an .orz; false (out empty) for anything the encoder can not handle
+bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state) {
+
+	try {
+
+		state.reset_volatile();
+
+		if (_osr_header h{}; read_osr_header(osr, h)) {
+
+			state.osr_header.assign(h.before_life.begin(), h.before_life.end());
+			state.after_life.assign(h.after_life.begin(), h.after_life.end());
+			state.tail.assign(h.tail.begin(), h.tail.end());
+			state.life = std::move(h.life);
+
+			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
+
+			encode_replay_data(h.replay_data, state);
+
+		}
+
+	} catch (const std::exception&) {
+		state.output.clear();
+	}
+
+	out = std::move(state.output);
+
+	return !out.empty();
+}
 
 }

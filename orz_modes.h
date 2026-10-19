@@ -5,20 +5,23 @@
 // for osu!taiko (the mouse sits at the side of the last pressed key) and osu!mania (y is the scroll speed, its changes
 // are listed up front), the catcher's x for osu!catch. Frames a model can not give are escaped with their values up front.
 
-#include "orz_frames.h"
-
 #include <algorithm>
 #include <bit>
 #include <span>
 #include <vector>
 
+#include "orz_state.h"
+#include "orz_frames.h"
+
+namespace orz {
+
 namespace modes {
 
 	enum kind : u32 { taiko, fruits, mania };
 
-	// the frames form of a kind kind_other_frames sends here
-	FORCEINLINE kind mode_of(orz_kind k) {
-		return k == orz_kind::mania ? mania : kind_mode(k) == 1 ? taiko : fruits;
+	// the frames form of an e_mode uses_modes_coder sends here
+	FORCEINLINE kind mode_of(e_mode m) {
+		return m == e_mode::mania ? mania : game_mode(m) == 1 ? taiko : fruits;
 	}
 
 	// osu!mania x holds the held columns as bits, up to 18 (9K co-op)
@@ -538,23 +541,23 @@ namespace modes {
 		return p;
 	}
 
-	// osu!taiko, osu!catch or osu!mania, as the kind says
-	void encode(const char* output_file, const _osr& r, const u32 flags, orz_state& state) {
+	// osu!taiko, osu!catch or osu!mania, as the gamemode says
+	void encode(const _osr& r, orz_state& state) {
 
-		const kind mode{ mode_of(info_kind(flags)) };
+		const kind mode{ mode_of(state.mode()) };
 
-		// osu!mania keeps the held columns in x (keys stay 0), anything else goes to the osu!standard coder
+		// osu!mania keeps the held columns in x (keys stay 0), a replay the column form can not hold is stored as it is
 		if (mode == mania) {
 
 			for (const auto& f : r)
 				if (f.keys || !(f.x >= 0.f && f.x < (float)(1u << MAX_COLUMNS)) || f.x != std::floor(f.x))
-					return standard::encode(output_file, r, with_kind(flags, orz_kind::osu), state);
+					return write_verbatim(state);
 
 		}
 
 		_osr R{ r };
 
-		auto [side, grid, esc, speeds]{ prepare(R, mode, state.exact_text) };
+		auto [side, grid, esc, speeds]{ prepare(R, mode, state.exact_text()) };
 
 		// frames: delta table and time grid, from the next byte the context mixed frames
 		bit_stream head{};
@@ -581,33 +584,24 @@ namespace modes {
 
 		add_to_u8(head.data, e.finish());
 
-		_orz_construct result{ &state };
-
-		result.frame_count = (u32)r.size();
-		result.flags = flags;
-		result.frames_crc = _orz_construct::crc_of(r, state.seed);
-
-		result.add_stream(orz_tag::frames, head.data.data(), head.data.size());
-		result.write(output_file);
+		add_container(state.file, orz_tag::frames, head.data);
+		finish_orz_file((u32)r.size(), frames_crc(r, state.seed), state);
 
 	}
 
-	bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R) {
+	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R) {
 
-		const u32 flags{ header->flags };
-		const auto& data{ stream_data[orz_tag::frames] };
-		const _bit_view head{ data };
+		_bit_view head{ data };
 
-		size_t bit{};
 		u32 grid{};
 
-		_side side{ mode_of(info_kind(flags)) };
+		_side side{ mode_of(get_e_mode(encode_info)) };
 
-		side.table = frame_time::read_table(head, bit, grid);
+		side.table = frame_time::read_table(head, grid);
 		side.grid = frame_time::_time_grid{ grid };
-		side.exact_text = (flags & ORZ_ENCODE_INFO::text_shortest) != 0;
+		side.exact_text = (encode_info & ORZ_ENCODE_INFO::text_shortest) != 0;
 
-		cm::bit_decoder d{ std::span{ data }.subspan(std::min(data.size(), (bit + 7) / 8)) };
+		cm::bit_decoder d{ head.get_tail() };
 
 		std::vector<u8> esc(R.size());
 		std::vector<std::pair<u32, float>> speeds;
@@ -633,5 +627,7 @@ namespace modes {
 
 		return true;
 	}
+
+}
 
 }

@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 
+namespace orz {
+
 constexpr uint32_t LIFE_PRIOR_WEIGHT{ 64 };
 constexpr uint32_t LIFE_FRAME_PRIOR_ROWS{ 3 };
 constexpr uint32_t LIFE_FRAME_PRIOR_ALPHABET{ 76 };
@@ -80,3 +82,5 @@ constexpr uint16_t LIFE_VALUE_PRIOR_VALUES[1111]{
 	1,1,1,1,1,1,1,1,2,1,1,1,2,1,1,2,1,1,2,1,1,1,2,3,2,2,2,2,2,2,3,3,3,3,4,4,4,4,4,4,
 	4,4,5,5,5,6,7,8,9,10,10,11,14,14,17,15,17,16,17,16,16,18,17,19,20,23,34,34,59,83,3447
 };
+
+}

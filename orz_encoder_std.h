@@ -1,13 +1,16 @@
 #pragma once
 
-#include "orz_frames.h"
-#include "orz_device_std.h"
-
 #include <algorithm>
 #include <climits>
 #include <array>
 #include <unordered_map>
 #include <vector>
+
+#include "orz_state.h"
+#include "orz_frames.h"
+#include "orz_device_std.h"
+
+namespace orz {
 
 namespace standard {
 
@@ -36,7 +39,6 @@ namespace standard {
 				if (repeated[i])
 					continue;
 
-				
 				dt.push_back((int)std::clamp<i64>(elapsed, INT_MIN, INT_MAX));
 
 				elapsed = 0;
@@ -57,40 +59,39 @@ namespace standard {
 		}
 
 	}
-		
+
+	inline u32 fold_keys(u32 k) {
+		return k ^ ((k >> 2) & 3);
+	}
+
+	// what every candidate model codes alike: times, repeats, keys
 	struct _shared_streams {
-		_orz_construct time, osr;
-		const _osr* frames;
 		std::vector<int> delta;
 		std::vector<u8> repeated;
 		std::vector<u32> sample;
 		std::vector<u32> keys; // folded, K1 / K2 imply M1 / M2
 		std::vector<int> table;
 		u32 grid{};
-		bool relax{};
-		bool start{};
-		bool start_time{};
+		bool std_default_pos{};
+		bool std_default_time{};
 	};
 
-	inline bool starts_at_start(const _osr& r) {
+	inline bool std_default_pos_of(const _osr& r) {
 
 		return r.size() > 2 && same_bits(r[0].x, POS_DEFAULT_X) && same_bits(r[0].y, POS_DEFAULT_Y) &&
 			same_bits(r[1].x, POS_DEFAULT_X) && same_bits(r[1].y, POS_DEFAULT_Y);
 	}
 
-	static _shared_streams shared_streams(const _osr& r, const u32 flags, orz_state& state, bool start, bool start_time) {
+	inline _shared_streams shared_streams(const _osr& r, bool std_default_pos, bool std_default_time) {
 
-		_shared_streams sh{ { &state }, { &state }, &r };
-
-		sh.time.frame_count = (u32)r.size();
-		sh.time.flags = flags;
+		_shared_streams sh{};
 
 		sh.delta = frame_time::deltas(r);
-		sh.start = start;
-		sh.start_time = start_time;
+		sh.std_default_pos = std_default_pos;
+		sh.std_default_time = std_default_time;
 
-		// the first two deltas are not coded with start_time
-		sh.table = frame_time::build_table(std::span{ sh.delta }.subspan(start_time ? 2 : 0));
+		// the first two deltas are not coded with std_default_time
+		sh.table = frame_time::build_table(std::span{ sh.delta }.subspan(std_default_time ? 2 : 0));
 		sh.grid = frame_time::pick_grid(sh.delta);
 
 		sh.repeated = repeat::flags(r);
@@ -99,11 +100,7 @@ namespace standard {
 		sh.keys.resize(r.size());
 
 		for (size_t i{}; i < r.size(); ++i)
-			sh.keys[i] = r[i].keys ^ ((r[i].keys >> 2) & 3);
-
-		sh.relax = kind_relax(info_kind(flags));
-
-		sh.osr.add_osr_parts();
+			sh.keys[i] = fold_keys(r[i].keys);
 
 		return sh;
 	}
@@ -200,267 +197,281 @@ namespace standard {
 		if (s < 1.5 || most * 2 < (i64)d.size() - 1)
 			return {};
 
-		const double guess{ s }, span{ (double)(d.back() - d.front()) };
-		
-		const auto sample = [&](size_t n) {
+		struct _fitter {
 
-			std::vector<double> u;
+			const std::vector<i64>& d;
 
-			for (size_t i{}, stride{ std::max<size_t>(1, d.size() / n) }; i < d.size(); i += stride)
-				u.push_back((double)(d[i] - d.front()) / span);
+			double span{}, s{}, phase{};
 
-			return u;
-		};
+			std::vector<double> few, many;
 
-		const std::vector<double> few{ sample(256) }, many{ sample(2048) };
+			std::vector<i64> on, j;
 
-		double phase{};
+			std::vector<size_t> up, dn;
 
-		const auto sweep = [&](double reach_steps, double q_step, const std::vector<double>& u) {
+			std::vector<double> sample(size_t n) const {
 
-			constexpr int BINS{ 256 };
+				std::vector<double> u;
 
-			const double n0{ span / s };
-			const int reach{ (int)(reach_steps / q_step) };
+				for (size_t i{}, stride{ std::max<size_t>(1, d.size() / n) }; i < d.size(); i += stride)
+					u.push_back((double)(d[i] - d.front()) / span);
 
-			int hist[BINS], best{ -1 };
-			double best_s{ s };
+				return u;
+			}
 
-			for (int q{ -reach }; q <= reach; ++q) {
+			void sweep(double reach_steps, double q_step, const std::vector<double>& u) {
 
-				const double N{ n0 + q * q_step }, st{ span / N };
+				constexpr int BINS{ 256 };
 
-				// a wide reach can pass zero steps
-				if (N <= 0 || st < 1.2)
-					continue;
+				const double n0{ span / s };
+				const int reach{ (int)(reach_steps / q_step) };
 
-				std::fill(std::begin(hist), std::end(hist), 0);
+				int hist[BINS], best{ -1 };
+				double best_s{ s };
 
-				for (const double x : u) {
+				for (int q{ -reach }; q <= reach; ++q) {
 
-					const double f{ x * N };
+					const double N{ n0 + q * q_step }, st{ span / N };
 
-					++hist[std::min(BINS - 1, (int)((f - std::floor(f)) * BINS))];
+					// a wide reach can pass zero steps
+					if (N <= 0 || st < 1.2)
+						continue;
 
-				}
+					std::fill(std::begin(hist), std::end(hist), 0);
 
-				const int w{ std::max(1, (int)(BINS / st)) };
+					for (const double x : u) {
 
-				int sum{};
+						const double f{ x * N };
 
-				for (int b{}; b < w; ++b)
-					sum += hist[b];
-
-				for (int b{}; b < BINS; ++b) {
-
-					if (sum > best) {
-
-						best = sum;
-						best_s = st;
-						phase = (b + w * 0.5) / BINS * st;
+						++hist[std::min(BINS - 1, (int)((f - std::floor(f)) * BINS))];
 
 					}
 
-					sum += hist[(b + w) % BINS] - hist[b];
+					const int w{ std::max(1, (int)(BINS / st)) };
 
-				}
+					int sum{};
 
-			}
+					for (int b{}; b < w; ++b)
+						sum += hist[b];
 
-			s = best_s;
-		};
+					for (int b{}; b < BINS; ++b) {
 
-		std::vector<i64> on, j;
+						if (sum > best) {
 
-		std::vector<size_t> up, dn;
-
-		const auto hulls = [&]() {
-
-			const auto cross = [&](size_t o, size_t a, size_t b) {
-
-				return (j[a] - j[o]) * (on[b] - on[o]) - (on[a] - on[o]) * (j[b] - j[o]);
-			};
-
-			up.clear();
-			dn.clear();
-
-			for (size_t i{}; i < on.size(); ++i) {
-
-				while (up.size() >= 2 && cross(up[up.size() - 2], up.back(), i) >= 0)
-					up.pop_back();
-
-				up.push_back(i);
-
-				while (dn.size() >= 2 && cross(dn[dn.size() - 2], dn.back(), i) <= 0)
-					dn.pop_back();
-
-				dn.push_back(i);
-
-			}
-
-		};
-
-		const auto window = [&](double st, double& lo) {
-
-			double hi{ std::numeric_limits<double>::max() };
-
-			lo = std::numeric_limits<double>::lowest();
-
-			for (size_t i : up)
-				lo = std::max(lo, (double)on[i] - (double)j[i] * st);
-
-			for (size_t i : dn)
-				hi = std::min(hi, (double)on[i] + 1. - (double)j[i] * st);
-
-			return hi - lo;
-		};
-
-		const auto refine = [&](bool exact) {
-
-			for (int it{}; it < 3; ++it) {
-
-				std::vector<std::pair<double, size_t>> t(d.size());
-				std::vector<i64> jd(d.size());
-
-				for (size_t i{}; i < d.size(); ++i) {
-
-					jd[i] = std::llround(((double)(d[i] - d.front()) - phase) / s);
-					t[i] = { (double)(d[i] - d.front()) - (double)jd[i] * s, i };
-
-				}
-
-				size_t count{ d.size() }, at{};
-
-				if (!exact) {
-
-					std::sort(t.begin(), t.end());
-
-					count = 0;
-
-					for (size_t e{}, b{}; e < t.size(); ++e) {
-
-						while (t[e].first - t[b].first >= 1.)
-							++b;
-
-						if (e - b + 1 > count) {
-
-							count = e - b + 1;
-							at = b;
+							best = sum;
+							best_s = st;
+							phase = (b + w * 0.5) / BINS * st;
 
 						}
 
+						sum += hist[(b + w) % BINS] - hist[b];
+
 					}
 
-					std::sort(t.begin() + at, t.begin() + at + count, [](const auto& x, const auto& y) { return x.second < y.second; });
+				}
+
+				s = best_s;
+			}
+
+			void hulls() {
+
+				const auto cross = [&](size_t o, size_t a, size_t b) {
+
+					return (j[a] - j[o]) * (on[b] - on[o]) - (on[a] - on[o]) * (j[b] - j[o]);
+				};
+
+				up.clear();
+				dn.clear();
+
+				for (size_t i{}; i < on.size(); ++i) {
+
+					while (up.size() >= 2 && cross(up[up.size() - 2], up.back(), i) >= 0)
+						up.pop_back();
+
+					up.push_back(i);
+
+					while (dn.size() >= 2 && cross(dn[dn.size() - 2], dn.back(), i) <= 0)
+						dn.pop_back();
+
+					dn.push_back(i);
 
 				}
 
-				on.clear();
-				j.clear();
+			}
 
-				const i64 low{ jd[t[at].second] };
+			double window(double st, double& lo) const {
 
-				for (size_t k{ at }; k < at + count; ++k) {
+				double hi{ std::numeric_limits<double>::max() };
 
-					on.push_back(d[t[k].second]);
-					j.push_back(jd[t[k].second] - low);
+				lo = std::numeric_limits<double>::lowest();
+
+				for (size_t i : up)
+					lo = std::max(lo, (double)on[i] - (double)j[i] * st);
+
+				for (size_t i : dn)
+					hi = std::min(hi, (double)on[i] + 1. - (double)j[i] * st);
+
+				return hi - lo;
+			}
+
+			size_t refine(bool exact) {
+
+				double lo;
+
+				for (int it{}; it < 3; ++it) {
+
+					std::vector<std::pair<double, size_t>> t(d.size());
+					std::vector<i64> jd(d.size());
+
+					for (size_t i{}; i < d.size(); ++i) {
+
+						jd[i] = std::llround(((double)(d[i] - d.front()) - phase) / s);
+						t[i] = { (double)(d[i] - d.front()) - (double)jd[i] * s, i };
+
+					}
+
+					size_t count{ d.size() }, at{};
+
+					if (!exact) {
+
+						std::sort(t.begin(), t.end());
+
+						count = 0;
+
+						for (size_t e{}, b{}; e < t.size(); ++e) {
+
+							while (t[e].first - t[b].first >= 1.)
+								++b;
+
+							if (e - b + 1 > count) {
+
+								count = e - b + 1;
+								at = b;
+
+							}
+
+						}
+
+						std::sort(t.begin() + at, t.begin() + at + count, [](const auto& x, const auto& y) {
+
+							return x.second < y.second;
+						});
+
+					}
+
+					on.clear();
+					j.clear();
+
+					const i64 low{ jd[t[at].second] };
+
+					for (size_t k{ at }; k < at + count; ++k) {
+
+						on.push_back(d[t[k].second]);
+						j.push_back(jd[t[k].second] - low);
+
+					}
+
+					hulls();
+
+					double a{ s * 0.999 }, b{ s * 1.001 };
+
+					for (int k{}; k < 40; ++k) {
+
+						const double m1{ a + (b - a) / 3 }, m2{ b - (b - a) / 3 };
+
+						if (window(m1, lo) < window(m2, lo))
+							a = m1;
+						else
+							b = m2;
+
+					}
+
+					s = (a + b) / 2;
+
+					// clearly no exact grid near this step
+					if (exact && window(s, lo) < -1.)
+						break;
 
 				}
 
-				hulls();
+				return window(s, lo) > 0 ? on.size() : 0;
+			}
 
-				double a{ s * 0.999 }, b{ s * 1.001 }, lo;
+			size_t fit_from(double st) {
 
-				for (int k{}; k < 40; ++k) {
+				s = st;
+				phase = 0;
 
-					const double m1{ a + (b - a) / 3 }, m2{ b - (b - a) / 3 };
+				for (int it{}; it < 20; ++it) {
 
-					if (window(m1, lo) < window(m2, lo))
-						a = m1;
-					else
-						b = m2;
+					i64 n{};
+
+					for (size_t i{ 1 }; i < d.size(); ++i)
+						n += std::max<i64>(1, std::llround((double)(d[i] - d[i - 1]) / s));
+
+					const double s1{ span / (double)n };
+
+					if (s1 == s)
+						break;
+
+					s = s1;
 
 				}
 
-				s = (a + b) / 2;
+				if (const size_t n{ refine(true) }; n != 0)
+					return n;
 
-				// clearly no exact grid near this step
-				if (exact && window(s, lo) < -1.)
-					break;
+				// a span step far from st is some other step
+				if (std::abs(st - s) > s * 0.1)
+					return 0;
 
+				sweep(span / s * std::max(0.01, std::abs(st - s) / s + 0.005), 1., few);
+				sweep(1., 0.25, many);
+
+				size_t count{ refine(false) };
+
+				if (count == 0)
+					return 0;
+
+				const double s0{ s }, p0{ phase };
+
+				sweep(std::min(span / s * 0.0025, 8.), 0.125, many);
+
+				double lo;
+
+				if (const size_t c{ refine(false) }; c > count && window(s, lo) > 0)
+					count = c;
+				else {
+
+					s = s0;
+					phase = p0;
+					refine(false);
+
+				}
+
+				return count;
 			}
 
-			double lo;
+			// estimated bits saved per value
+			double gain(size_t n) const {
 
-			return window(s, lo) > 0 ? on.size() : 0;
-		};
+				const double f{ (double)n / (double)d.size() };
 
-		double lo;
-
-		const auto fit_from = [&](double st) -> size_t {
-
-			s = st;
-			phase = 0;
-
-			for (int it{}; it < 20; ++it) {
-
-				i64 n{};
-
-				for (size_t i{ 1 }; i < d.size(); ++i)
-					n += std::max<i64>(1, std::llround((double)(d[i] - d[i - 1]) / s));
-
-				const double s1{ span / (double)n };
-
-				if (s1 == s)
-					break;
-
-				s = s1;
-
+				return n * 10 < d.size() * 7 ? std::numeric_limits<double>::lowest() : f * std::log2(s) - (1. - f) * 3.;
 			}
 
-			if (const size_t n{ refine(true) }; n != 0)
-				return n;
-
-			// a span step far from st is some other step
-			if (std::abs(st - s) > s * 0.1)
-				return 0;
-
-			sweep(span / s * std::max(0.01, std::abs(st - s) / s + 0.005), 1., few);
-			sweep(1., 0.25, many);
-
-			size_t count{ refine(false) };
-
-			if (count == 0)
-				return 0;
-
-			const double s0{ s }, p0{ phase };
-
-			sweep(std::min(span / s * 0.0025, 8.), 0.125, many);
-
-			if (const size_t c{ refine(false) }; c > count && window(s, lo) > 0)
-				count = c;
-			else {
-
-				s = s0;
-				phase = p0;
-				refine(false);
-
-			}
-
-			return count;
 		};
 
-		// estimated bits saved per value
-		const auto gain = [&](size_t n) {
+		const double guess{ s };
 
-			const double f{ (double)n / (double)d.size() };
-			
-			return n * 10 < d.size() * 7 ? std::numeric_limits<double>::lowest() : f * std::log2(s) - (1. - f) * 3.;
-		};
+		_fitter f{ d, (double)(d.back() - d.front()) };
 
-		if (const size_t count{ fit_from(guess) }; count * 10 < d.size() * 9) {
+		f.few = f.sample(256);
+		f.many = f.sample(2048);
 
-			double best{ gain(count) }, best_s{ s }, best_phase{ phase };
+		if (const size_t count{ f.fit_from(guess) }; count * 10 < d.size() * 9) {
+
+			double best{ f.gain(count) }, best_s{ f.s }, best_phase{ f.phase };
 			std::vector<double> tried{ guess };
 
 			for (const double pr : pairs)
@@ -468,16 +479,21 @@ namespace standard {
 
 					const double st{ pr / k };
 
-					if (st < 1.2 || std::any_of(tried.begin(), tried.end(), [&](double t) { return std::abs(st - t) < t * 0.005; }))
+					const bool seen{ std::any_of(tried.begin(), tried.end(), [&](double t) {
+
+						return std::abs(st - t) < t * 0.005;
+					}) };
+
+					if (st < 1.2 || seen)
 						continue;
 
 					tried.push_back(st);
 
-					if (const double g{ gain(fit_from(st)) }; g > best) {
+					if (const double g{ f.gain(f.fit_from(st)) }; g > best) {
 
 						best = g;
-						best_s = s;
-						best_phase = phase;
+						best_s = f.s;
+						best_phase = f.phase;
 
 					}
 
@@ -486,16 +502,18 @@ namespace standard {
 			if (best == std::numeric_limits<double>::lowest())
 				return {};
 
-			s = best_s;
-			phase = best_phase;
+			f.s = best_s;
+			f.phase = best_phase;
 
-			if (refine(true) == 0)
-				refine(false);
+			if (f.refine(true) == 0)
+				f.refine(false);
 
 		}
 
-		const double w{ window(s, lo) };
-		const u64 A{ (u64)std::llround(s * 4294967296.) };
+		double lo;
+
+		const double w{ f.window(f.s, lo) };
+		const u64 A{ (u64)std::llround(f.s * 4294967296.) };
 
 		if (w <= 0 || A == 0)
 			return {};
@@ -503,12 +521,14 @@ namespace standard {
 		return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
 	}
 
-	inline float grid_field(const dspace::axis_params& p, i64 L) {
-		return p.mode == dspace::axis_mode::rational ? dspace::rational_value(p, L) : dspace::absolute_field(p, L);
+	inline float grid_field(const dspace::_axis& a, i64 L) {
+		return a.param.mode == dspace::axis_mode::rational ? dspace::rational_value(a.param, L) : dspace::absolute_field(a, L);
 	}
 
 	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const float> vals,
 		bool exact_text, const _native_grid& g) {
+
+		const dspace::_axis a{ p };
 
 		dspace::axis_streams o{};
 
@@ -549,7 +569,7 @@ namespace standard {
 					continue;
 				}
 
-			} else if (const float v{ grid_field(p, Ls) }; b.contains(v)) {
+			} else if (const float v{ grid_field(a, Ls) }; b.contains(v)) {
 
 				held = false;
 				last = v;
@@ -562,7 +582,7 @@ namespace standard {
 			float x{ vals[i] };
 
 			for (const i64 n : { Ls - 1, Ls + 1 })
-				if (const float v{ grid_field(p, n) }; b.contains(v)) {
+				if (const float v{ grid_field(a, n) }; b.contains(v)) {
 
 					x = v;
 
@@ -570,7 +590,7 @@ namespace standard {
 				}
 
 			o.escapes.push_back({ (u32)i, x });
-			o.escape_pred.push_back(grid_field(p, Ls));
+			o.escape_pred.push_back(grid_field(a, Ls));
 
 			held = true;
 			last = x;
@@ -584,8 +604,10 @@ namespace standard {
 	// the values one native count either side of grid value L
 	inline void grid_near(const dspace::axis_params& p, i64 L, float (&near)[2]) {
 
-		near[0] = grid_field(p, L - 1);
-		near[1] = grid_field(p, L + 1);
+		const dspace::_axis a{ p };
+
+		near[0] = grid_field(a, L - 1);
+		near[1] = grid_field(a, L + 1);
 
 	}
 
@@ -597,31 +619,21 @@ namespace standard {
 		if (!g.on)
 			return;
 
-		for (int b{}; b < 48; ++b)
-			o.push_back((g.A >> b) & 1);
-
-		for (int b{}; b < 64; ++b)
-			o.push_back(((u64)g.C >> b) & 1);
+		o.write_bits<48>(g.A);
+		o.write_bits<64>((u64)g.C);
 
 	}
 
-	inline bool read_grid(const _bit_view in, size_t& i, _native_grid& g) {
+	inline bool read_grid(_bit_view& in, _native_grid& g) {
 
 		g = {};
-		g.on = small_read<1>(in, i) != 0;
+		g.on = in.read_bits<1>() != 0;
 
 		if (!g.on)
 			return true;
 
-		u64 c{};
-
-		for (int b{}; b < 48 && i < in.max_size(); ++b)
-			g.A |= (u64)(in[i++] != 0) << b;
-
-		for (int b{}; b < 64 && i < in.max_size(); ++b)
-			c |= (u64)(in[i++] != 0) << b;
-
-		g.C = (i64)c;
+		g.A = in.read_bits<48>();
+		g.C = (i64)in.read_bits<64>();
 
 		return g.A != 0;
 	}
@@ -632,22 +644,22 @@ namespace standard {
 		if (!ap.on)
 			return;
 
-		small_write<2>(ap.rate, o);
+		o.small_write<2>(ap.rate);
 		dspace::write_u(ap.width, o);
 		dspace::write_u(ap.height, o);
 
 	}
 
-	inline bool read_autopilot(const _bit_view in, size_t& i, autopilot::_params& ap, bool on) {
+	inline bool read_autopilot(_bit_view& in, autopilot::_params& ap, bool on) {
 
 		ap = { on };
 
 		if (!ap.on)
 			return true;
 
-		ap.rate = small_read<2>(in, i);
-		ap.width = dspace::read_u(in, i);
-		ap.height = dspace::read_u(in, i);
+		ap.rate = in.small_read<2>();
+		ap.width = dspace::read_u(in);
+		ap.height = dspace::read_u(in);
 
 		return ap.rate < autopilot::RATE_COUNT && ap.width && ap.height && ap.width <= (1 << 15) && ap.height <= (1 << 15);
 	}
@@ -660,7 +672,7 @@ namespace standard {
 	};
 
 	// the new positions with their times and 7 digit ordinals, for autopilot (none for shortest round-trip text)
-	static std::vector<autopilot::sample> autopilot_samples(const _osr& r, const _shared_streams& shared, bool exact_text) {
+	inline std::vector<autopilot::sample> autopilot_samples(const _osr& r, const _shared_streams& shared, bool exact_text) {
 
 		if (exact_text)
 			return {};
@@ -697,7 +709,7 @@ namespace standard {
 	}
 
 	// the window, then the speed, under which fitted moves cover the most of a stretch past the start
-	static autopilot::_params search_autopilot(std::span<const autopilot::sample> s) {
+	inline autopilot::_params search_autopilot(std::span<const autopilot::sample> s) {
 
 		const size_t skip{ std::min<size_t>(s.size(), 64) };
 		const auto head{ s.subspan(skip, std::min<size_t>(s.size() - skip, 600)) };
@@ -734,25 +746,25 @@ namespace standard {
 
 	struct _positions {
 
-		_orz_construct streams;
+		std::vector<u8> frames; // the frames stream
 		std::array<dspace::axis_streams, 2> st;
 		bool autopilot{}; // coded with the autopilot path model
 
 		size_t size() const {
-			return streams.file_data.size();
+			return frames.size();
 		}
 
 	};
 
-	static _positions position_streams(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
+	inline _positions position_streams(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
 		const _shared_streams& shared, orz_state& state, const autopilot::_params& ap = {}, const std::vector<autopilot::event>& moves = {}) {
 
-		_positions p{ { &state } };
+		_positions p{};
 
 		p.autopilot = ap.on;
 
 		for (int a{}; a < 2; ++a)
-			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text);
+			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text());
 
 		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream model_head{};
@@ -771,7 +783,7 @@ namespace standard {
 				grid[a] = fit_grid(p.st[a].K);
 
 				if (grid[a].on)
-					on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text, grid[a]);
+					on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), grid[a]);
 
 			}
 
@@ -782,10 +794,10 @@ namespace standard {
 			for (int a{}; a < 2; ++a)
 				write_grid(use_grid ? grid[a] : _native_grid{}, head);
 
-			head.push_back(shared.start);
+			head.push_back(shared.std_default_pos);
 
-			if (shared.start)
-				head.push_back(shared.start_time);
+			if (shared.std_default_pos)
+				head.push_back(shared.std_default_time);
 
 			frames::_frame_data fd{ shared.delta, shared.keys, shared.repeated };
 
@@ -815,9 +827,9 @@ namespace standard {
 
 			}
 
-			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, shared.relax, ap, shared.start_time };
+			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, is_relax(state.mode()), ap, shared.std_default_time };
 
-			add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text));
+			add_to_u8(head.data, frames::encode(fd, side, shared.delta.size(), values, state.exact_text()));
 
 			return head.data;
 		};
@@ -837,25 +849,17 @@ namespace standard {
 
 			}
 
-		
 		if (use_grid)
 			for (int a{}; a < 2; ++a)
 				if (grid[a].on)
 					p.st[a].decoded = on_grid[a].decoded;
 
-		p.streams.add_stream(orz_tag::frames, best.data(), best.size());
+		p.frames = std::move(best);
 
 		return p;
 	}
-		
-	static void write_orz(const _positions& p, const _shared_streams& shared, orz_state& state) {
 
-		_orz_construct result{ shared.time };
-
-		if (p.autopilot)
-			result.flags = with_kind(result.flags, orz_kind::osu_autopilot);
-
-		const _osr& r{ *shared.frames };
+	inline void write_orz(const _osr& r, const _positions& p, const _shared_streams& shared, orz_state& state) {
 
 		u32 crc{ ORZ_CRC_SEED };
 
@@ -863,25 +867,26 @@ namespace standard {
 
 			const u32 s{ shared.sample[i] };
 
-			const bool at_start{ shared.start && i < 2 };
+			const bool is_default{ shared.std_default_pos && i < 2 };
 
-			crc = crc32c_frame(crc, { r[i].delta, at_start ? POS_DEFAULT_X : p.st[0].decoded[s], at_start ? POS_DEFAULT_Y : p.st[1].decoded[s], r[i].keys });
+			crc = crc32c_frame(crc, { r[i].delta, is_default ? POS_DEFAULT_X : p.st[0].decoded[s], is_default ? POS_DEFAULT_Y : p.st[1].decoded[s], r[i].keys });
 
 		}
 
 		if (state.seed.present)
 			crc = crc32c_frame(crc, { -12345, 0.f, 0.f, state.seed.value });
 
-		result.frames_crc = crc;
+		if (p.autopilot)
+			state.file.encode_info = set_e_mode(state.file.encode_info, e_mode::osu_autopilot);
 
-		result.append(p.streams);
-		result.append(shared.osr);
-		result.finish("");
+		add_container(state.file, orz_tag::frames, p.frames);
+
+		finish_orz_file((u32)r.size(), crc, state);
 
 	}
 
 	// axis_mode::none marks what detection could not fit
-	static dspace::_model_info text_filled(dspace::_model_info m) {
+	inline dspace::_model_info text_filled(dspace::_model_info m) {
 
 		for (auto& ax : m.axis) {
 
@@ -901,7 +906,7 @@ namespace standard {
 		return m;
 	}
 
-	static dspace::_model_info all_text() {
+	inline dspace::_model_info all_text() {
 
 		dspace::axis_params p{};
 
@@ -915,9 +920,8 @@ namespace standard {
 		return m;
 	}
 
-	
 	// the replay's frames with autopilot moves in place of a device model
-	static _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
+	inline _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
 		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state) {
 
 		size_t covered{};
@@ -927,7 +931,55 @@ namespace standard {
 		return position_streams(all_text(), vals, dt, shared, state, ap, moves);
 	}
 
-	static bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	// mouse axes differ, try each other and keep the winners
+	inline void try_other_mouse(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
+
+		const bool differ{
+			px.field.scale != py.field.scale || px.field.wide != py.field.wide || px.mouse.sens != py.mouse.sens || px.mouse.poll != py.mouse.poll
+		};
+
+		if (px.mode != dspace::axis_mode::mouse || py.mode != dspace::axis_mode::mouse || !differ)
+			return;
+
+		const dspace::axis_params from[2]{ py, px };
+		dspace::axis_params* to[2]{ &px, &py };
+
+		for (int a{}; a < 2; ++a) {
+
+			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
+
+			for (const auto& [W, H] : PM_RES) {
+
+				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+				if (ratio != from[a].field.scale)
+					continue;
+
+				auto q{ from[a] };
+
+				q.field.off = a ? oy : ox;
+
+				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
+
+				if (st.escapes.size() * 2 > vals[a].size())
+					continue;
+
+				if (const size_t c{ axis_cost(st, dt, a, state.exact_text()) }; c < best) {
+
+					best = c;
+					*to[a] = q;
+					ws[a] = std::move(st);
+
+				}
+
+			}
+
+		}
+
+	}
+
+	inline bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
 		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
 		// whole replay, one model per axis
@@ -956,46 +1008,7 @@ namespace standard {
 			if (px.mode != dspace::axis_mode::none || py.mode != dspace::axis_mode::none)
 				refine_window(state, vals, dt, px, py, ws);
 
-			// mouase axis are differing, try each other and keep the winners
-			if (px.mode == dspace::axis_mode::mouse && py.mode == dspace::axis_mode::mouse &&
-				(px.field.scale != py.field.scale || px.field.wide != py.field.wide || px.mouse.sens != py.mouse.sens || px.mouse.poll != py.mouse.poll)) {
-
-				const dspace::axis_params from[2]{ py, px };
-				dspace::axis_params* to[2]{ &px, &py };
-
-				for (int a{}; a < 2; ++a) {
-
-					size_t best{ axis_cost(ws[a], dt, a, state.exact_text) };
-
-					for (const auto& [W, H] : PM_RES) {
-
-						const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-						if (ratio != from[a].field.scale)
-							continue;
-
-						auto q{ from[a] };
-
-						q.field.off = a ? oy : ox;
-
-						auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text, {}, vals[a].size() / 2) };
-
-						if (st.escapes.size() * 2 > vals[a].size())
-							continue;
-
-						if (const size_t c{ axis_cost(st, dt, a, state.exact_text) }; c < best) {
-
-							best = c;
-							*to[a] = q;
-							ws[a] = std::move(st);
-
-						}
-
-					}
-
-				}
-
-			}
+			try_other_mouse(state, vals, dt, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
@@ -1034,11 +1047,13 @@ namespace standard {
 
 			if (!seg.axis[0].all_none() || !seg.axis[1].all_none()) {
 
-				auto p{ position_streams(text_filled(seg), vals, dt, shared, state) };
+				const auto filled{ text_filled(seg) };
+
+				auto p{ position_streams(filled, vals, dt, shared, state) };
 
 				if (!found || p.size() < best.size()) {
 
-					info = text_filled(seg);
+					info = filled;
 					best = std::move(p);
 					found = true;
 
@@ -1051,14 +1066,14 @@ namespace standard {
 		return found;
 	}
 
-	void encode(const char* output_file, const _osr& original, const u32 flags, orz_state& state) {
+	inline void encode(const _osr& original, orz_state& state) {
 
-		const bool start{ starts_at_start(original) };
-		const bool start_time{ start && original[0].delta == 0 && original[1].delta == -1 };
+		const bool std_default_pos{ std_default_pos_of(original) };
+		const bool std_default_time{ std_default_pos && original[0].delta == 0 && original[1].delta == -1 };
 
 		_osr moved;
 
-		if (start) {
+		if (std_default_pos) {
 
 			moved = original;
 
@@ -1071,11 +1086,11 @@ namespace standard {
 
 		}
 
-		const _osr& r{ start ? moved : original };
+		const _osr& r{ std_default_pos ? moved : original };
 
-		const _shared_streams shared{ shared_streams(r, flags, state, start, start_time) };
+		const _shared_streams shared{ shared_streams(r, std_default_pos, std_default_time) };
 
-		state.catcher = kind_mode(info_kind(flags)) == 2;
+		const bool relax{ is_relax(state.mode()) };
 
 		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
 
@@ -1092,19 +1107,19 @@ namespace standard {
 		}
 
 		dspace::_model_info info{ all_text() };
-		_positions best{ { &state } };
+		_positions best{};
 
 		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text. Relax
 		// and autopilot do not go together.
-		const auto ap_samples{ autopilot_samples(r, shared, state.exact_text) };
+		const auto ap_samples{ autopilot_samples(r, shared, state.exact_text()) };
 
-		if (const auto ap{ shared.relax ? autopilot::_params{} : autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
+		if (const auto ap{ relax ? autopilot::_params{} : autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
 			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
 
-			// both axis' as text, only tried when the model misses 5% or more of an axis's frames
+			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
 
 				return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
@@ -1130,7 +1145,7 @@ namespace standard {
 
 			if (text_only(0) && text_only(1)) {
 
-				if (const auto search{ shared.relax ? autopilot::_params{} : search_autopilot(ap_samples) }; search.on) {
+				if (const auto search{ relax ? autopilot::_params{} : search_autopilot(ap_samples) }; search.on) {
 
 					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state) };
 
@@ -1143,7 +1158,7 @@ namespace standard {
 
 		}
 
-		write_orz(best, shared, state);
+		write_orz(r, best, shared, state);
 
 		++state.stats.files;
 
@@ -1161,59 +1176,60 @@ namespace standard {
 		if (info.axis[0].seg.size() > 1 || info.axis[1].seg.size() > 1)
 			++state.stats.segmented;
 
-		if (strlen(output_file))
-			write_file(output_file, state.output);
-
 	}
-	
-	// the head of the frames stream: delta table, time grid, device model, autopilot and tablet grids; rest: what follows from the next byte.
-	// autopilot: the flag, whether autopilot parameters follow
-	inline bool read_head(std::span<const u8> data, std::vector<int>& table, u32& grid, dspace::_model_info& info, bool autopilot,
-		autopilot::_params& ap, _native_grid (&grid_of)[2], bool& start, bool& start_time, std::span<const u8>& rest) {
 
-		const _bit_view head{ data };
+	struct _frames_head {
+		std::vector<int> table;
+		u32 grid{};
+		dspace::_model_info info;
+		autopilot::_params ap;
+		_native_grid grid_of[2]{};
+		bool std_default_pos{}, std_default_time{};
+		std::span<const u8> rest;
+	};
 
-		size_t bit{};
+	inline bool read_head(std::span<const u8> data, bool autopilot, _frames_head& h) {
 
-		table = frame_time::read_table(head, bit, grid);
+		_bit_view head{ data };
 
-		if (!dspace::read_info(head, bit, info) || !read_autopilot(head, bit, ap, autopilot))
+		h.table = frame_time::read_table(head, h.grid);
+
+		if (!dspace::read_info(head, h.info) || !read_autopilot(head, h.ap, autopilot))
 			return false;
 
 		for (int a{}; a < 2; ++a)
-			if (!read_grid(head, bit, grid_of[a]))
+			if (!read_grid(head, h.grid_of[a]))
 				return false;
 
-		start = bit < head.max_size() && head[bit++];
-		start_time = start && bit < head.max_size() && head[bit++];
+		h.std_default_pos = head.read_bits<1>() != 0;
+		h.std_default_time = h.std_default_pos && head.read_bits<1>() != 0;
 
-		rest = data.subspan(std::min(data.size(), (bit + 7) / 8));
+		h.rest = head.get_tail();
 
 		return true;
 	}
 
-	bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R) {
+	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R) {
 
-		frames::_side side{};
-		dspace::_model_info info{};
-		u32 grid{};
-		std::span<const u8> rest;
+		_frames_head head{};
 
-		bool start{}, start_time{};
-
-		_native_grid grid_of[2]{};
-
-		if (!read_head(stream_data[orz_tag::frames], side.table, grid, info, info_kind(header->flags) == orz_kind::osu_autopilot, side.ap, grid_of, start,
-			start_time, rest))
+		if (!read_head(data, get_e_mode(encode_info) == e_mode::osu_autopilot, head))
 			return R.empty();
 
+		const dspace::_model_info& info{ head.info };
+		const auto& grid_of{ head.grid_of };
+
+		frames::_side side{};
+
 		side.axis = info.axis;
-		side.grid = frame_time::_time_grid{ grid };
-		side.relax = kind_relax(info_kind(header->flags));
-		side.start_time = start_time;
+		side.table = std::move(head.table);
+		side.grid = frame_time::_time_grid{ head.grid };
+		side.relax = is_relax(get_e_mode(encode_info));
+		side.ap = head.ap;
+		side.std_default_time = head.std_default_time;
 
 		frames::_frame_data fd{};
-		frames::_reader reader{ rest, fd, side, R.size() };
+		frames::_reader reader{ head.rest, fd, side, R.size() };
 
 		const auto sample{ repeat::sample_of(fd.repeated) };
 
@@ -1223,14 +1239,14 @@ namespace standard {
 				for (auto& k : fd.K[a])
 					k = grid_value(grid_of[a], k);
 
-		const bool exact_text{ (header->flags & ORZ_ENCODE_INFO::text_shortest) != 0 };
+		const bool exact_text{ (encode_info & ORZ_ENCODE_INFO::text_shortest) != 0 };
 
 		std::vector<float> out;
 
 		for (int a{}; a < 2; ++a) {
 
 			size_t n{};
-			
+
 			const auto escape_value = [&](float pred) {
 
 				frames::_escape v{ 0.f, pred };
@@ -1253,11 +1269,11 @@ namespace standard {
 		for (size_t i{}; i < R.size(); ++i) {
 
 			R[i].delta = fd.delta[i];
-			R[i].keys = fd.keys[i] ^ ((fd.keys[i] >> 2) & 3);
+			R[i].keys = fold_keys(fd.keys[i]);
 
 		}
 
-		for (size_t i{}; start && i < std::min<size_t>(2, R.size()); ++i) {
+		for (size_t i{}; head.std_default_pos && i < std::min<size_t>(2, R.size()); ++i) {
 
 			R[i].x = POS_DEFAULT_X;
 			R[i].y = POS_DEFAULT_Y;
@@ -1266,5 +1282,7 @@ namespace standard {
 
 		return true;
 	}
+
+}
 
 }

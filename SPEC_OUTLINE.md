@@ -49,22 +49,23 @@ only has to print the same 7 significant digits.
 ## 3. Container
 
 ```
-byte 0     magic 'r' (0x72)
+byte 0     magic 0xE6
 byte 1..   header, a bit field padded to a byte boundary
-then       the streams, in the order of §3.2; the last runs to the end of the file
+then       the containers' data, back to back, in the order the header lists them
 ```
 
 ### 3.1 Header (in order)
 
 | Field | Coding | Notes |
 |---|---|---|
-| version | `bucket(4, 8)` | 0. A reader rejects a larger version as "made by a newer version". |
-| encode info | `bucket(7)` | §3.3 |
+| version | `bucket(4, 8)` | 0. A reader rejects a larger version as "made by a newer version", before reading on. |
 | crc | 32 bits | §3.4 |
+| encode info | `bucket(7)` | §3.3 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | see below |
 | frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; at most 2^22 |
-| `osr_parts` size | `bucket(7)`, if `has_osr_header` | in bytes, life bar included |
+| standard containers | §3.2 | |
+| custom containers | §3.2 | |
 
 `length_bucket<3,18>`:
 
@@ -72,31 +73,47 @@ then       the streams, in the order of §3.2; the last runs to the end of the f
 - code 7 escapes: 5 bits of `bitlen < 18 ? bitlen : bitlen − 7` follow;
 - then the `bitlen − 1` bits below the leading 1.
 
-The replay stream has no size field: it takes every byte after the streams before it, which must fit in the file.
+### 3.2 Containers
 
-### 3.2 Streams
+The header lists the containers, each with its size (at most 2^28 bytes). Their data follows the header in the same
+order, each exactly its size: the standard containers first, then the custom ones.
 
-The streams always come in this order, and the encode info says which are present:
+**Standard containers.** Each one is announced by a 1 bit, and a 0 bit ends the list. Then:
 
-| Stream | Present when |
-|---|---|
-| `osr_parts`: the `.osr` bytes around the replay data, and the life bar (§8, §9) | `has_osr_header` |
-| `frames`: the frames (§6, §7) | `replay_verbatim` is clear |
-| `osr_replay_data`: the original LZMA replay data (§10) | `replay_verbatim` is set |
+1. **tag**: the previous container's tag plus 1 (for the first container, 0 plus 1). If a 1 bit follows, a
+   `bucket(4)` is added on top.
+2. **size**: `bucket(16)`.
 
-So exactly one of `frames` and `osr_replay_data` is present, and it is the last stream (the replay).
+Tags are 8-bit and must rise by at least 1 from one container to the next. A tag can not stay the same, go down, or
+overflow past 255 (it does not wrap around). A reader rejects a file whose tags break this. Tag 0 never occurs.
+
+| Tag | Container | Present when |
+|---|---|---|
+| 1 | `frames`: the frames stream (§6, §7) | `replay_verbatim` is clear |
+| 2 | `osr_meta_data`: the `.osr` bytes around the replay data, and the life bar (§8, §9) | `has_osr_header` |
+| 3 | `osr_verbatim`: the original LZMA replay data (§10) | `replay_verbatim` is set |
+
+So exactly one of `frames` and `osr_verbatim` is present. An empty container is not written. A reader ignores
+standard tags it does not know.
+
+**Custom containers** carry data outside the format, such as a tool's own metadata. Decoding the replay ignores them.
+
+- 1 bit: whether there are any. If set, `bucket(4)` gives their count minus 1.
+- Per custom container:
+  1. **name**: its length in 5 bits (at most 31 characters), then each character in 7 bits (ASCII);
+  2. **size**: `bucket(16)`.
 
 ### 3.3 Encode info
 
 | Bits | Name | Meaning |
 |---|---|---|
-| 0–2 | kind | what the replay is, and so the form of its frames stream (below) |
+| 0–2 | mode | what the replay is, and so the form of its frames stream (below) |
 | 3 | `has_osr_header` | the input was a full `.osr`, so the decoder rebuilds one |
 | 4 | `trailing_comma` | the replay text ended with `,` |
 | 5 | `replay_verbatim` | the replay data is stored as-is (§10) |
 | 6 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
 
-| Kind | Replay | Frames stream |
+| Mode | Replay | Frames stream |
 |---|---|---|
 | 0 | osu! | osu!standard form (§6) |
 | 1 | osu!taiko | osu!taiko form (§7) |
@@ -107,12 +124,13 @@ So exactly one of `frames` and `osr_replay_data` is present, and it is the last 
 | 6 | osu!catch relax | osu!standard form, relax (the cursor drives the catcher) |
 | 7 | osu! autopilot | osu!standard form with the autopilot path model (§6.6) |
 
-Kinds 0 to 3 are the `.osr`'s game mode numbers.
+Modes 0 to 3 are the `.osr`'s game mode numbers.
 
 Relax does not exist in osu!mania, and autopilot only in osu!. Relax selects the relax prior sets (§5.6) and is only
 needed to decode the osu!standard form. The game mode is the `.osr`'s, or the one given with bare replay data, with
-osu! when none is given; it is not needed to decode. osu!mania replays that do not fit the column form are stored as
-kind 0, and so are autopilot replays the path model does not fit (the encoder decides from the frames).
+osu! when none is given; it is not needed to decode. osu!mania replays that do not fit the column form (keys set, x not
+whole held columns) are stored verbatim (`replay_verbatim`). Autopilot replays the path model does not fit are stored as
+mode 0 (the encoder decides from the frames).
 
 ### 3.4 CRC
 
@@ -121,7 +139,7 @@ CRC-32C (Castagnoli polynomial), starting from `0xFFFFFFFF` with no final XOR, o
 1. **Every decoded frame** as 16 little-endian bytes: `i32 delta`, `f32 x`, `f32 y`, `u32 keys`. This includes the
    closing seed frame `{−12345, +0, +0, seed}` when there is one. These are the frames as the decoder rebuilds them
    (§1), not the parsed input.
-2. **`osr_parts` and `osr_replay_data`, in that order**, each when present and not empty: its `u32` size, then its
+2. **`osr_meta_data` and `osr_verbatim`, in that order**, each when present and not empty: its `u32` size, then its
    bytes.
 3. **The encode info**, as stored (§3.3), as a `u32`.
 
@@ -308,12 +326,12 @@ The first four serve every mode. The next eight are osu!standard only, and the l
 ### 5.6 Priors
 
 Before coding, the models start from a built-in prior: a starting state trained on real replays. The prior is chosen
-by the kind of replay:
+by the replay's mode:
 
 | Set | Replays |
 |---|---|
 | 0, 1, 2 | osu!standard whose device model (§6.3) is rational, mouse or absolute |
-| 3, 4, 5 | the same for relax replays (kinds 4 and 6) |
+| 3, 4, 5 | the same for relax replays (modes 4 and 6) |
 | 6 | relax without a device model |
 | 7 | osu!standard without a device model (mostly autopilot) |
 | 8, 9, 10 | osu!taiko, osu!catch, osu!mania |
@@ -349,7 +367,7 @@ change.
      permutation of the 96 symbols, are normative data.
 2. **Time grid**: 3 bits choosing a period from `{50/3, 25, 25/2, 100/3, 20, none}` ms. It is only used as context.
 3. **Device model** for x, then for y: §6.3.
-4. **Autopilot**, for kind 7 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
+4. **Autopilot**, for mode 7 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
 5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step and a 64-bit offset in 32.32 fixed point, with the sum
    wrapping as a signed 64-bit integer:
 
@@ -358,9 +376,9 @@ change.
    ```
 
    It maps the coded integers of a single rational or absolute segment onto the device's own lattice.
-6. **start**: 1 bit; if set, **start_time**: 1 bit.
-   - `start`: frames 0 and 1 are at (256, −500), the position every replay starts at.
-   - `start_time`: their deltas are also 0 and −1, and are not coded.
+6. **std_default_pos**: 1 bit; if set, **std_default_time**: 1 bit.
+   - `std_default_pos`: frames 0 and 1 are at (256, −500), the position every replay starts at.
+   - `std_default_time`: their deltas are also 0 and −1, and are not coded.
 
 The coded body starts at the next byte.
 
@@ -375,10 +393,10 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
 2. **Delta**: the index into the delta table.
    - Unary decisions "is it entry `at`?" for `at` = 0, 1, …, up to 64 entries; the last listed entry is implied.
    - An index of 64 or more continues as `gamma(index − 63)`.
-   - Nothing is coded for frames 0 and 1 when `start_time` is set.
+   - Nothing is coded for frames 0 and 1 when `std_default_time` is set.
 3. **Repeat** (frames after the first): whether the position is bit-identical to the previous frame's.
 4. **For a new position** (not a repeat):
-   - an autopilot event, for kind 7 (§6.6);
+   - an autopilot event, for mode 7 (§6.6);
    - then **each axis**, in the order the move predictor expects to move more first:
      1. the move residual: the coded integer's step minus the predicted step;
      2. an escape decision, if the axis has escapes;
@@ -394,6 +412,11 @@ The contexts of each decision are part of the format but are not restated here. 
 Each axis carries a list of segments (a `bucket(4, 8, 16)` count). Each segment after the first starts with its
 distance from the previous one, counted in new positions. A segment carries one axis model. When both axes have one
 segment, y may instead be marked "same as x".
+
+Device models are optional. This outline defines how a decoder turns a stored model into values, not how an encoder
+picks one: finding the device a replay was recorded with is left to the encoder (§12). An encoder that does no device
+detection can give each axis a single text segment, which fits any replay. The file is then still valid and decodes to
+the same replay, only larger. Values a model does not reproduce are escaped (§6.4).
 
 The models turn the coded integer `K` of each new position into a float:
 
@@ -451,7 +474,7 @@ On an axis with a native grid, a value may instead be one of the two lattice val
 
 1. Each new position takes the next decoded value of each axis; repeated frames take the previous frame's position.
 2. Deltas come from the delta table and keys are unfolded.
-3. With `start`, frames 0 and 1 are set to (256, −500).
+3. With `std_default_pos`, frames 0 and 1 are set to (256, −500).
 
 ### 6.6 Autopilot
 
@@ -497,7 +520,7 @@ mapped field → screen → field with the stored screen size and printed as 7-d
 2. whether in the same direction as last time;
 3. the residual against a prediction of walking or dashing for the frame's delta, scaled by any hyperdash.
 
-## 8. The `osr_parts` stream
+## 8. The `osr_meta_data` container
 
 It holds the `.osr` bytes outside the replay data:
 
@@ -506,7 +529,7 @@ It holds the `.osr` bytes outside the replay data:
 - **the timestamp**: 8 bytes;
 - **the tail**: what follows the replay data, usually the online score id.
 
-The stream is the header, timestamp and tail in one of two forms, then the life bar to the end of the stream. Both
+The container is the header, timestamp and tail in one of two forms, then the life bar to the end of the container. Both
 forms end where their decoder stops reading (the fields form at the next byte boundary), so whatever bytes follow are
 the life bar. When none follow, the `.osr` had no life bar.
 
@@ -529,7 +552,7 @@ Strings are rebuilt with the `0x0b` marker and a minimal ULEB128 length.
 
 ## 9. The life bar
 
-The life bar follows the parts in the `osr_parts` stream (§8). Its first byte picks the form:
+The life bar follows the parts in the `osr_meta_data` container (§8). Its first byte picks the form:
 
 - **0**: the life bar text as stored.
 - **1, compact**: points of `time|value`, range coded.
@@ -542,8 +565,8 @@ frequency models and their priors are normative for this form.
 
 ## 10. Verbatim replay data
 
-When the replay text cannot be stored as frames (§4), the original LZMA bytes are stored as the `osr_replay_data`
-stream, with no frames stream and a frame count of 0.
+When the replay text cannot be stored as frames (§4), the original LZMA bytes are stored as the `osr_verbatim`
+container, with no `frames` container and a frame count of 0.
 
 ## 11. Rebuilding the `.osr`
 
@@ -568,7 +591,8 @@ different choices with the same settings.
 
 A decoder only reads what the encoder chose. The format leaves these choices free:
 
-- the device model of each axis, its segments, the native grids and whether autopilot is on (kind 7);
+- the device model of each axis, if any (text fits every replay, §6.3), its segments, the native grids and whether
+  autopilot is on (mode 7);
 - the order of the delta table;
 - whether to use the compact forms of §8 and §9.
 

@@ -13,6 +13,11 @@
 #include <string_view>
 #include <vector>
 
+#include "orz_shared.h"
+#include "rc.h"
+
+namespace orz {
+
 // unsigned leb128, as .osr strings give their length
 inline void add_uleb128(std::vector<u8>& output, u32 v) {
 
@@ -340,16 +345,6 @@ namespace osr_parts {
 
 	}
 
-	FORCEINLINE u64 get_bits(const _bit_view s, size_t& at, int n) {
-
-		u64 v{};
-
-		for (int i{}; i < n; ++i)
-			v |= u64(s[at++]) << i;
-
-		return v;
-	}
-
 	constexpr i64 VERSION_BASE{ 20200000 }; // versions are yyyymmdd
 	constexpr i64 UNIX_TICKS{ 621355968000000000 }, TICKS_PER_SECOND{ 10000000 };
 
@@ -360,26 +355,26 @@ namespace osr_parts {
 
 	}
 
-	FORCEINLINE void get_bytes(const _bit_view s, size_t& at, std::span<u8> v) {
+	FORCEINLINE void get_bytes(_bit_view& s, std::span<u8> v) {
 
 		for (auto& c : v)
-			c = (u8)get_bits(s, at, 8);
+			c = (u8)s.read_bits<8>();
 
 	}
 
 	// a length, then the bytes
 	inline void write_bytes(bit_stream& s, std::span<const u8> v) {
 
-		write_bucket((u32)v.size(), s, 4, 8);
+		s.write_bucket((u32)v.size(), 4, 8);
 		put_bytes(s, v);
 
 	}
 
-	inline std::vector<u8> read_bytes(const _bit_view s, size_t& at) {
+	inline std::vector<u8> read_bytes(_bit_view& s) {
 
-		std::vector<u8> v(std::min<size_t>(read_bucket(s, at, 4, 8), s.max_size() / 8));
+		std::vector<u8> v(std::min<size_t>(s.read_bucket<4, 8>(), s.max_size() / 8));
 
-		get_bytes(s, at, v);
+		get_bytes(s, v);
 
 		return v;
 	}
@@ -406,7 +401,7 @@ namespace osr_parts {
 		bit_stream s{};
 
 		put_bits(s, f.mode, 2);
-		write_bucket((u32)rc::zz(f.version - VERSION_BASE), s, 18);
+		s.write_bucket((u32)rc::zz(f.version - VERSION_BASE), 18);
 		put_bits(s, f.has_name, 1);
 
 		if (f.has_name)
@@ -426,15 +421,15 @@ namespace osr_parts {
 		else
 			put_bytes(s, f.replay);
 
-		write_bucket(f.count[0], s, 9, 11);
+		s.write_bucket(f.count[0], 9, 11);
 
 		for (int k{ 1 }; k < 6; ++k)
-			write_bucket(f.count[k], s, 5, 8);
+			s.write_bucket(f.count[k], 5, 8);
 
 		put_bits(s, (u32)f.score, 32);
-		write_bucket(f.combo, s, 9, 11);
+		s.write_bucket(f.combo, 9, 11);
 		put_bits(s, f.perfect, 1);
-		write_bucket(f.mods, s, 16);
+		s.write_bucket(f.mods, 16);
 
 		put_bits(s, (u64)seconds, 32);
 		put_bits(s, sub != 0, 1);
@@ -460,42 +455,40 @@ namespace osr_parts {
 		return out;
 	}
 
-	inline _parts decode_fields(const _bit_view s, size_t& used) {
+	inline _parts decode_fields(_bit_view s, size_t& used) {
 
 		_parts p{};
 		_fields f{};
 
-		size_t at{};
+		f.mode = (u8)s.read_bits(2);
+		f.version = (i32)(VERSION_BASE + rc::unzz(s.read_bucket<18>()));
+		f.has_name = s.read_bits(1) != 0;
 
-		f.mode = (u8)get_bits(s, at, 2);
-		f.version = (i32)(VERSION_BASE + rc::unzz(read_bucket(s, at, 18)));
-		f.has_name = get_bits(s, at, 1) != 0;
-
-		const auto name{ f.has_name ? read_bytes(s, at) : std::vector<u8>{} };
+		const auto name{ f.has_name ? read_bytes(s) : std::vector<u8>{} };
 
 		f.name = { (const char*)name.data(), name.size() };
 
-		get_bytes(s, at, f.beatmap);
+		get_bytes(s, f.beatmap);
 
 		const std::string beatmap_md5{ to_hex(f.beatmap) };
 
 		f.beatmap_md5 = beatmap_md5;
 
-		const bool derived{ get_bits(s, at, 1) != 0 };
-		const u32 formula{ derived ? (u32)get_bits(s, at, 6) : 0u };
+		const bool derived{ s.read_bits(1) != 0 };
+		const u32 formula{ derived ? (u32)s.read_bits(6) : 0u };
 
 		if (!derived)
-			get_bytes(s, at, f.replay);
+			get_bytes(s, f.replay);
 
-		f.count[0] = (u16)read_bucket(s, at, 9, 11);
+		f.count[0] = (u16)s.read_bucket<9, 11>();
 
 		for (int k{ 1 }; k < 6; ++k)
-			f.count[k] = (u16)read_bucket(s, at, 5, 8);
+			f.count[k] = (u16)s.read_bucket<5, 8>();
 
-		f.score = (i32)get_bits(s, at, 32);
-		f.combo = (u16)read_bucket(s, at, 9, 11);
-		f.perfect = (u8)get_bits(s, at, 1);
-		f.mods = read_bucket(s, at, 16);
+		f.score = (i32)s.read_bits(32);
+		f.combo = (u16)s.read_bucket<9, 11>();
+		f.perfect = (u8)s.read_bits(1);
+		f.mods = s.read_bucket<16>();
 
 		if (derived)
 			f.replay = formula_md5(f, std::min(formula, FORMULAS - 1));
@@ -516,21 +509,21 @@ namespace osr_parts {
 		put(h, f.perfect);
 		put(h, f.mods);
 
-		const i64 seconds{ (i64)get_bits(s, at, 32) };
-		const i64 sub{ get_bits(s, at, 1) ? (i64)get_bits(s, at, 24) : 0 };
+		const i64 seconds{ (i64)s.read_bits(32) };
+		const i64 sub{ s.read_bits(1) ? (i64)s.read_bits(24) : 0 };
 
 		put(p.after_life, UNIX_TICKS + seconds * TICKS_PER_SECOND + sub);
 
-		const u32 id_kind{ (u32)get_bits(s, at, 2) };
+		const u32 id_kind{ (u32)s.read_bits(2) };
 
 		if (id_kind)
-			put(p.tail, get_bits(s, at, ID_BITS[id_kind]));
+			put(p.tail, s.read_bits(ID_BITS[id_kind]));
 
-		const auto rest{ read_bytes(s, at) };
+		const auto rest{ read_bytes(s) };
 
 		p.tail.insert(p.tail.end(), rest.begin(), rest.end());
 
-		used = (at + 7) / 8;
+		used = (s.in + 7) / 8;
 
 		return p;
 	}
@@ -619,5 +612,7 @@ namespace osr_parts {
 
 		return out;
 	}
+
+}
 
 }

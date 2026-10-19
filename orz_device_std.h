@@ -10,6 +10,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "orz_state.h"
+#include "device_space.h"
+
+namespace orz {
+
 namespace standard {
 
 	// least squares on the frames within a shrinking window of the lattice
@@ -405,8 +410,8 @@ namespace standard {
 
 		}
 
-		for (const int s : a.slack)
-			bits += s ? gamma((u64)std::abs(s)) + 1 : 0;
+		for (const int k : a.slack)
+			bits += k ? gamma((u64)std::abs(rc::unzz((u64)k))) + 1 : 0;
 
 		u32 prev{};
 
@@ -414,10 +419,7 @@ namespace standard {
 
 			i64 diff{};
 
-			const bool near{ exact_text ?
-				dspace::escape_ulps(a.escapes[j].second, a.escape_pred[j], diff) :
-				dspace::escape_digits(a.escapes[j].second, a.escape_pred[j], diff)
-			};
+			const bool near{ dspace::escape_diff(a.escapes[j].second, a.escape_pred[j], exact_text, diff) };
 
 			bits += gamma(a.escapes[j].first - prev) + (near ? gamma(rc::zz(diff)) : 33);
 			prev = a.escapes[j].first;
@@ -432,9 +434,9 @@ namespace standard {
 	static size_t device_cost(const orz_state& state, const dspace::axis_params& p, const dspace::axis_streams& a, std::span<const int> dt,
 		int axis) {
 
-		const size_t bits{ axis_cost(a, dt, axis, state.exact_text) };
+		const size_t bits{ axis_cost(a, dt, axis, state.exact_text()) };
 
-		if (state.catcher)
+		if (game_mode(state.mode()) == 2)
 			return bits;
 
 		return p.mode == dspace::axis_mode::absolute ? bits * 15 / 16 : p.mode == dspace::axis_mode::mouse ? bits * 17 / 16 : bits;
@@ -456,15 +458,15 @@ namespace standard {
 
 		n = std::min(n, vals.size());
 
-		const auto o{ dspace::encode_axis(p, vals.first(n), dt.first(n), state.exact_text, bounds.first(n), max_escapes) };
+		const auto o{ dspace::encode_axis(p, vals.first(n), dt.first(n), state.exact_text(), bounds.first(n), max_escapes) };
 
 		if (o.escapes.size() > max_escapes)
 			return { INFINITY, o.escapes.size() };
 
 		double score{ 40.0 * o.escapes.size() };
 
-		for (const int j : o.slack)
-			score += j == 0 ? 0.3 : 2.0 + 2.0 * std::log2(1.0 + std::abs(j));
+		for (const int k : o.slack)
+			score += k == 0 ? 0.3 : 2.0 + 2.0 * std::log2(1.0 + std::abs(rc::unzz((u64)k)));
 
 		return { score, o.escapes.size() };
 	}
@@ -481,7 +483,7 @@ namespace standard {
 			if (!std::isfinite(a) || a == 0.f)
 				continue;
 
-			if (!state.exact_text) {
+			if (!state.exact_text()) {
 
 				const double spacing{ (double)dspace::next_up(a) - a };
 
@@ -730,7 +732,7 @@ namespace standard {
 		std::vector<dotnet::text_bounds> bounds(vals.size());
 
 		for (size_t i{}; i < vals.size(); ++i)
-			bounds[i] = dotnet::text_bounds{ vals[i], state.exact_text };
+			bounds[i] = dotnet::text_bounds{ vals[i], state.exact_text() };
 
 		const std::span<const float> p{ vals.subspan(2) };
 
@@ -1391,7 +1393,7 @@ namespace standard {
 		dspace::axis_params chosen{ none };
 		dspace::axis_streams best_streams;
 
-		size_t chosen_cost{ SIZE_MAX };
+		size_t chosen_cost{ std::numeric_limits<size_t>::max() };
 
 		std::vector<dspace::axis_params> finals;
 
@@ -1447,7 +1449,7 @@ namespace standard {
 		const auto consider = [&](const dspace::axis_params& q) {
 
 			// a model that escapes most frames is worse than text ordinals (the encode stops once it has)
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text, bounds, vals.size() / 2) };
+			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), bounds, vals.size() / 2) };
 
 			if (st.escapes.size() * 2 > vals.size())
 				return;
@@ -1658,7 +1660,7 @@ namespace standard {
 
 				tv[a].push_back(vals[a][i]);
 				tdt[a].push_back(dt[i]);
-				tb[a].push_back(dotnet::text_bounds{ vals[a][i], state.exact_text });
+				tb[a].push_back(dotnet::text_bounds{ vals[a][i], state.exact_text() });
 
 			}
 
@@ -1696,7 +1698,7 @@ namespace standard {
 				size_t esc{};
 
 				for (int a{}; a < 2; ++a)
-					esc += dspace::encode_axis(make(W, H, si, a), tv[a], tdt[a], state.exact_text, tb[a]).escapes.size();
+					esc += dspace::encode_axis(make(W, H, si, a), tv[a], tdt[a], state.exact_text(), tb[a]).escapes.size();
 
 				scored.push_back({ esc, { W, H, si } });
 
@@ -1722,7 +1724,7 @@ namespace standard {
 			for (int a{}; a < 2; ++a) {
 
 				q[a] = make(W, H, si, a);
-				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text, {}, vals[a].size() / 2);
+				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text(), {}, vals[a].size() / 2);
 
 				if (st[a].escapes.size() * 2 > vals[a].size())
 					cost = SIZE_MAX;
@@ -1766,7 +1768,7 @@ namespace standard {
 
 		const size_t n{ vals.size() };
 		dspace::axis_model m;
-		size_t misses_in_row{};
+		size_t misses_in_row{}, other_at{};
 
 		for (size_t from{}; from < n; ) {
 
@@ -1777,7 +1779,7 @@ namespace standard {
 
 			const bool reuse{
 				!m.seg.empty() && m.seg.back().p.mode != dspace::axis_mode::none &&
-				escapes_of(m.seg.back().p, vals, dt, from, to, state.exact_text) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
+				escapes_of(m.seg.back().p, vals, dt, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
 			};
 
 			dspace::axis_streams unused;
@@ -1785,7 +1787,7 @@ namespace standard {
 			const dspace::axis_params p{ reuse ?
 				m.seg.back().p :
 				detect_axis_model(state, vals.subspan(from, to - from), dt.subspan(from, to - from), axis,
-					other ? &other->at(from) : nullptr, unused, virtual_desktops)
+					other ? &other->at(from, other_at) : nullptr, unused, virtual_desktops)
 			};
 
 			// a new device: the chunks before it take it too while it codes them at least as small
@@ -1793,7 +1795,7 @@ namespace standard {
 
 				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
 
-					return device_cost(state, q, dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text),
+					return device_cost(state, q, dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text()),
 						dt.subspan(a, b - a), axis);
 				};
 
@@ -1845,7 +1847,7 @@ namespace standard {
 					if (nb >= m.seg.size() || m.seg[nb].p.mode == dspace::axis_mode::none)
 						continue;
 
-					if (escapes_of(m.seg[nb].p, vals, dt, from, to, state.exact_text) * 2 < to - from) {
+					if (escapes_of(m.seg[nb].p, vals, dt, from, to, state.exact_text()) * 2 < to - from) {
 
 						m.seg[k].p = m.seg[nb].p;
 
@@ -1890,10 +1892,10 @@ namespace standard {
 				const auto v{ vals.subspan(w0, w1 - w0) };
 				const auto d{ dt.subspan(w0, w1 - w0) };
 
-				for (const auto& [f, x] : dspace::encode_axis(A, v, d, state.exact_text).escapes)
+				for (const auto& [f, x] : dspace::encode_axis(A, v, d, state.exact_text()).escapes)
 					missA[f] = 1;
 
-				for (const auto& [f, x] : dspace::encode_axis(B, v, d, state.exact_text).escapes)
+				for (const auto& [f, x] : dspace::encode_axis(B, v, d, state.exact_text()).escapes)
 					missB[f] = 1;
 
 			}
@@ -1948,5 +1950,7 @@ namespace standard {
 
 		return m;
 	}
+
+}
 
 }

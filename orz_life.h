@@ -1,11 +1,16 @@
 #pragma once
 
-#include "life_prior.h"
-
 #include <charconv>
 #include <span>
 #include <string>
 #include <vector>
+
+#include "orz_shared.h"
+#include "rc.h"
+#include "orz_dotnet.h"
+#include "life_prior.h"
+
+namespace orz {
 
 namespace life {
 
@@ -274,5 +279,7 @@ namespace life {
 
 		return to_text(decode_compact(std::span{ data }.subspan(1), frame_times(frames)));
 	}
+
+}
 
 }

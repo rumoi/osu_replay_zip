@@ -3,6 +3,10 @@
 #include <string>
 #include <vector>
 
+#include "orz_shared.h"
+
+namespace orz {
+
 struct _seed_frame {
 	bool present;
 	u32 value;
@@ -13,27 +17,23 @@ struct _life_bar {
 	std::string text;
 };
 
-struct _osr_bytes {
-	bool present;
-	std::vector<u8> bytes;
-};
-
 struct orz_state {
 
 	u32 options{}; // ORZ_OPTION
-	bool exact_text{}; // shortest round-trip strings
-	bool catcher{}; // relax osu!catch: the cursor drives the catcher
+
+	_orz_file file{};
 
 	std::vector<u8> osr_header, after_life, tail;
 	_life_bar life{};
 	_seed_frame seed{};
-	_osr_bytes replay_data{};
+
+	std::span<const u8> lzma{};
 
 	std::vector<u8> output;
-	size_t input_size{};
 	std::vector<_osr_frame> input;
 	std::string text;
 
+	// not reset by reset_volatile
 	struct {
 		bool disable_device{};
 	} debug;
@@ -42,4 +42,48 @@ struct orz_state {
 		size_t files{}, axis[5]{}, escapes{}, frames{}, segmented{};
 	} stats;
 
+	e_mode mode() const {
+
+		return get_e_mode(file.encode_info);
+	}
+
+	// shortest round-trip strings
+	bool exact_text() const {
+
+		return (file.encode_info & ORZ_ENCODE_INFO::text_shortest) != 0;
+	}
+	
+	void reset_volatile() {
+
+		// options does not get reset
+
+		file.version = 0;
+		file.CRC = 0;
+		file.encode_info = 0;
+		file.seeded = 0;
+		file.seed = 0;
+		file.frame_count = 0;
+		file.container.clear();
+		file.container_custom.clear();
+
+		osr_header.clear();
+		after_life.clear();
+		tail.clear();
+
+		life.present = false;
+		life.text.clear();
+
+		seed = {};
+		lzma = {};
+
+		output.clear();
+		input.clear();
+		text.clear();
+
+		stats = {};
+
+	}
+
 };
+
+}

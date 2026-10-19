@@ -1,7 +1,5 @@
 #pragma once
 
-#include "orz_decimal.h"
-
 #include <algorithm>
 #include <bit>
 #include <charconv>
@@ -10,6 +8,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include "orz_decimal.h"
+
+namespace orz {
 
 namespace dotnet {
 
@@ -471,5 +473,7 @@ namespace dotnet {
 
 		return neg ? -v : v;
 	}
+
+}
 
 }

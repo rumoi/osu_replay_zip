@@ -1,81 +1,61 @@
 #pragma once
 
 #include "orz_shared.h"
+#include "orz_life.h"
+#include "orz_parts.h"
+#include "orz_text.h"
 
-struct _stream_map {
+namespace orz {
 
-	struct _elem {
-		u8 tag;
-		std::vector<u8> data;
-	};
+namespace standard { bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R); }
+namespace modes { bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R); }
 
-	std::vector<_elem> data;
+// the data of tag, empty when the file has none
+static std::span<const u8> container_data(const _orz_file& file, orz_tag tag) {
 
-	const std::vector<u8>& operator[](orz_tag tag) const {
+	for (const auto& c : file.container)
+		if (c.tag == tag)
+			return c.data;
 
-		for (const auto& v : data) {
-
-			if (v.tag != u8(tag))
-				continue;
-
-			return v.data;
-		}
-
-		static const std::vector<u8> empty{};
-
-		return empty;
-	}
-
-};
-
-namespace standard { bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
-namespace modes { bool decode(const _orz_header* header, const _stream_map& stream_data, std::vector<_osr_frame>& R); }
+	return {};
+}
 
 struct _decoded_orz {
-	_stream_map streams;
+	_orz_file file;
 	std::vector<_osr_frame> frames;
-	u32 flags{};
 };
 
-static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _decoded_orz& out) {
+static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _decoded_orz& out) {
 
-	const auto container{ read_container(raw_bytes) };
+	_orz_file file{};
 
-	if (!container.valid)
+	if (!file.decode(raw_bytes) || file.frame_count > ORZ_MAX_FRAMES)
 		return false;
 
-	const _orz_header* const header{ &container.header };
+	const u32 info{ file.encode_info };
 
-	_stream_map stream_data{};
+	const e_mode mode{ get_e_mode(info) };
 
-	stream_data.data.resize(container.streams.size());
+	const bool verbatim{ (info & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
 
-	for (size_t i{}; i < container.streams.size(); ++i) {
+	std::vector<_osr_frame> R(file.frame_count);
 
-		const auto& s{ container.streams[i] };
-		auto& o{ stream_data.data[i] };
-		const u8* const data{ raw_bytes.data() + s.offset };
+	if (!verbatim) {
 
-		o.tag = s.tag;
-		o.data.assign(data, data + s.size);
+		const auto frames_data{ container_data(file, orz_tag::frames) };
+
+		if (!(uses_modes_coder(mode) ? modes::decode(info, frames_data, R) : standard::decode(info, frames_data, R)))
+			return false;
 
 	}
 
-	std::vector<_osr_frame> R(header->frame_count);
-
-	const bool other_mode{ kind_other_frames(info_kind(header->flags)) };
-	const bool verbatim{ (header->flags & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
-
-	if (!verbatim && !(other_mode ? modes::decode(header, stream_data, R) : standard::decode(header, stream_data, R)))
-		return false;
-
 	// readd the closing seed frame
-	if (header->seeded)
-		R.push_back({ -12345, 0.f, 0.f, header->seed });
+	if (file.seeded)
+		R.push_back({ -12345, 0.f, 0.f, file.seed });
 
 	if (verbatim) {
 
-		const auto& data{ stream_data[orz_tag::osr_replay_data] };
+		const auto data{ container_data(file, orz_tag::osr_verbatim) };
 
 		std::string text;
 
@@ -91,23 +71,23 @@ static bool decode_frames(const std::vector<u8>& raw_bytes, const u32 options, _
 		u32 crc{ crc32c(ORZ_CRC_SEED, R.data(), R.size() * sizeof(_osr_frame)) };
 
 		for (const orz_tag tag : CRC_PART_TAGS)
-			if (const auto& part{ stream_data[tag] }; part.size())
+			if (const auto part{ container_data(file, tag) }; part.size())
 				crc = crc32c_part(crc, part.data(), part.size());
 
-		crc = crc32c(crc, &header->flags, sizeof(header->flags));
+		crc = crc32c(crc, &file.encode_info, sizeof(file.encode_info));
 
-		if (crc != header->crc)
+		if (crc != file.CRC)
 			return false;
 
 	}
 
-	out = { std::move(stream_data), std::move(R), header->flags };
+	out = { std::move(file), std::move(R) };
 
 	return true;
 }
 
 // an ORZ file held in memory into frames; false for anything that is not a valid file
-bool orz_decode_frames(const std::vector<u8>& raw_bytes, _decoded_orz& out, const u32 options = 0) {
+bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u32 options = 0) {
 
 	try {
 		return decode_frames(raw_bytes, options, out);
@@ -117,11 +97,13 @@ bool orz_decode_frames(const std::vector<u8>& raw_bytes, _decoded_orz& out, cons
 
 }
 
-std::string replay_text(const std::vector<_osr_frame>& R, u32 flags, const _stream_map& stream_data) {
+std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file) {
 
-	if (flags & ORZ_ENCODE_INFO::replay_verbatim) {
+	const u32 info{ file.encode_info };
 
-		const auto& data{ stream_data[orz_tag::osr_replay_data] };
+	if (info & ORZ_ENCODE_INFO::replay_verbatim) {
+
+		const auto data{ container_data(file, orz_tag::osr_verbatim) };
 
 		std::string text;
 
@@ -130,33 +112,37 @@ std::string replay_text(const std::vector<_osr_frame>& R, u32 flags, const _stre
 		return text;
 	}
 
-	std::string text{ orz_text::frames_text(R, (flags & ORZ_ENCODE_INFO::text_shortest) != 0) };
+	std::string text{ orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest) != 0) };
 
-	if (flags & ORZ_ENCODE_INFO::trailing_comma)
+	if (info & ORZ_ENCODE_INFO::trailing_comma)
 		text += ',';
 
 	return text;
 }
 
-static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& final_file_output, const u32 options) {
+static bool decode_to_osr(std::span<const u8> raw_bytes, std::vector<u8>& final_file_output, const u32 options) {
 
 	_decoded_orz decoded;
 
 	if (!orz_decode_frames(raw_bytes, decoded, options))
 		return false;
 
-	const auto& [stream_data, R, flags] { decoded };
+	const auto& [file, R] { decoded };
 
-	const auto parts{ osr_parts::decode(stream_data[orz_tag::osr_parts]) };
+	const u32 info{ file.encode_info };
 
-	const std::vector<u8> compressed_string{ (flags & ORZ_ENCODE_INFO::replay_verbatim) ?
-		stream_data[orz_tag::osr_replay_data] :
-		compress_osr_string(replay_text(R, flags, stream_data))
+	const auto parts{ osr_parts::decode(container_data(file, orz_tag::osr_meta_data)) };
+
+	const auto verbatim{ container_data(file, orz_tag::osr_verbatim) };
+
+	const std::vector<u8> compressed_string{ (info & ORZ_ENCODE_INFO::replay_verbatim) ?
+		std::vector<u8>(verbatim.begin(), verbatim.end()) :
+		compress_osr_string(replay_text(R, file))
 	};
 
 	final_file_output.clear();
 
-	if (flags & ORZ_ENCODE_INFO::has_osr_header) {
+	if (info & ORZ_ENCODE_INFO::has_osr_header) {
 
 		// header chunk, life graph, chunk up to the replay data length
 
@@ -177,7 +163,7 @@ static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& fin
 
 		add_to_u8(final_file_output, parts.after_life);
 
-		add_to_u8(final_file_output, compressed_string.size());
+		add_to_u8(final_file_output, (u32)compressed_string.size());
 
 	}
 
@@ -189,8 +175,8 @@ static bool decode_to_osr(const std::vector<u8>& raw_bytes, std::vector<u8>& fin
 	return true;
 }
 
-// an .orz in memory: the .osr (or bare replay data) goes to out
-bool orz_to_osr(const std::vector<u8>& orz, std::vector<u8>& out, const u32 options = 0) {
+// an .orz into the .osr (or bare replay data) it came from
+bool orz_to_osr(std::span<const u8> orz, std::vector<u8>& out, const u32 options = 0) {
 
 	try {
 		return decode_to_osr(orz, out, options);
@@ -200,22 +186,13 @@ bool orz_to_osr(const std::vector<u8>& orz, std::vector<u8>& out, const u32 opti
 
 }
 
-bool orz_to_osr(const char* input_file, const char* output_file, const u32 options = 0) {
-
-	try {
-		std::vector<u8> out;
-		return decode_to_osr(read_file(input_file), out, options) && write_file(output_file, out);
-	} catch (const std::exception&) {
-		return false;
-	}
-
-}
-
-bool orz_round_trip_ok(const std::vector<u8>& orz, const std::string& want) {
+bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want) {
 
 	_decoded_orz d;
 
-	return orz_decode_frames(orz, d) && replay_text(d.frames, d.flags, d.streams) == want;
+	return orz_decode_frames(orz, d) && replay_text(d.frames, d.file) == want;
+}
+
 }
 
 #include "orz_time.h"

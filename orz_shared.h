@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+namespace orz {
+
 #if defined(_M_FP_FAST) || defined(_M_FP_CONTRACT) || defined(__FAST_MATH__)
 #error "breaks without strict IEEE float maths (/fp:precise)"
 #endif
@@ -58,15 +60,15 @@ constexpr u32 ORZ_VERSION{ 0 };
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 
-// what a replay is: the game mode, relax or autopilot (osu! only, frames coded with the autopilot path model), and so the
+// extended game mode: the game mode with the gameplay modifiers that change it completely (relax, autopilot), and so the
 // form of its frames. osu!catch relax is coded as osu!standard frames (the cursor drives the catcher), as are osu!mania
 // replays that do not fit the column form (stored as osu!). The first four are the .osr's game mode numbers.
-enum class orz_kind : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
+enum class e_mode : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
 
-// the encode info as a file stores it: the kind in the low 3 bits, then a bit each
+// the encode info as a file stores it: the e_mode in the low 3 bits, then a bit each
 enum ORZ_ENCODE_INFO : u32 {
 
-	kind_bits = 7,
+	e_mode_bits = 7,
 
 	has_osr_header = 1 << 3,
 
@@ -80,26 +82,26 @@ enum ORZ_ENCODE_INFO : u32 {
 
 constexpr u32 ORZ_ENCODE_INFO_BITS{ 7 };
 
-FORCEINLINE orz_kind info_kind(u32 info) {
-	return (orz_kind)(info & ORZ_ENCODE_INFO::kind_bits);
+FORCEINLINE e_mode get_e_mode(u32 encode_info) {
+	return (e_mode)(encode_info & ORZ_ENCODE_INFO::e_mode_bits);
 }
 
-FORCEINLINE u32 with_kind(u32 info, orz_kind k) {
-	return (info & ~u32(ORZ_ENCODE_INFO::kind_bits)) | (u32)k;
+FORCEINLINE u32 set_e_mode(u32 encode_info, e_mode m) {
+	return (encode_info & ~u32(ORZ_ENCODE_INFO::e_mode_bits)) | (u32)m;
 }
 
 // the game mode, numbered as the .osr does (osu!, taiko, catch, mania)
-FORCEINLINE u32 kind_mode(orz_kind k) {
-	return k == orz_kind::osu_autopilot ? 0 : (u32)k & 3;
+FORCEINLINE u32 game_mode(e_mode m) {
+	return m == e_mode::osu_autopilot ? 0 : (u32)m & 3;
 }
 
-FORCEINLINE bool kind_relax(orz_kind k) {
-	return k >= orz_kind::osu_relax && k <= orz_kind::fruits_relax;
+FORCEINLINE bool is_relax(e_mode m) {
+	return m >= e_mode::osu_relax && m <= e_mode::fruits_relax;
 }
 
-// frames of the other modes (orz_modes.h), else osu!standard's (orz_frames.h)
-FORCEINLINE bool kind_other_frames(orz_kind k) {
-	return k == orz_kind::taiko || k == orz_kind::fruits || k == orz_kind::mania || k == orz_kind::taiko_relax;
+// frames coded by the other modes' coder (orz_modes.h), else osu!standard's (orz_frames.h)
+FORCEINLINE bool uses_modes_coder(e_mode m) {
+	return m == e_mode::taiko || m == e_mode::fruits || m == e_mode::mania || m == e_mode::taiko_relax;
 }
 
 enum ORZ_OPTION : u32 {
@@ -108,9 +110,6 @@ enum ORZ_OPTION : u32 {
 
 	DECODE_SKIP_CRC = 1 << 2,
 
-	ENCODE_RELAX = 1 << 3,
-	ENCODE_AUTOPILOT = 1 << 4,
-
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
@@ -118,16 +117,20 @@ constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
 enum class orz_tag : u8 {
 
 	// delta table and the mode's model, then the context mixed frames: orz_frames.h (osu!standard), orz_modes.h (other modes)
-	frames = 0,
+	frames = 1,
 
-	osr_parts, // the .osr bytes around the replay data: the header, the life bar, what follows it, what follows the replay data (orz_parts.h)
-	osr_replay_data,
+	osr_meta_data, // the .osr bytes around the replay data: the header, the life bar, what follows it, what follows the replay data (orz_parts.h)
+	osr_verbatim,
 
 };
+
+} // namespace orz
 
 // replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
 #include "LzmaDec.h"
 #include "osu_lzma.h"
+
+namespace orz {
 
 struct _lzma_block_cache {
 
@@ -234,38 +237,34 @@ public:
 
 #endif
 
-template<typename T>
-bool write_file(const char* file_name, const T& data) {
+void add_to_u8(std::vector<u8>& output, u32 input) {
 
-	std::ofstream file(file_name, std::ios::binary);
+	const auto i{ output.size() };
 
-	if (!file.is_open())
-		return false;
+	output.resize(i + 4);
 
-	file.write((const char*)data.data(), data.size());
-
-	return true;
+	memcpy(output.data() + i, &input, 4);
 }
 
-std::vector<u8> read_file(const char* file_name) {
+void add_to_u8(std::vector<u8>& output, const void* src, size_t size) {
 
-	std::ifstream file(file_name, std::ios::binary | std::ios::ate | std::ios::in);
+	const auto i{ output.size() };
 
-	if (!file.is_open()) [[unlikely]]
-		return {};
+	output.resize(i + size);
 
-	const size_t file_size{ (size_t)file.tellg() };
+	memcpy(output.data() + i, src, size);
+}
 
-	std::vector<u8> ret(file_size);
+template<typename T>
+void add_to_u8(std::vector<u8>& output, const std::vector<T>& input) {
 
-	if (file_size) [[likely]] {
+	constexpr auto SIZE{ sizeof(T) };
 
-		file.seekg(0, std::ios::beg);
-		file.read((char*)ret.data(), file_size);
+	const auto i{ output.size() };
 
-	}
+	output.resize(i + input.size() * SIZE);
 
-	return ret;
+	memcpy(output.data() + i, input.data(), input.size() * SIZE);
 }
 
 struct bit_stream {
@@ -294,7 +293,7 @@ struct bit_stream {
 		return r;
 	}
 
-	void push_back(const bool v) {
+	bool emplace_back(const bool v) {
 
 		if (in_count > 7 || data.size() == 0) {
 
@@ -305,6 +304,11 @@ struct bit_stream {
 
 		data.back() |= u8(v) << (in_count++);
 
+		return v;
+	}
+
+	void push_back(const bool v) {
+		emplace_back(v);
 	}
 
 	// bits past the end read as 0, so a short or damaged stream can never read outside data
@@ -322,14 +326,120 @@ struct bit_stream {
 
 	}
 
+	template<u32 OVERFLOW_BITS = 5, typename ...T >
+	void write_bucket(u32 value, const T... bits) {
+
+		bool done{};
+
+		const auto write = [&](const size_t b) {
+
+			if (b == 0 || done)
+				return;
+
+			const u32 MAX_VALUE{ (1u << b) - 1 };
+
+			if (value < MAX_VALUE) {
+
+				for (size_t i{}; i < b; ++i)
+					push_back((value >> i) & 1);
+
+				done = true;
+
+				return;
+			}
+
+			for (size_t i{}; i < b; ++i)
+				push_back(1);
+
+			value -= MAX_VALUE;
+
+		};
+
+		(write(bits), ...);
+
+		if (done)
+			return;
+
+		value += 1;
+
+		const auto in{ (size_t)31 - std::countl_zero(value) };
+
+		for (size_t i{}; i < OVERFLOW_BITS; ++i)
+			push_back((in >> i) & 1);
+
+		for (size_t i{}; i < in; ++i)
+			push_back((value >> i) & 1);
+
+	}
+
+	template<size_t BIT_WRITE>
+	void write_bits(u64 value) {
+
+		for (size_t i{}; i < BIT_WRITE; ++i)
+			push_back((value >> i) & 1ull);
+
+	}
+
+	template<size_t BIT_WRITE>
+	void small_write(u32 value) {
+
+		constexpr u32 MAX_VALUE{ (1u << BIT_WRITE) - 1 };
+
+		if (value < MAX_VALUE)
+			return write_bits<BIT_WRITE>(value);
+
+		const int in{ 31 - std::countl_zero(value) };
+
+		for (int i{}; i <= in; ++i)
+			push_back(1);
+
+		push_back(0);
+
+		for (int i{}; i < in; ++i)
+			push_back((value >> i) & 1);
+
+	}
+
+	inline void write_float(const float v) {
+		write_bits<32>(std::bit_cast<u32>(v));
+	}
+	
+	template<u32 LENGTH_BITS, u32 FROM>
+	void write_length_bucket(u32 value) {
+
+		constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
+		constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
+
+		static_assert(FROM + ESCAPE <= 33);
+
+		const u32 length{ (u32)std::bit_width(value) };
+		const u32 code{ std::min(length - FROM, ESCAPE) };
+
+		write_bits<LENGTH_BITS>(code);
+
+		if (code == ESCAPE)
+			write_bits<REST_BITS>(length < FROM ? length : length - ESCAPE);
+
+		for (u32 k{}; k + 1 < length; ++k)
+			push_back((value >> k) & 1);
+
+	}
+
+
+
 };
 
 struct _bit_view {
 
 	std::span<const u8> data;
+	size_t in{};
 
 	_bit_view(std::span<const u8> bytes) : data{ bytes } {}
 	_bit_view(const bit_stream& bits) : data{ bits.data } {}
+
+	std::span<const u8> get_tail() const {
+		return data.subspan(std::min((in + 7) / 8, data.size()));
+	}
 
 	size_t max_size() const {
 		return data.size() * 8;
@@ -342,355 +452,375 @@ struct _bit_view {
 		return bucket < data.size() && ((data[bucket] >> (i & 7)) & 1);
 	}
 
-};
+	template<size_t BIT_WRITE>
+	u64 read_bits() {
 
-// raw float, 32 bits
-inline void write_float(float v, bit_stream& o) {
-
-	const u32 b{ std::bit_cast<u32>(v) };
-
-	for (int i{}; i < 32; ++i)
-		o.push_back((b >> i) & 1);
-
-}
-
-inline float read_float(const _bit_view in, size_t& i) {
-
-	u32 b{};
-
-	for (int k{}; k < 32; ++k)
-		b |= u32(in[i++]) << k;
-
-	return float_from_bits(b);
-}
-
-template<size_t BIT_WRITE>
-void small_write(u32 value, bit_stream& output) {
-
-	if constexpr (BIT_WRITE == 1)
-		return output.push_back(value);
-
-	constexpr auto MAX_VALUE{ (1 << BIT_WRITE) - 1 };
-
-	while (value >= MAX_VALUE) {
-
+		u64 ret{};
+		
 		for (size_t i{}; i < BIT_WRITE; ++i)
-			output.push_back(1);
+			ret |= u64(operator[](in++)) << i;
 
-		const auto in{ 31 - std::countl_zero(value) };
-
-		// only the bits under the most significant bit are stored
-		for (size_t i{ BIT_WRITE - 1 }; i < in; ++i)
-			output.push_back(1);
-
-		output.push_back(0);
-
-		for (size_t i{}; i < in; ++i)
-			output.push_back((value >> i) & 1);
-
-		return;
+		return ret;
 	}
 
-	for (size_t i{}; i < BIT_WRITE; ++i)
-		output.push_back((value >> i) & 1);
+	u64 read_bits(const size_t count) {
 
-}
+		u64 ret{};
 
-template<size_t BIT_WRITE>
-u32 small_read(const _bit_view input, size_t& i) {
+		for (size_t i{}; i < count; ++i)
+			ret |= u64(operator[](in++)) << i;
 
-	if (i >= input.max_size())
-		return 0;
+		return ret;
+	}
 
-	if constexpr (BIT_WRITE == 1)
-		return input[i++];
 
-	constexpr auto MAX_VALUE{ (1 << BIT_WRITE) - 1 };
 
-	u32 value{}, c{};
+	template<u32... BITS>
+	u32 read_bucket() {
 
-	for (size_t size{ input.max_size() }; c < BIT_WRITE && (i + c) < size; ++c)
-		value |= u32(input[i + c]) << c;
+		constexpr size_t OVERFLOW_BITS{ 5 };
 
-	i += c;
-	c = 0;
+		u32 result{};
 
-	if (value != MAX_VALUE)
-		return value;
+		const auto part = [&](auto bits) {
 
-	int bit_count{ BIT_WRITE - 1 };
+			constexpr u32 B{ decltype(bits)::value };
 
-	for (size_t size{ input.max_size() }; (i + c) < size; ++c)
-		if (input[i + c] == 0)
-			break;
+			if constexpr (B == 0)
+				return false;
+			else {
 
-	bit_count += c;
+				const u32 v{ (u32)read_bits<B>() };
 
-	if (bit_count > 31)
-		bit_count = 31;
+				result += v;
 
-	i += c + 1;
-	c = 0;
-	value = 1 << bit_count;
+				return v != (1u << B) - 1;
+			}
+		};
 
-	for (size_t size{ input.max_size() }; c < bit_count && (i + c) < size; ++c)
-		value |= u32(input[i + c]) << c;
+		if ((part(std::integral_constant<u32, BITS>{}) || ...))
+			return result;
 
-	i += bit_count;
+		const u32 bit_count{ (u32)read_bits<OVERFLOW_BITS>() };
 
-	return value;
-}
+		const u32 v{ (u32)(read_bits(bit_count) | (u64(1) << bit_count)) };		
 
-template<u32 OVERFLOW_BITS = 5, typename ...T >
-void write_bucket(u32 value, bit_stream& output, const T... bits) {
+		return result + v - 1;
+	}
 
-	bool done{};
+	template<u32 LENGTH_BITS, u32 FROM>
+	u64 read_length_bucket() {
 
-	const auto write = [&](const size_t b) {
+		constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
+		constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
 
-		if (b == 0 || done)
-			return;
+		const u32 code{ (u32)read_bits<LENGTH_BITS>() };
 
-		const u32 MAX_VALUE{ (1u << b) - 1 };
+		u32 length{ code + FROM };
 
-		if (value < MAX_VALUE) {
+		if (code == ESCAPE) {
 
-			for (size_t i{}; i < b; ++i)
-				output.push_back((value >> i) & 1);
+			const u32 rest{ (u32)read_bits<REST_BITS>() };
 
-			done = true;
+			length = std::min(rest < FROM ? rest : rest + ESCAPE, 32u);
 
-			return;
 		}
 
-		for (size_t i{}; i < b; ++i)
-			output.push_back(1);
+		u64 value{ length ? 1ull << (length - 1) : 0ull };
 
-		value -= MAX_VALUE;
+		for (u32 k{}; k + 1 < length; ++k)
+			value |= u64(read_bits<1>()) << k;
 
-	};
-
-	(write(bits), ...);
-
-	if (done)
-		return;
-
-	value += 1;
-
-	const auto in{ (size_t)31 - std::countl_zero(value) };
-
-	for (size_t i{}; i < OVERFLOW_BITS; ++i)
-		output.push_back((in >> i) & 1);
-
-	for (size_t i{}; i < in; ++i)
-		output.push_back((value >> i) & 1);
-
-}
-
-template<u32 OVERFLOW_BITS = 5, typename ...T >
-u32 read_bucket(const _bit_view input, size_t& i, const T... bits) {
-
-	u32 result{};
-
-	const auto max_size{ input.max_size() };
-
-	bool done{};
-
-	const auto read = [&](const size_t b) {
-
-		if (b == 0 || done)
-			return;
-
-		u32 v{};
-
-		ON_SCOPE_EXIT(result += v; );
-
-		for (size_t z{}; z < b && i < max_size; ++z)
-			v |= u32(input[i++] != 0) << z;
-
-		if (v != (1u << b) - 1)
-			done = true;
-
-	};
-
-	(read(bits), ...);
-
-	if (done)
-		return result;
-
-	u32 bit_count{};
-
-	for (size_t z{}; z < OVERFLOW_BITS && i < max_size; ++z)
-		bit_count |= u32(input[i++] != 0) << z;
-
-	u32 v{ (u32)1 << bit_count };
-
-	for (size_t z{}; z < bit_count && i < max_size; ++z)
-		v |= u32(input[i++] != 0) << z;
-
-	return result + v - 1;
-}
-
-template<u32 LENGTH_BITS, u32 FROM>
-void write_length_bucket(u32 value, bit_stream& output) {
-
-	constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
-	constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
-
-	static_assert(FROM + ESCAPE <= 33);
-
-	const u32 length{ (u32)std::bit_width(value) };
-	const u32 code{ std::min(length - FROM, ESCAPE) };
-
-	for (u32 k{}; k < LENGTH_BITS; ++k)
-		output.push_back((code >> k) & 1);
-
-	if (code == ESCAPE) {
-
-		const u32 rest{ length < FROM ? length : length - ESCAPE };
-
-		for (u32 k{}; k < REST_BITS; ++k)
-			output.push_back((rest >> k) & 1);
-
+		return value;
 	}
 
-	for (u32 k{}; k + 1 < length; ++k)
-		output.push_back((value >> k) & 1);
+	template<size_t BIT_WRITE>
+	u32 small_read() {
 
-}
+		constexpr u32 MAX_VALUE{ (1u << BIT_WRITE) - 1 };
 
-template<u32 LENGTH_BITS, u32 FROM>
-u32 read_length_bucket(const _bit_view input, size_t& i) {
+		const u32 value{ (u32)read_bits<BIT_WRITE>() };
 
-	constexpr u32 ESCAPE{ (1u << LENGTH_BITS) - 1 };
-	constexpr u32 REST_BITS{ (u32)std::bit_width(32u - ESCAPE) };
+		if (value < MAX_VALUE)
+			return value;
 
-	const auto max_size{ input.max_size() };
+		u32 bit_count{ BIT_WRITE - 1 };
 
-	u32 code{};
+		while (read_bits<1>())
+			++bit_count;
 
-	for (u32 k{}; k < LENGTH_BITS && i < max_size; ++k)
-		code |= u32(input[i++] != 0) << k;
+		bit_count = std::min(bit_count, 31u);
 
-	u32 length{ code + FROM };
-
-	if (code == ESCAPE) {
-
-		u32 rest{};
-
-		for (u32 k{}; k < REST_BITS && i < max_size; ++k)
-			rest |= u32(input[i++] != 0) << k;
-
-		length = std::min(rest < FROM ? rest : rest + ESCAPE, 32u);
-
+		return (1u << bit_count) | (u32)read_bits(bit_count);
 	}
 
-	u32 value{ length ? 1u << (length - 1) : 0u };
+	float read_float() {
+		return float_from_bits((u32)read_bits<32>());
+	}
 
-	for (u32 k{}; k + 1 < length && i < max_size; ++k)
-		value |= u32(input[i++] != 0) << k;
 
-	return value;
-}
+};
 
-constexpr u8 ORZ_MAGIC{ 'r' };
+constexpr u8 ORZ_MAGIC{ 0xE6 };
 
 // tuned to sessions under around 4.7 hours
 constexpr u32 ORZ_SEED_LENGTH{ 18 };
 
-struct _orz_header {
-	u32 version, flags, frame_count;
-	u32 crc; // of the decoded replay
-	bool seeded;
-	u32 seed; // of the closing -12345 frame
+template<size_t str_size>
+struct small_string{
+
+	u8 data[str_size + 1];
+
+	const size_t size() const noexcept {
+		return std::min(str_size, (size_t)data[str_size]);
+	}
+
+	void set_size(size_t i) noexcept {
+
+		data[str_size] = i;
+		data[str_size] = size();
+
+	}
+
+
+	std::string_view to_str_view() const {
+
+		return std::string_view{ (const char*)data, (size_t)size() };
+	}
+
+	std::span<u8> to_span() {
+
+		return std::span<u8>{ data, (size_t)size() };
+	}
+
+	u8* begin() { return data; }
+	const u8* begin() const { return data; }
+
+	u8* end() { return data + size(); }
+	const u8* end() const { return data + size(); }
+
+
 };
 
-struct _orz_container {
 
-	struct _stream {
-		u8 tag;
-		u32 size;
-		size_t offset;
+struct _orz_file {
+
+	u32 version;
+	u32 CRC;
+	u32 encode_info;
+
+	u32 seeded;
+	u32 seed;
+
+	u32 frame_count;
+
+	struct _container {
+
+		std::vector<u8> data;
+		orz_tag tag;
+
+		auto operator<=>(const _container& o) const {
+			return tag <=> o.tag;
+		}
+
+		bool operator==(const _container& o) const {
+			return tag == o.tag;
+		}
+
 	};
 
-	bool valid{};
-	bool newer{};
-	_orz_header header{};
-	std::vector<_stream> streams;
-	size_t header_bytes{};
+	struct _container_custom {
+
+		small_string<31> name; // SPEC: name can't use extended ASCII
+		std::vector<u8> data;
+
+	};
+
+	std::vector<_container> container;
+
+	std::vector<_container_custom> container_custom;
+
+	bool decode(const std::span<const u8> bytes) {
+
+		container.clear();
+		container_custom.clear();
+
+		_bit_view bs{ bytes };
+
+		if (bs.read_bits<8>() != ORZ_MAGIC)
+			return 0;
+
+		version = bs.read_bucket<4, 8>();
+
+		if (version > ORZ_VERSION) // we are trying to read a file from the future, abort.
+			return 0;
+
+		CRC = bs.read_bits<32>();
+
+		encode_info = bs.read_bucket<7>();
+		
+		if (seeded = bs.read_bits<1>())
+			seed = bs.read_length_bucket<3, ORZ_SEED_LENGTH>();
+
+		frame_count = bs.read_bucket<16>();
+
+		{
+
+			orz_tag last_tag{};
+
+			while (bs.read_bits<1>()) {
+
+				_container& r{ container.emplace_back() };
+
+				u64 tag{ (u64)last_tag + 1 };
+
+				if (bs.read_bits<1>())
+					tag += bs.read_bucket<4>();
+
+				if (tag > 255)
+					return 0;
+
+				r.tag = orz_tag(tag);
+
+				const auto container_size{ bs.read_bucket<16>() };
+
+				if (container_size > ORZ_MAX_STREAM || container_size > bytes.size())
+					return 0;
+
+				r.data.resize(container_size);
+
+				last_tag = r.tag;
+
+			}
+
+		}
+
+		if(bs.read_bits<1>())
+			container_custom.resize(1 + bs.read_bucket<4>());
+
+		for (auto& con : container_custom) {
+
+			con.name.set_size(bs.read_bits<5>());
+
+			for (auto& c : con.name.to_span())
+				c = bs.read_bits<7>();
+
+			const auto container_size{ bs.read_bucket<16>() };
+
+			if (container_size > ORZ_MAX_STREAM || container_size > bytes.size())
+				return 0;
+
+			con.data.resize(container_size);
+
+		}
+
+		auto data_block{ bs.get_tail() };
+
+		const auto fill = [&](auto& list) {
+
+			for (auto& c : list) {
+
+				const size_t size{ c.data.size() };
+
+				if (size > data_block.size())
+					return 0;
+
+				const auto part{ data_block.first(size) };
+
+				c.data.assign(part.begin(), part.end());
+
+				data_block = data_block.subspan(size);
+
+			}
+
+			return 1;
+		};
+
+		if (fill(container) == 0 || fill(container_custom) == 0)
+			return 0;
+
+		return 1;
+	}
+
+	bool encode(std::vector<u8>& output_orz) {
+
+		output_orz.clear();
+
+		bit_stream bs{};
+
+		bs.write_bits<8>(ORZ_MAGIC);
+
+		bs.write_bucket(version, 4, 8);
+
+		bs.write_bits<32>(CRC);
+
+		bs.write_bucket(encode_info, 7);
+		
+		if (bs.emplace_back(seeded))
+			bs.write_length_bucket<3, ORZ_SEED_LENGTH>(seed);
+
+		bs.write_bucket(frame_count, 16);
+
+		std::ranges::sort(container);
+
+		orz_tag last_tag{};
+
+		for (const auto& con : container) {
+
+			const auto delta = u8((u8)con.tag - (u8)last_tag);
+
+			if (delta == 0) // silently ignoring duplicate tags
+				continue;
+
+			bs.write_bits<1>(1);
+
+			if (bs.emplace_back(delta != 1))
+				bs.write_bucket(delta - 1, 4);
+
+			bs.write_bucket(con.data.size(), 16);
+			add_to_u8(output_orz, con.data);
+
+			last_tag = con.tag;
+
+		}
+
+		bs.write_bits<1>(0);
+
+		{
+
+			const auto custom_count{ container_custom.size() };
+
+			if (bs.emplace_back(custom_count > 0))
+				bs.write_bucket(custom_count - 1, 4);
+
+			for (const auto& con : container_custom) {
+
+				bs.write_bits<5>(con.name.size());
+
+				for (const auto& c : con.name)
+					bs.write_bits<7>(c & 127);
+
+				bs.write_bucket(con.data.size(), 16);
+				add_to_u8(output_orz, con.data);
+
+			}
+
+		}
+
+		std::swap(bs.data, output_orz);
+		
+		add_to_u8(output_orz, bs.data);
+
+		return 1;
+	}
+
 };
 
-inline _orz_container read_container(const std::vector<u8>& file) {
+inline bool is_newer_orz(std::span<const u8> file) {
 
-	_orz_container c{};
+	_bit_view bs{ file };
 
-	if (file.size() < 2 || file[0] != ORZ_MAGIC)
-		return c;
-
-	// every header field at its largest still comes to under 300 bits, so 4 KB always holds the header
-	const _bit_view bs{ std::span{ file }.subspan(1, std::min<size_t>(file.size() - 1, 4096)) };
-
-	size_t i{};
-	auto& h{ c.header };
-
-	h.version = read_bucket(bs, i, 4, 8);
-
-	// we are trying to read a orz file from the future. abort.
-	if (h.version > ORZ_VERSION) {
-
-		c.newer = true;
-
-		return c;
-	}
-
-	h.flags = read_bucket(bs, i, ORZ_ENCODE_INFO_BITS);
-
-	if (h.flags >> ORZ_ENCODE_INFO_BITS)
-		return c;
-
-	for (int k{}; k < 32; ++k)
-		h.crc |= u32(small_read<1>(bs, i)) << k;
-
-	h.seeded = small_read<1>(bs, i) != 0;
-
-	if (h.seeded)
-		h.seed = read_length_bucket<3, ORZ_SEED_LENGTH>(bs, i);
-
-	h.frame_count = read_bucket(bs, i, 16);
-
-	if (h.frame_count > ORZ_MAX_FRAMES)
-		return c;
-
-	// the streams in their fixed order (_orz_construct::finish)
-	if (h.flags & ORZ_ENCODE_INFO::has_osr_header)
-		c.streams.push_back({ (u8)orz_tag::osr_parts, read_bucket(bs, i, 7) });
-
-	c.streams.push_back({ (u8)((h.flags & ORZ_ENCODE_INFO::replay_verbatim) ? orz_tag::osr_replay_data : orz_tag::frames) });
-
-	c.header_bytes = 1 + (i + 7) / 8;
-
-	if (c.header_bytes > file.size())
-		return c;
-
-	size_t offset{ c.header_bytes };
-
-	for (auto& s : c.streams) {
-
-		// the replay runs to the end of the file
-		if (&s == &c.streams.back())
-			s.size = (u32)(file.size() - offset);
-
-		if (s.size > file.size() - offset)
-			return c;
-
-		s.offset = offset;
-		offset += s.size;
-
-	}
-
-	c.valid = true;
-
-	return c;
+	return bs.read_bits<8>() == ORZ_MAGIC && bs.read_bucket<4, 8>() > ORZ_VERSION;
 }
 
 struct _osr_frame {
@@ -754,9 +884,10 @@ FORCEINLINE u32 crc32c_frame(u32 crc, const _osr_frame& f) {
 	return crc32c(crc, &f, sizeof f);
 }
 
+// the containers the CRC covers after the frames, in this order (the frames container is covered by the decoded frames)
 constexpr orz_tag CRC_PART_TAGS[]{
-	orz_tag::osr_parts,
-	orz_tag::osr_replay_data
+	orz_tag::osr_meta_data,
+	orz_tag::osr_verbatim
 };
 
 FORCEINLINE u32 crc32c_part(u32 crc, const u8* data, size_t size) {
@@ -802,8 +933,4 @@ inline std::vector<u8> compress_osr_string(std::string_view string) {
 	return osu_lzma::compress({ (const u8*)string.data(), string.size() });
 }
 
-#include "orz_state.h"
-
-#include "device_space.h"
-#include "orz_life.h"
-#include "orz_parts.h"
+}

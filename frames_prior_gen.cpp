@@ -16,11 +16,6 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "orz_shared.h"
-
-#include "orz_write.h"
-#include "orz_read.h"
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -30,6 +25,33 @@
 #include <numeric>
 #include <string>
 #include <thread>
+
+#include "orz_shared.h"
+#include "orz_write.h"
+#include "orz_read.h"
+
+using namespace orz;
+
+std::vector<u8> read_file(const char* file_name) {
+
+	std::ifstream file(file_name, std::ios::binary | std::ios::ate | std::ios::in);
+
+	if (!file.is_open()) [[unlikely]]
+		return {};
+
+	const size_t file_size{ (size_t)file.tellg() };
+
+	std::vector<u8> ret(file_size);
+
+	if (file_size) [[likely]] {
+
+		file.seekg(0, std::ios::beg);
+		file.read((char*)ret.data(), file_size);
+
+	}
+
+	return ret;
+}
 
 namespace {
 
@@ -65,18 +87,18 @@ namespace {
 	// false for a replay of another set, or one no set models (kept verbatim)
 	bool decode(const std::vector<u8>& orz, u32 set, _replay& r) {
 
-		const auto c{ read_container(orz) };
+		_orz_file file{};
 
-		if (!c.valid || (c.header.flags & ORZ_ENCODE_INFO::replay_verbatim))
+		if (!file.decode(orz) || (file.encode_info & ORZ_ENCODE_INFO::replay_verbatim))
 			return false;
 
-		const u32 flags{ c.header.flags };
+		const u32 flags{ file.encode_info };
 
-		r.frames = c.header.frame_count;
+		r.frames = file.frame_count;
 
-		if (kind_other_frames(info_kind(flags))) {
+		if (uses_modes_coder(get_e_mode(flags))) {
 
-			const modes::kind mode{ modes::mode_of(info_kind(flags)) };
+			const modes::kind mode{ modes::mode_of(get_e_mode(flags)) };
 
 			_decoded_orz d;
 
@@ -95,27 +117,28 @@ namespace {
 
 		std::span<const u8> data;
 
-		for (const auto& s : c.streams)
-			if (s.tag == (u8)orz_tag::frames)
-				data = { orz.data() + s.offset, s.size };
+		for (const auto& c : file.container)
+			if (c.tag == orz_tag::frames)
+				data = c.data;
 
-		u32 grid{};
-		standard::_native_grid grid_of[2]{};
-		bool start{}, start_time{};
-		std::span<const u8> rest;
+		standard::_frames_head head{};
 
-		if (!standard::read_head(data, r.side.table, grid, r.info, info_kind(flags) == orz_kind::osu_autopilot, r.side.ap, grid_of, start, start_time, rest))
+		if (!standard::read_head(data, get_e_mode(flags) == e_mode::osu_autopilot, head))
 			return false;
 
+		r.info = std::move(head.info);
+
 		r.side.axis = r.info.axis;
-		r.side.grid = frame_time::_time_grid{ grid };
-		r.side.relax = kind_relax(info_kind(flags));
-		r.side.start_time = start_time;
+		r.side.table = std::move(head.table);
+		r.side.grid = frame_time::_time_grid{ head.grid };
+		r.side.relax = is_relax(get_e_mode(flags));
+		r.side.ap = head.ap;
+		r.side.std_default_time = head.std_default_time;
 
 		if (frames::prior_set(r.side) != set)
 			return false;
 
-		frames::_reader reader{ rest, r.fd, r.side, r.frames };
+		frames::_reader reader{ head.rest, r.fd, r.side, r.frames };
 
 		return true;
 	}
@@ -687,9 +710,12 @@ int main(int argc, char** argv) {
 
 					orz_state state{};
 
-					osr_to_orz(paths[i].c_str(), "", flags_of(paths[i]), state);
+					const auto data{ read_file(paths[i].c_str()) };
 
-					encoded[i] = std::move(state.output);
+					if (const u32 f{ flags_of(paths[i]) }; f & ORZ_ENCODE_INFO::has_osr_header)
+						osr_to_orz(data, encoded[i], state);
+					else
+						replay_data_to_orz(data, get_e_mode(f), encoded[i], state);
 
 				}
 

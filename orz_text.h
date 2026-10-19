@@ -1,10 +1,12 @@
 #pragma once
 
-#include "orz_dotnet.h"
-
 #include <charconv>
 #include <string>
 #include <vector>
+
+#include "orz_dotnet.h"
+
+namespace orz {
 
 namespace orz_text {
 
@@ -87,5 +89,7 @@ namespace orz_text {
 
 		return out;
 	}
+
+}
 
 }
