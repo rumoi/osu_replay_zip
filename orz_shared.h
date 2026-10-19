@@ -7,6 +7,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <emmintrin.h>
 #include <nmmintrin.h>
@@ -31,6 +33,14 @@ namespace orz {
 #endif
 static_assert(FLT_EVAL_METHOD == 0, "float must not use extended precision (x87)");
 
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#elif defined(__GNUC__)
+#if !defined(ORZ_FP_CONTRACT_OFF)
+#error "GCC fuses a * b + c by default: build with -ffp-contract=off and define ORZ_FP_CONTRACT_OFF"
+#endif
+#endif
+
 #if defined(_MSC_VER)
 #define FORCEINLINE __forceinline
 #define TARGET_SSE42
@@ -47,6 +57,28 @@ FORCEINLINE float float_from_bits(u32 bits) {
 // same float bits (tells -0 from 0, NaNs apart)
 FORCEINLINE bool same_bits(float a, float b) {
 	return std::bit_cast<u32>(a) == std::bit_cast<u32>(b);
+}
+
+inline void no_FMA_check() {
+
+	static const bool res{ []() {
+
+		volatile float a{ 1.f + 0x1p-12f }, c{ 1.f };
+		volatile double x{ 1.0 + 0x1p-27 }, z{ 1.0 };
+
+		const float f{ a * a - c };
+		const double d{ x * x - z };
+
+		return (f == 0x1p-11f && d == 0x1p-26);
+	}() };
+
+	if (!res) {
+
+		fputs("orz: this build fuses a * b + c into MA, its floats differ from the format's (build with -ffp-contract=off)\n", stderr);
+		std::abort();
+
+	}
+
 }
 
 constexpr u32 ORZ_VERSION{ 0 };

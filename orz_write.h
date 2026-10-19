@@ -349,6 +349,8 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 // encoder can not handle
 bool replay_data_to_orz(std::span<const u8> lzma, e_mode mode, std::vector<u8>& out, orz_state& state) {
 
+	no_FMA_check();
+
 	try {
 
 		state.reset_volatile();
@@ -368,6 +370,8 @@ bool replay_data_to_orz(std::span<const u8> lzma, e_mode mode, std::vector<u8>& 
 
 // an .osr into an .orz; false (out empty) for anything the encoder can not handle
 bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state) {
+
+	no_FMA_check();
 
 	try {
 

@@ -88,6 +88,8 @@ static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _dec
 // an ORZ file held in memory into frames; false for anything that is not a valid file
 bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u32 options = 0) {
 
+	no_FMA_check();
+
 	try {
 		return decode_frames(raw_bytes, options, out);
 	} catch (const std::exception&) {
@@ -176,6 +178,8 @@ static bool decode_to_osr(std::span<const u8> raw_bytes, std::vector<u8>& final_
 
 // an .orz into the .osr (or bare replay data) it came from
 bool orz_to_osr(std::span<const u8> orz, std::vector<u8>& out, const u32 options = 0) {
+
+	no_FMA_check();
 
 	try {
 		return decode_to_osr(orz, out, options);
