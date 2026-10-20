@@ -131,7 +131,7 @@ namespace {
 		r.side.axis = r.info.axis;
 		r.side.table = std::move(head.table);
 		r.side.grid = frame_time::_time_grid{ head.grid };
-		r.side.relax = is_relax(get_e_mode(flags));
+		r.side.mode = get_e_mode(flags);
 		r.side.ap = head.ap;
 		r.side.std_default_time = head.std_default_time;
 
@@ -154,7 +154,7 @@ namespace {
 		void init(u32 set, size_t frames, bool training) {
 
 			if (set < frames::set_taiko)
-				standard.init(frames, training);
+				standard.init(frames, set >= frames::set_relax_rational && set <= frames::set_relax_other ? e_mode::osu_relax : e_mode::osu, training);
 			else
 				other.init(frames, modes::kind(set - frames::set_taiko), training);
 

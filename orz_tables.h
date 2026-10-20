@@ -18,7 +18,7 @@ namespace modes {
 
 		void init(size_t frames, kind mode, bool record_keys = false) {
 
-			keys_time.init_keys_time(frames, record_keys);
+			keys_time.init_keys_time(frames, mode == taiko, record_keys);
 
 			if (mode != fruits)
 				return;

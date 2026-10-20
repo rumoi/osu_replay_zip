@@ -80,7 +80,7 @@ namespace frames {
 		const dspace::axis_model* axis{};
 		std::vector<int> table;          // the replay's delta table
 		frame_time::_time_grid grid{ 0 };
-		bool relax{};
+		e_mode mode{};
 		autopilot::_params ap{};
 		bool std_default_time{};
 	};
@@ -99,7 +99,8 @@ namespace frames {
 
 		// tables follow the replay's length up to TABLE_FRAMES (the frame count of a file to decode is untrusted), and are
 		// larger when training priors. The keys and time models, which every mode uses:
-		void init_keys_time(size_t frames, bool record_keys = false) {
+		// time_history: the time model also takes the older deltas and the mode's flags (relax, osu!taiko)
+		void init_keys_time(size_t frames, bool time_history, bool record_keys = false) {
 
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
@@ -107,15 +108,15 @@ namespace frames {
 			keys_changed.init(5, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			keys_bits.init(4, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			time.init(4, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
+			time.init(time_history ? 6 : 4, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
 
 		}
 
-		void init(size_t frames, bool record_keys = false) {
+		void init(size_t frames, e_mode mode, bool record_keys = false) {
 
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
-			init_keys_time(frames, record_keys);
+			init_keys_time(frames, is_relax(mode), record_keys);
 
 			repeat.init(4, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			move.init(6, std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
@@ -328,18 +329,30 @@ namespace frames {
 		int zero_run{}, prev_zero_run{}, one_run{};
 		i64 now{}, last_tick{}; // the time so far, the last 60 Hz frame's (the game records one at 60 Hz and others between)
 
-		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame
+		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame, repeats: the repeat flags of
+		// the last three frames (below 27), only relax's time model takes them
 		template<typename Coder>
-		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1) {
+		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 repeats) {
 
 			const size_t f{ past.size() };
 			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 };
-			const u64 ctx[4]{
+
+			u64 ctx[6]{
 				(d1 * 64 + d2) * 3 + kc,
 				(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
 				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
 				((u64)grid.bin(last_tick) * 32 + (u64)std::clamp<i64>(now - last_tick, 0, 31)) * 2 + kc,
 			};
+
+			// relax
+			if (m.inputs > 4) {
+
+				const u64 d3{ f >= 3 ? delta_bucket(past[f - 3]) : 50 }, d4{ f >= 4 ? delta_bucket(past[f - 4]) : 50 };
+
+				ctx[4] = ((d1 * 64 + d2) * 64 + d3) * 64 + d4;
+				ctx[5] = d1 * 27 + repeats;
+
+			}
 
 			// mixer weights and apm also by whether the keys change on this frame or did on the last
 			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u }, key_change{ kc ? 2u : kc1 ? 1u : 0u };
@@ -777,11 +790,19 @@ namespace frames {
 			{ // time
 
 				const u64 kc1{ f ? (u64)(fd.keys[f - 1] != (f > 1 ? fd.keys[f - 2] : 0u)) : 0 };
+				// the repeat flag back frames ago, 2 before the first
+				const auto repeated_at = [&](size_t back) {
+
+					return f >= back ? (u64)fd.repeated[f - back] : u64{ 2 };
+				};
+
+				// the repeat flags of the last three frames, for relax
+				const u64 r{ is_relax(side.mode) ? (repeated_at(1) * 3 + repeated_at(2)) * 3 + repeated_at(3) : 0 };
 
 				if (side.std_default_time && f < 2)
 					fd.delta[f] = f ? -1 : 0;
 				else
-					fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1);
+					fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
 
 			}
 
@@ -1023,9 +1044,9 @@ namespace frames {
 				device = std::max(device, side.axis[a].seg[0].p.mode);
 
 		if (device < dspace::axis_mode::rational || device > dspace::axis_mode::absolute)
-			return side.relax ? set_relax_other : set_no_device;
+			return is_relax(side.mode) ? set_relax_other : set_no_device;
 
-		return (side.relax ? set_relax_rational : set_rational) + (u32)device - (u32)dspace::axis_mode::rational;
+		return (is_relax(side.mode) ? set_relax_rational : set_rational) + (u32)device - (u32)dspace::axis_mode::rational;
 	}
 
 	// a starting state: counters by context hash (p | confidence << 16 | slot << 24), then per model the mixer weights
@@ -1088,7 +1109,7 @@ namespace frames {
 	inline std::vector<u8> encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
 		bool exact_text) {
 
-		M.init(frames);
+		M.init(frames, side.mode);
 		seed_priors(M, side);
 
 		cm::bit_encoder e{};
@@ -1116,7 +1137,7 @@ namespace frames {
 
 		_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
 
-			M.init(frames);
+			M.init(frames, side.mode);
 			seed_priors(M, side);
 
 			frame_loop(d, M, fd, side, frames, false);

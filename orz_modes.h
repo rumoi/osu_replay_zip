@@ -392,6 +392,7 @@ namespace modes {
 		i64 now{};
 		u32 pk{}; // keys before the frame (osu!mania: the held columns)
 		bool pkc{}; // the keys changed in the previous frame
+		u64 stayed[3]{ 2, 2, 2 }; // whether the keys stayed in the last three frames (2 before the first)
 		size_t speed_at{};
 		float speed{};
 
@@ -407,7 +408,14 @@ namespace modes {
 
 			const bool kc{ k != pk };
 
-			delta[f] = time.code(c, M.keys_time.time, std::span{ delta }.first(f), encoding ? r.delta : 0, phase, kc, pkc);
+			const u64 stays{ side.mode == taiko ? (stayed[0] * 3 + stayed[1]) * 3 + stayed[2] : 0 };
+
+			delta[f] = time.code(c, M.keys_time.time, std::span{ delta }.first(f),
+				encoding ? r.delta : 0, phase, kc, pkc, stays);
+
+			stayed[2] = stayed[1];
+			stayed[1] = stayed[0];
+			stayed[0] = !kc;
 
 			if (!encoding) {
 

@@ -829,7 +829,7 @@ namespace standard {
 
 			}
 
-			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, is_relax(state.mode()), ap, shared.std_default_time };
+			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, state.mode(), ap, shared.std_default_time };
 
 			add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
 
@@ -1357,7 +1357,7 @@ namespace standard {
 		side.axis = info.axis;
 		side.table = std::move(head.table);
 		side.grid = frame_time::_time_grid{ head.grid };
-		side.relax = is_relax(get_e_mode(encode_info));
+		side.mode = get_e_mode(encode_info);
 		side.ap = head.ap;
 		side.std_default_time = head.std_default_time;
 
