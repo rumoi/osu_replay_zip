@@ -60,7 +60,7 @@ then       the containers' data, back to back, in the order the header lists the
 |---|---|---|
 | version | `bucket(4, 8)` | 0. A reader rejects a larger version as "made by a newer version", before reading on. |
 | crc | 32 bits | §3.4 |
-| encode info | `bucket(7)` | §3.3 |
+| encode info | `bucket(8)` | §3.3 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | see below |
 | frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; at most 2^22 |
@@ -107,11 +107,11 @@ standard tags it does not know.
 
 | Bits | Name | Meaning |
 |---|---|---|
-| 0–2 | mode | what the replay is, and so the form of its frames stream (below) |
-| 3 | `has_osr_header` | the input was a full `.osr`, so the decoder rebuilds one |
-| 4 | `trailing_comma` | the replay text ended with `,` |
-| 5 | `replay_verbatim` | the replay data is stored as-is (§10) |
-| 6 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
+| 0–3 | mode | what the replay is, and so the form of its frames stream (below) |
+| 4 | `has_osr_header` | the input was a full `.osr`, so the decoder rebuilds one |
+| 5 | `trailing_comma` | the replay text ended with `,` |
+| 6 | `replay_verbatim` | the replay data is stored as-is (§10) |
+| 7 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
 
 | Mode | Replay | Frames stream |
 |---|---|---|
@@ -124,7 +124,8 @@ standard tags it does not know.
 | 6 | osu!catch relax | osu!standard form, relax (the cursor drives the catcher) |
 | 7 | osu! autopilot | osu!standard form with the autopilot path model (§6.6) |
 
-Modes 0 to 3 are the `.osr`'s game mode numbers.
+Modes 0 to 3 are the `.osr`'s game mode numbers. Modes 8 to 15 are reserved for later versions: a reader rejects a
+file that uses one.
 
 Relax does not exist in osu!mania, and autopilot only in osu!. Relax selects the relax prior sets (§5.6) and is only
 needed to decode the osu!standard form. The game mode is the `.osr`'s, or the one given with bare replay data, with
@@ -176,6 +177,7 @@ Both styles share one layout, where `e` is the decimal exponent of the leading d
 An encoder must store the replay verbatim (§10) instead of as frames when any of these holds:
 
 - the replay data does not decompress to its declared size;
+- the replay data decompresses to a size of 0
 - neither float style reprints the text exactly;
 - there are more than 2^22 frames;
 - some `|x|` or `|y|` exceeds 2^17 (x may reach 2^24 in osu!mania), or a value is NaN.
@@ -204,6 +206,8 @@ scaled to 16 bits):
 
 The encoder ends by writing the 4 bytes of `x1`, most significant first. The decoder reads 4 bytes into `x` and
 decodes `y = (x ≤ xmid)`. It shifts input in the same way, reading 0 for any byte past the end of the stream.
+
+The decoder reads exactly as many bytes as the encoder wrote, so a valid stream is never read past its end.
 
 ### 5.2 Counters
 
@@ -299,17 +303,17 @@ APM entries start at $`A[33c + k] = 16 \cdot \mathrm{squash}(128\,(k - 16))`$ fo
 
 ### 5.5 Table sizes
 
-A model's table size depends on the header's frame count (`b = bit_width(frame count)`), so a decoder must size every
-table exactly as the encoder did. The sizes are part of the format:
+A model's table size depends on the header's frame count, up to 16,384 frames (`b = bit_width(min(frame count,
+16384))`), so a decoder must size every table exactly as the encoder did. The sizes are part of the format:
 
 | Model | Inputs | Table bits | Width | Mixer sets | APM contexts |
 |---|---|---|---|---|---|
-| keys changed | 7 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
-| key bits | 6 | clamp(b+2, 14, 20) | 1 | 64 | 64 |
+| keys changed | 5 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
+| key bits | 4 | clamp(b+2, 14, 20) | 1 | 64 | 64 |
 | high key bits | 1 | 8 | 1 | 1 | 1 |
-| time | 7 | clamp(b, 12, 16) | 64 | 576 | 192 |
-| repeat | 8 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
-| move | 6 | clamp(b+3, 12, 19) | 32 | 384 | 1536 |
+| time | 4; 6 for relax (modes 4 and 6) and osu!taiko (modes 1 and 5) | clamp(b, 12, 16) | 64 | 576 | 192 |
+| repeat | 4 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
+| move | 6 | clamp(b+3, 12, 17) | 32 | 384 | 1536 |
 | move bits | 2 | clamp(b+2, 12, 20) | 1 | 32 | 256 |
 | slack | 1 | clamp(b−2, 10, 16) | 16 | 64 | 64 |
 | escape | 5 | clamp(b+2, 12, 20) | 1 | 48 | 48 |
@@ -321,7 +325,9 @@ table exactly as the encoder did. The sizes are part of the format:
 | catcher residual | 5 | clamp(b, 10, 18) | 64 | 64 | 64 |
 | catcher residual bits | 2 | clamp(b+1, 10, 18) | 1 | 8 | 8 |
 
-The first four serve every mode. The next eight are osu!standard only, and the last four osu!catch only.
+The first four serve every mode. The next eight are osu!standard only, and the last four osu!catch only. The time
+model's two extra inputs (the older deltas, and the last three frames' repeat flags, or for osu!taiko whether the keys
+stayed) are its last two, so its first four contexts are the same for every mode.
 
 ### 5.6 Priors
 
@@ -391,8 +397,12 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
    - if they changed: one flip decision for each of the 5 low key bits, then any flips above them;
    - the bits above are 27 raw bits, preceded by a "high bits flipped" decision unless no low bit flipped.
 2. **Delta**: the index into the delta table.
-   - Unary decisions "is it entry `at`?" for `at` = 0, 1, …, up to 64 entries; the last listed entry is implied.
-   - An index of 64 or more continues as `gamma(index − 63)`.
+   - A walk down a fixed binary tree of 64 nodes, one decision per node from the root: its 65 leaves are the indexes
+     0 to 63 and "64 or more". The tree (`TIME_TREE`, shaped by how often each index is used) is normative data, and
+     each node's decisions use that node's counter slot.
+   - "64 or more" continues as `gamma(index − 63)`.
+   - An encoder never codes a leaf past the table. A reader takes one as the escape, or as the last entry when the
+     table has no more than 64.
    - Nothing is coded for frames 0 and 1 when `std_default_time` is set.
 3. **Repeat** (frames after the first): whether the position is bit-identical to the previous frame's.
 4. **For a new position** (not a repeat):
@@ -565,8 +575,8 @@ frequency models and their priors are normative for this form.
 
 ## 10. Verbatim replay data
 
-When the replay text cannot be stored as frames (§4), the original LZMA bytes are stored as the `osr_verbatim`
-container, with no `frames` container and a frame count of 0.
+When the replay text cannot be stored as frames (§4), including replay data that decompresses to no text, the original
+LZMA bytes are stored as the `osr_verbatim` container, with no `frames` container and a frame count of 0.
 
 ## 11. Rebuilding the `.osr`
 
@@ -596,6 +606,9 @@ A decoder only reads what the encoder chose. The format leaves these choices fre
 - the order of the delta table;
 - whether to use the compact forms of §8 and §9.
 
+The reference encoder refuses an `.osr` whose replay data length runs past the end of the file:
+it writes no `.orz`, as the length could not be given back.
+
 The reference encoder chooses by fitting candidates and comparing coded sizes. None of that search is part of the
 format.
 
@@ -607,4 +620,3 @@ Byte-exact round trips are expected. These edge cases currently break that, thou
   `-12345|0|0|<seed>`. The CRC does not catch it.
 - **A life bar marker byte other than `0x00` or `0x0b`** comes back as an empty life bar (`0x0b 0x00`). A non-minimal
   ULEB128 length comes back minimal.
-- **A replay data length larger than the bytes left in the file** comes back as the true length, with an empty tail.
