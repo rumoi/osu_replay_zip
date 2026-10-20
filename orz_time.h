@@ -372,8 +372,7 @@ namespace frame_time {
 
 		}
 
-		for (int b{}; b < 3; ++b)
-			t.push_back((grid >> b) & 1);
+		t.write_bits<3>(grid);
 
 		if (grid == GRID_CUSTOM) {
 

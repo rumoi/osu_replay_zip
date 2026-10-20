@@ -377,8 +377,8 @@ change.
      permutation of the 96 symbols, are normative data.
 2. **Time grid**: 3 bits choosing a period from `{none, 50/3, 25, 25/2, 100/3, 20}` ms (codes 0–5), or code 6 for a
    custom period of `num / den` ms, followed by `num` as `bucket(7)` and `den` as `bucket(3)` (other play rates, such as
-   osu!lazer's rate mods: 1.4× is 70/3).
-   A reader rejects code 7, and a custom period where either `num` or `den` is outside the range of 1 to 65535.
+   osu!lazer's rate mods: 1.4× is 70/3).\
+   A reader rejects code 7, and a custom period where either `num` or `den` is outside the range of 1 to 65535.\
    It is only used as context.
 3. **Device model** for x, then for y: §6.3.
 4. **Autopilot**, for mode 7 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
