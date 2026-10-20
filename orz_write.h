@@ -245,14 +245,12 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 	pos += 4;
 
 	h.replay_data = osr.subspan(pos);
-	h.tail = {};
 
-	if (compressed <= h.replay_data.size()) {
+	if (compressed > h.replay_data.size())
+		return false;
 
-		h.tail = h.replay_data.subspan(compressed);
-		h.replay_data = h.replay_data.first(compressed);
-
-	}
+	h.tail = h.replay_data.subspan(compressed);
+	h.replay_data = h.replay_data.first(compressed);
 
 	return true;
 }
@@ -265,7 +263,7 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 
 	ON_SCOPE_EXIT(state.lzma = {}; );
 
-	if (!decompress_osr_string(lzma.data(), lzma.size(), state.text)) {
+	if (!decompress_osr_string(lzma.data(), lzma.size(), state.text) || state.text.empty()) {
 
 		write_verbatim(state);
 
