@@ -384,7 +384,6 @@ namespace modes {
 		const size_t n{ R.size() };
 
 		std::vector<int> delta(n);
-		std::vector<u8> still(n); // per frame: the keys (osu!catch: the catcher) stayed
 
 		frames::_key_coder keys{ side.bits };
 		frames::_time_coder time{ side.table, side.grid };
@@ -401,18 +400,14 @@ namespace modes {
 			auto& r{ R[f] };
 			const bool esc{ escaped[f] != 0 };
 			const u64 phase{ side.grid.bin(now) };
-			const u64 d1{ f ? frames::delta_bucket(delta[f - 1]) : 50 };
 
 			// osu!mania keys are the held columns, which escaped frames leave as they are
 			const u32 want{ encoding ? (side.mode == mania ? (u32)r.x : r.keys) : 0u };
-			const u32 k{ side.mode == mania && esc ? pk : keys.code(c, M.keys_time, pk, want, now, d1, phase) };
+			const u32 k{ side.mode == mania && esc ? pk : keys.code(c, M.keys_time, pk, want, now) };
 
 			const bool kc{ k != pk };
 
-			// whether the keys (osu!catch: the catcher) stayed in the last three frames
-			const u64 stays{ ((f >= 1 ? (u64)still[f - 1] : 2) * 3 + (f >= 2 ? (u64)still[f - 2] : 2)) * 3 + (f >= 3 ? (u64)still[f - 3] : 2) };
-
-			delta[f] = time.code(c, M.keys_time.time, std::span{ delta }.first(f), encoding ? r.delta : 0, phase, kc, pkc, stays);
+			delta[f] = time.code(c, M.keys_time.time, std::span{ delta }.first(f), encoding ? r.delta : 0, phase, kc, pkc);
 
 			if (!encoding) {
 
@@ -421,15 +416,13 @@ namespace modes {
 
 			}
 
-			still[f] = !kc;
-
 			if (side.mode == fruits) {
 
 				if (esc)
 					catcher.set(r.x);
 				else {
 
-					still[f] = !catcher.code(c, M, r, kc, encoding);
+					catcher.code(c, M, r, kc, encoding);
 
 					if (!encoding)
 						r.y = FIELD_Y;

@@ -21,8 +21,33 @@ namespace orz {
 
 namespace frames {
 
-	// a delta is coded as its place in the replay's own table (most used first), the unary covers this many entries
+	// a delta is coded as its place in the replay's own table (most used first), the tree covers this many entries
 	constexpr u32 LISTED{ 64 };
+
+	// the table place as a walk down a fixed binary tree, shaped by how often each place is used (corpus): an entry below
+	// 64 is a node, 64 + place a leaf, leaf LISTED = past the listed entries
+	constexpr u8 TIME_TREE[64][2]{
+		{ 1, 2 }, { 65, 3 }, { 64, 4 }, { 66, 5 }, { 6, 7 }, { 8, 9 }, { 10, 67 }, { 11, 12 },
+		{ 72, 71 }, { 13, 70 }, { 14, 15 }, { 69, 16 }, { 17, 68 }, { 18, 80 }, { 79, 78 }, { 77, 76 },
+		{ 75, 74 }, { 19, 73 }, { 20, 82 }, { 21, 81 }, { 22, 83 }, { 23, 24 }, { 87, 86 }, { 85, 25 },
+		{ 84, 26 }, { 27, 89 }, { 88, 28 }, { 29, 91 }, { 30, 90 }, { 31, 32 }, { 92, 33 }, { 34, 35 },
+		{ 36, 37 }, { 93, 38 }, { 39, 40 }, { 41, 42 }, { 43, 44 }, { 45, 128 }, { 46, 94 }, { 47, 48 },
+		{ 49, 50 }, { 51, 52 }, { 53, 54 }, { 55, 56 }, { 57, 58 }, { 59, 60 }, { 61, 62 }, { 97, 98 },
+		{ 99, 100 }, { 101, 102 }, { 103, 104 }, { 105, 106 }, { 107, 108 }, { 109, 110 }, { 111, 112 }, { 113, 114 },
+		{ 115, 116 }, { 117, 118 }, { 119, 120 }, { 121, 122 }, { 123, 124 }, { 125, 126 }, { 127, 63 }, { 95, 96 },
+	};
+
+	// each tree entry's parent and the branch to it
+	constexpr auto TIME_TREE_UP{ [] {
+
+		std::array<std::array<u8, 2>, 64 + LISTED + 1> up{};
+
+		for (u32 n{}; n < 64; ++n)
+			for (u32 b{}; b < 2; ++b)
+				up[TIME_TREE[n][b]] = { (u8)n, (u8)b };
+
+		return up;
+	}() };
 
 	// a frame this long after the last 60 Hz one is the next
 	constexpr i64 TICK_MS{ 14 };
@@ -79,10 +104,10 @@ namespace frames {
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
 			// single decision models: a counter per line; time / move / slack: a line of counters per context
-			keys_changed.init(7, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			keys_bits.init(6, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
+			keys_changed.init(5, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			keys_bits.init(4, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			time.init(7, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
+			time.init(4, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
 
 		}
 
@@ -92,7 +117,7 @@ namespace frames {
 
 			init_keys_time(frames, record_keys);
 
-			repeat.init(8, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			repeat.init(4, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			move.init(6, std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
 			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
@@ -174,9 +199,9 @@ namespace frames {
 
 		}
 
-		// the keys of the frame starting at now, after pk. d1: the previous delta's bucket, phase: now's time grid bin
+		// the keys of the frame starting at now, after pk
 		template<typename Coder>
-		u32 code(Coder& c, _models& M, u32 pk, u32 want, i64 now, u64 d1, u64 phase) {
+		u32 code(Coder& c, _models& M, u32 pk, u32 want, i64 now) {
 
 			const bool down{ (pk & ((1u << bits) - 1)) != 0 };
 
@@ -196,32 +221,11 @@ namespace frames {
 
 			const u64 rhythm{ ratio_bucket(now - last_press, press_interval) }, hold{ down ? ratio_bucket(held, prev_hold) : 34 };
 
-			// the released key closest to its usual press interval
-			u64 due{ 33 };
-
-			for (int b{}, best{ 1000 }; b < bits; ++b) {
-
-				if (key_interval[b] <= 0 || ((pk >> b) & 1))
-					continue;
-
-				const u64 q{ ratio_bucket(now - key_last_press[b], key_interval[b]) };
-
-				if (std::abs((int)q - 8) < best) {
-
-					best = std::abs((int)q - 8);
-					due = q;
-
-				}
-
-			}
-
 			const u64 s{ std::min<u64>(pk, 63) };
-			const u64 ctx[7]{
-				(s * 40 + due) * 2,
+			const u64 ctx[5]{
 				s * 32 + log_bucket(now - last_change),
 				s * 40 + rhythm,
 				s * 40 + hold,
-				((s * 64 + d1) * 32 + phase) * 2,
 				(s * 32 + log_bucket(press_interval)) * 32 + log_bucket(now - last_press),
 				(s * 32 + (u64)std::min(frames_since_change, 31)) * 32 + log_bucket(now - last_change),
 			};
@@ -238,12 +242,10 @@ namespace frames {
 				const u64 is_down{ (pk >> b) & 1 };
 				const u64 key_rhythm{ ratio_bucket(now - key_last_press[b], key_interval[b]) };
 				const u64 key_hold{ is_down ? ratio_bucket(now - press_start[b], key_prev_hold[b]) : 34 };
-				const u64 bctx[6]{
-					(((u64)b * 40 + key_rhythm) * 40 + key_hold) * 2 + is_down,
+				const u64 bctx[4]{
 					(u64)b * 64 + log_bucket(now - key_last_press[b]) * 2 + is_down,
 					(s * 64 + (flipped & 63)) * 32 + (u64)b,
 					(((u64)b * 33 + (u64)(last_key + 1)) * 33 + (u64)(prev_key + 1)) * 2 + is_down,
-					((u64)b * 40 + rhythm) * 2 + is_down,
 					((u64)b * 40 + hold) * 2 + is_down,
 				};
 
@@ -317,8 +319,8 @@ namespace frames {
 
 	};
 
-	// a frame time as a walk over the replay's own delta table: unary over the first LISTED entries (most used first),
-	// a counter per delta value; later ones (rare) as an escaped index
+	// a frame time as its place in the replay's own delta table: the first LISTED places down TIME_TREE, a counter per
+	// tree node; later ones (rare) as an escaped index
 	struct _time_coder {
 
 		const std::vector<int>& table;
@@ -326,29 +328,16 @@ namespace frames {
 		int zero_run{}, prev_zero_run{}, one_run{};
 		i64 now{}, last_tick{}; // the time so far, the last 60 Hz frame's (the game records one at 60 Hz and others between)
 
-		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame, mode_ctx: the mode's own
-		// context, below 27
+		// the delta of frame f = past.size(). kc / kc1: keys changed in this / the previous frame
 		template<typename Coder>
-		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 mode_ctx) {
+		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1) {
 
 			const size_t f{ past.size() };
-			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 },
-				d3{ f >= 3 ? delta_bucket(past[f - 3]) : 50 }, d4{ f >= 4 ? delta_bucket(past[f - 4]) : 50 };
-
-			i64 span{};
-			int count{};
-
-			for (size_t j{ f }; j > 0 && count < 16; --j, ++count)
-				span += std::max(0, past[j - 1]);
-
-			const u64 rate{ (u64)std::min<i64>(span * 4 / std::max(count, 1), 127) };
-			const u64 ctx[7]{
+			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 };
+			const u64 ctx[4]{
 				(d1 * 64 + d2) * 3 + kc,
-				((d1 * 64 + d2) * 64 + d3) * 64 + d4,
 				(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
 				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
-				d1 * 27 + mode_ctx,
-				(rate * 64 + d1) * 3 + kc,
 				((u64)grid.bin(last_tick) * 32 + (u64)std::clamp<i64>(now - last_tick, 0, 31)) * 2 + kc,
 			};
 
@@ -360,16 +349,26 @@ namespace frames {
 			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };
 			const u32 index{ (u32)(std::find(table.begin(), table.end(), want) - table.begin()) };
 
-			u32 at{};
+			// the branches to the leaf, from the leaf up
+			u8 branch[64];
+			int depth{};
 
-			for (; at < listed && !(listed == n && at + 1 == listed); ++at) {
+			for (u32 e{ 64 + (index < listed ? index : LISTED) }; e != 0; e = TIME_TREE_UP[e][0])
+				branch[depth++] = TIME_TREE_UP[e][1];
 
-				const size_t step{ (size_t)std::min<u32>(at, 63) * 3 };
+			u32 node{};
 
-				if (m.code(c, index == at, (u32)std::clamp(table[at], -2, 61) + 2, (step + regime) * 3 + key_change, step + key_change))
-					break;
+			while (node < 64) {
+
+				const size_t step{ (size_t)node * 3 };
+				const int y{ depth ? branch[--depth] : 0 };
+
+				node = TIME_TREE[node][m.code(c, y, node, (step + regime) * 3 + key_change, step + key_change)];
 
 			}
+
+			// a leaf past the table (a damaged file) reads as the escape
+			u32 at{ std::min(node - 64, listed) };
 
 			if (at == listed && listed < n)
 				at = listed + (u32)(gamma(c, index - listed + 1) - 1);
@@ -770,7 +769,7 @@ namespace frames {
 			const u32 pk{ f ? fd.keys[f - 1] : 0u };
 			const u64 phase{ side.grid.bin(now) };
 
-			fd.keys[f] = keys.code(c, M, pk, encoding ? fd.keys[f] : 0u, now, f >= 1 ? delta_bucket(fd.delta[f - 1]) : 50, phase);
+			fd.keys[f] = keys.code(c, M, pk, encoding ? fd.keys[f] : 0u, now);
 
 			const u32 k{ fd.keys[f] };
 			const bool changed{ k != pk };
@@ -778,13 +777,11 @@ namespace frames {
 			{ // time
 
 				const u64 kc1{ f ? (u64)(fd.keys[f - 1] != (f > 1 ? fd.keys[f - 2] : 0u)) : 0 };
-				// the repeat flags of the last three frames (2 before the first)
-				const u64 r{ ((f >= 1 ? (u64)fd.repeated[f - 1] : 2) * 3 + (f >= 2 ? (u64)fd.repeated[f - 2] : 2)) * 3 + (f >= 3 ? (u64)fd.repeated[f - 3] : 2) };
 
 				if (side.std_default_time && f < 2)
 					fd.delta[f] = f ? -1 : 0;
 				else
-					fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1, r);
+					fd.delta[f] = time.code(c, M.time, std::span{ fd.delta }.first(f), encoding ? fd.delta[f] : 0, phase, changed, kc1);
 
 			}
 
@@ -801,21 +798,17 @@ namespace frames {
 				const auto bucket = [](i64 v, i64 hi) { return (u64)std::clamp<i64>(v, -2, hi) + 2; };
 
 				const u64 dd{ bucket(d_f, 30) }, s{ bucket(repeat_since, 40) };
-				const u64 p1{ fd.repeated[f - 1] }, p2{ f >= 2 ? (u64)fd.repeated[f - 2] : 2 }, p3{ f >= 3 ? (u64)fd.repeated[f - 3] : 2 };
+				const u64 p1{ fd.repeated[f - 1] }, p2{ f >= 2 ? (u64)fd.repeated[f - 2] : 2 };
 				const u64 moved{ (u64)std::min<i64>(last_move, 40) };
 
 				// bit length of the move the predictor expects by now (21 before the first position)
 				const int since{ (int)std::clamp<i64>(elapsed, INT_MIN, INT_MAX) };
 				const u64 expect{ i ? (u64)std::min(bit_length(std::abs(mp.pred(0, since)) + std::abs(mp.pred(1, since))), 20) : 21 };
 
-				const u64 ctx[8]{
+				const u64 ctx[4]{
 					((s * 40 + dd) * 4 + (u64)std::min(repeat_run, 3)) * 2 + (u64)changed,
 					((dd * 3 + p1) * 3 + p2) * 2 + (u64)changed,
-					s * 40 + dd,
-					((p1 * 3 + p2) * 3 + p3) * 40 + dd,
 					(s * 41 + moved) * 16 + (u64)std::min(repeat_run, 15),
-					(s * 40 + dd) * 41 + moved,
-					(u64)std::min(repeat_run, 31) * 40 + dd,
 					(expect * 41 + s) * 40 + dd,
 				};
 
