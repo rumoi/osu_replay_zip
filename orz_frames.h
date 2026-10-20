@@ -779,6 +779,9 @@ namespace frames {
 
 		for (size_t f{}; f < frames; ++f) {
 
+			if ((f & 1023) == 0)
+				c.check_end();
+
 			const u32 pk{ f ? fd.keys[f - 1] : 0u };
 			const u64 phase{ side.grid.bin(now) };
 
@@ -1145,6 +1148,9 @@ namespace frames {
 		}
 
 		float escape(const _escape& v, int a, bool exact_text) {
+
+			d.check_end();
+
 			return escape_value(d, M.escape_value, v, a, exact_text, prev_len[a], false);
 		}
 

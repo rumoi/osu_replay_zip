@@ -398,6 +398,9 @@ namespace modes {
 
 		for (size_t f{}; f < n; ++f) {
 
+			if ((f & 1023) == 0)
+				c.check_end();
+
 			auto& r{ R[f] };
 			const bool esc{ escaped[f] != 0 };
 			const u64 phase{ side.grid.bin(now) };

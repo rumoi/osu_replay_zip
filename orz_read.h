@@ -34,6 +34,9 @@ static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _dec
 	const u32 info{ file.encode_info };
 
 	const e_mode mode{ get_e_mode(info) };
+		
+	if (mode >= e_mode::e_mode_max)
+		return false;
 
 	const bool verbatim{ (info & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
 

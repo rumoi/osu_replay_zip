@@ -90,24 +90,29 @@ constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 // extended game mode: the game mode with the gameplay modifiers that change it completely (relax, autopilot), and so the
 // form of its frames. osu!catch relax is coded as osu!standard frames (the cursor drives the catcher), as are osu!mania
 // replays that do not fit the column form (stored as osu!). The first four are the .osr's game mode numbers.
-enum class e_mode : u32 { osu, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot };
+enum class e_mode : u32 {
 
-// the encode info as a file stores it: the e_mode in the low 3 bits, then a bit each
-enum ORZ_ENCODE_INFO : u32 {
-
-	e_mode_bits = 7,
-
-	has_osr_header = 1 << 3,
-
-	trailing_comma = 1 << 4,
-
-	replay_verbatim = 1 << 5,
-
-	text_shortest = 1 << 6, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
+	osu = 0, taiko, fruits, mania, osu_relax, taiko_relax, fruits_relax, osu_autopilot,
+	e_mode_max
 
 };
 
-constexpr u32 ORZ_ENCODE_INFO_BITS{ 7 };
+// the encode info as a file stores it: the e_mode in the low 4 bits (8 of 16 used), then a bit each
+enum ORZ_ENCODE_INFO : u32 {
+
+	e_mode_bits = 15,
+
+	has_osr_header = 1 << 4,
+
+	trailing_comma = 1 << 5,
+
+	replay_verbatim = 1 << 6,
+
+	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
+
+};
+
+constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 };
 
 FORCEINLINE e_mode get_e_mode(u32 encode_info) {
 	return (e_mode)(encode_info & ORZ_ENCODE_INFO::e_mode_bits);
@@ -676,7 +681,7 @@ struct _orz_file {
 
 		CRC = bs.read_bits<32>();
 
-		encode_info = bs.read_bucket<7>();
+		encode_info = bs.read_bucket<ORZ_ENCODE_INFO_BITS>();
 		
 		if (seeded = bs.read_bits<1>())
 			seed = bs.read_length_bucket<3, ORZ_SEED_LENGTH>();
@@ -789,7 +794,7 @@ struct _orz_file {
 
 		bs.write_bits<32>(CRC);
 
-		bs.write_bucket(encode_info, 7);
+		bs.write_bucket(encode_info, ORZ_ENCODE_INFO_BITS);
 		
 		if (bs.emplace_back(seeded))
 			bs.write_length_bucket<3, ORZ_SEED_LENGTH>(seed);

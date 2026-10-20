@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace orz {
@@ -199,6 +200,8 @@ namespace cm {
 		u32 x1{}, x2{ 0xFFFFFFFFu };
 		std::vector<u8> out;
 
+		void check_end() const {}
+
 		// p = P(1) in 16 bits
 		FORCEINLINE int code(int y, int p) {
 
@@ -236,6 +239,7 @@ namespace cm {
 
 		const u8* p{};
 		const u8* end{};
+		size_t past_end{};
 		u32 x1{}, x2{ 0xFFFFFFFFu }, x{};
 
 		bit_decoder(std::span<const u8> data) : p{ data.data() }, end{ data.data() + data.size() } {
@@ -246,7 +250,20 @@ namespace cm {
 		}
 
 		FORCEINLINE u8 next() {
-			return p < end ? *p++ : 0;
+
+			if (p < end)
+				return *p++;
+
+			++past_end;
+
+			return 0;
+		}
+
+		void check_end() const {
+
+			if (past_end > 16)
+				throw std::runtime_error("cm.h> read past end of stream");
+
 		}
 
 		FORCEINLINE int code(int, int pr) {
