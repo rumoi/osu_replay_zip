@@ -289,6 +289,8 @@ namespace cm {
 	// every counter update.
 	struct bit_trainer {
 
+		void check_end() const {}
+
 		FORCEINLINE int code(int y, int) {
 			return y;
 		}

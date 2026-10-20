@@ -65,7 +65,7 @@ namespace modes {
 	struct _side {
 		kind mode{};
 		std::vector<int> table;          // the replay's delta table
-		frame_time::_time_grid grid{ 0 };
+		frame_time::_time_grid grid{};
 		int bits{ frames::KEY_BITS };    // keys modelled one by one (osu!mania: columns)
 		bool exact_text{};
 	};
@@ -563,12 +563,10 @@ namespace modes {
 
 		_bit_view head{ data };
 
-		u32 grid{};
-
 		_side side{ mode_of(get_e_mode(encode_info)) };
 
-		side.table = frame_time::read_table(head, grid);
-		side.grid = frame_time::_time_grid{ grid };
+		if (!frame_time::read_table(head, side.table, side.grid))
+			return false;
 		side.exact_text = (encode_info & ORZ_ENCODE_INFO::text_shortest) != 0;
 
 		cm::bit_decoder d{ head.get_tail() };

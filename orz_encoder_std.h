@@ -1313,7 +1313,7 @@ namespace standard {
 
 	struct _frames_head {
 		std::vector<int> table;
-		u32 grid{};
+		frame_time::_time_grid grid{};
 		dspace::_model_info info;
 		autopilot::_params ap;
 		_native_grid grid_of[2]{};
@@ -1325,9 +1325,7 @@ namespace standard {
 
 		_bit_view head{ data };
 
-		h.table = frame_time::read_table(head, h.grid);
-
-		if (!dspace::read_info(head, h.info) || !read_autopilot(head, h.ap, autopilot))
+		if (!frame_time::read_table(head, h.table, h.grid) || !dspace::read_info(head, h.info) || !read_autopilot(head, h.ap, autopilot))
 			return false;
 
 		for (int a{}; a < 2; ++a)
@@ -1356,7 +1354,7 @@ namespace standard {
 
 		side.axis = info.axis;
 		side.table = std::move(head.table);
-		side.grid = frame_time::_time_grid{ head.grid };
+		side.grid = head.grid;
 		side.mode = get_e_mode(encode_info);
 		side.ap = head.ap;
 		side.std_default_time = head.std_default_time;

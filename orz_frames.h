@@ -79,7 +79,7 @@ namespace frames {
 	struct _side {
 		const dspace::axis_model* axis{};
 		std::vector<int> table;          // the replay's delta table
-		frame_time::_time_grid grid{ 0 };
+		frame_time::_time_grid grid{};
 		e_mode mode{};
 		autopilot::_params ap{};
 		bool std_default_time{};

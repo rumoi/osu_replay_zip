@@ -11,39 +11,76 @@ namespace orz {
 
 namespace frame_time {
 
+	// a grid period of num / den ms, num 0 for none
 	struct _grid_period {
-		i64 num, den;
+		u32 num, den;
 	};
 
-	constexpr _grid_period GRID_PERIODS[]{ { 50, 3 }, { 25, 1 }, { 25, 2 }, { 100, 3 }, { 20, 1 }, { 0, 1 } };
-	constexpr u32 GRID_PERIOD_COUNT{ 6 }, GRID_BINS{ 25 };
+	// none, then 60 Hz at 1x, DT, HT, 30 Hz and 50 Hz
+	constexpr _grid_period GRID_PERIODS[]{ { 0, 1 }, { 50, 3 }, { 25, 1 }, { 25, 2 }, { 100, 3 }, { 20, 1 } };
+	constexpr u32 GRID_PERIOD_COUNT{ (u32)std::size(GRID_PERIODS) }, GRID_BINS{ 25 };
 
-	FORCEINLINE u64 grid_phase(i64 now, const _grid_period& p) {
+	constexpr u32 GRID_CUSTOM{ GRID_PERIOD_COUNT }, GRID_CUSTOM_MAX{ 0xFFFF };
 
-		if (p.num == 0)
-			return 0;
 
-		const i64 phase{ now * p.den };
+	struct _fast_divisor {
 
-		switch (p.num) {
+		u64 m{};
+		u64 d{};
 
-			case 50: return ((phase % 50 + 50) % 50) * GRID_BINS / 50;
-			case 25: return ((phase % 25 + 25) % 25) * GRID_BINS / 25;
-			case 100: return ((phase % 100 + 100) % 100) * GRID_BINS / 100;
-			case 20: return ((phase % 20 + 20) % 20) * GRID_BINS / 20;
-			default: return (u64)((((phase % p.num + p.num) % p.num) * GRID_BINS) / p.num);
+		_fast_divisor() = default;
 
+		explicit _fast_divisor(u64 divisor) : m{ ~u64(0) / divisor + 1 }, d{ divisor } {}
+
+		static FORCEINLINE u64 mul_high(u64 x, u64 y) {
+			return ((x >> 32) * y + (((x & 0xFFFFFFFFull) * y) >> 32)) >> 32;
 		}
-	}
 
+		FORCEINLINE u64 mod(u32 x) const {
+			return mul_high(m * x, d);
+		}
+
+		FORCEINLINE u64 div(u32 x) const {
+			return mul_high(m, x);
+		}
+
+	};
+	
 	struct _time_grid {
 
-		_grid_period period{ GRID_PERIODS[0] };
+		_fast_divisor num; // 0 means no grid
+		u64 den{}, high{};
 
-		explicit _time_grid(u32 grid) : period{ GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0] } {}
+		_time_grid() = default;
+
+		explicit _time_grid(u32 grid) : _time_grid{ GRID_PERIODS[grid < GRID_PERIOD_COUNT ? grid : 0] } {}
+
+		explicit _time_grid(_grid_period p) : den{ p.den } {
+
+			if (p.num == 0)
+				return;
+
+			num = _fast_divisor{ p.num };
+			high = (u64(1) << 32) % p.num;
+
+		}
 
 		u64 bin(i64 now) const {
-			return grid_phase(now, period);
+
+			if (num.d == 0)
+				return 0;
+
+			const u64 a{ now < 0 ? 0 - (u64)now : (u64)now };
+
+			u64 r{ num.mod((u32)a) };
+
+			if (a >> 32)
+				r = num.mod((u32)(num.mod((u32)(a >> 32)) * high + r));
+
+			if (now < 0 && r)
+				r = num.d - r;
+
+			return num.div((u32)(num.mod((u32)(r * den)) * GRID_BINS));
 		}
 
 	};
@@ -207,6 +244,11 @@ namespace frame_time {
 
 		u32 counts[GRID_PERIOD_COUNT][GRID_BINS][SYM]{};
 
+		_time_grid grids[GRID_PERIOD_COUNT];
+
+		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
+			grids[g] = _time_grid{ g };
+
 		i64 now{};
 
 		for (const int d : delta) {
@@ -214,7 +256,7 @@ namespace frame_time {
 			const int s{ std::clamp(d, 0, SYM - 1) };
 
 			for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
-				++counts[g][grid_phase(now, GRID_PERIODS[g])][s];
+				++counts[g][grids[g].bin(now)][s];
 
 			now += d;
 
@@ -290,8 +332,8 @@ namespace frame_time {
 		return v != 0 && r <= max;
 	}
 
-	// the delta table and time grid, at the front of the stream holding the times
-	inline void write_table(bit_stream& t, const std::vector<int>& table, u32 grid) {
+	// the delta table and time grid, at the front of the stream holding the times (custom: the period of GRID_CUSTOM)
+	inline void write_table(bit_stream& t, const std::vector<int>& table, u32 grid, _grid_period custom = {}) {
 
 		t.small_write<5>((u32)table.size());
 
@@ -333,14 +375,21 @@ namespace frame_time {
 		for (int b{}; b < 3; ++b)
 			t.push_back((grid >> b) & 1);
 
+		if (grid == GRID_CUSTOM) {
+
+			t.write_bucket(custom.num, 7);
+			t.write_bucket(custom.den, 3);
+
+		}
+
 	}
 
 	// from t's cursor, t ends past it
-	inline std::vector<int> read_table(_bit_view& t, u32& grid) {
+	inline bool read_table(_bit_view& t, std::vector<int>& table, _time_grid& grid) {
 
 		const size_t n{ t.small_read<5>() };
 
-		std::vector<int> table;
+		table.clear();
 
 		u64 used{};
 		u32 at{ TABLE_FIRST };
@@ -385,12 +434,26 @@ namespace frame_time {
 
 		}
 
-		grid = 0;
+		const u32 code{ (u32)t.read_bits<3>() };
 
-		for (int b{}; b < 3; ++b)
-			grid |= (u32)t.read_bits<1>() << b;
+		if (code < GRID_PERIOD_COUNT) {
 
-		return table;
+			grid = _time_grid{ code };
+
+			return true;
+		}
+
+		if (code != GRID_CUSTOM)
+			return false;
+
+		const _grid_period custom{ t.read_bucket<7>(), t.read_bucket<3>() };
+
+		if (custom.num == 0 || custom.den == 0 || custom.num > GRID_CUSTOM_MAX || custom.den > GRID_CUSTOM_MAX)
+			return false;
+
+		grid = _time_grid{ custom };
+
+		return true;
 	}
 
 }

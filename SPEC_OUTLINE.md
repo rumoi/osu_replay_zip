@@ -28,6 +28,10 @@ only has to print the same 7 significant digits.
 
 - **Bit packing.** Bit fields are written least significant bit first, and bits fill each byte starting from its low
   bit. Reading past the end of a bit field gives 0.
+- **Lists.** A list with neither a fixed length nor an upper bound must end with a sentinel. The sentinel may be a
+  direct value, or inferred. A list may define its own sentinel, but reading 0 must also end the list. Reading past
+  the end of a bit field gives 0, so damaged or truncated data always ends its lists. Every such list added to the
+  format must follow this rule.
 - **`bucket(b1, b2, …)`** is a variable-length unsigned code. For each width `b` in turn:
   - if the value is below `2^b − 1`, write it in `b` bits and stop;
   - otherwise write `b` one bits, subtract `2^b − 1` and continue.
@@ -371,7 +375,11 @@ change.
      already in the table are skipped when ranking.
    - The first entry uses row 33, and each later entry uses row `min(previous symbol, 32)`. The 34 rows, each a
      permutation of the 96 symbols, are normative data.
-2. **Time grid**: 3 bits choosing a period from `{50/3, 25, 25/2, 100/3, 20, none}` ms. It is only used as context.
+2. **Time grid**: 3 bits choosing a period from `{none, 50/3, 25, 25/2, 100/3, 20}` ms (codes 0–5), or code 6 for a
+   custom period of `num / den` ms, followed by `num` as `bucket(7)` and `den` as `bucket(3)` (other play rates, such as
+   osu!lazer's rate mods: 1.4× is 70/3).
+   A reader rejects code 7, and a custom period where either `num` or `den` is outside the range of 1 to 65535.
+   It is only used as context.
 3. **Device model** for x, then for y: §6.3.
 4. **Autopilot**, for mode 7 only: the game speed (`small<2>`: 1.0, 1.5 or 0.75) and the screen width and height (§6.6).
 5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step and a 64-bit offset in 32.32 fixed point, with the sum
@@ -604,6 +612,7 @@ A decoder only reads what the encoder chose. The format leaves these choices fre
 - the device model of each axis, if any (text fits every replay, §6.3), its segments, the native grids and whether
   autopilot is on (mode 7);
 - the order of the delta table;
+- the time grid (the reference encoder picks one of codes 0–5, and does not write custom periods yet);
 - whether to use the compact forms of §8 and §9.
 
 The reference encoder refuses an `.osr` whose replay data length runs past the end of the file:

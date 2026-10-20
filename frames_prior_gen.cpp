@@ -130,7 +130,7 @@ namespace {
 
 		r.side.axis = r.info.axis;
 		r.side.table = std::move(head.table);
-		r.side.grid = frame_time::_time_grid{ head.grid };
+		r.side.grid = head.grid;
 		r.side.mode = get_e_mode(flags);
 		r.side.ap = head.ap;
 		r.side.std_default_time = head.std_default_time;
