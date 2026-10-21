@@ -5,9 +5,6 @@ replay back. It describes the format rather than this repository's code. Where t
 too large to restate (model tables, symbol orders, context definitions), the outline names that data and where it
 is defined.
 
-The format is version 0 and still changing. Every format change so far has been breaking, and the version number
-has not yet been raised.
-
 ## 1. Scope and guarantees
 
 An `.orz` file holds one osu! replay, given either as a full `.osr` file or as bare replay data (the LZMA stream of
@@ -23,6 +20,11 @@ Decoding gives back:
 
 Frames are reproduced to the text they print as, not always bit for bit. With classic 7-digit text (§4), a float
 only has to print the same 7 significant digits.
+
+An `.orz` file may additionally hold custom containers (§3.2).\
+These are arbitrary named blobs supplied by the encoder (for example 
+tool metadata, timestamps, or other side data). Decoding the replay ignores them; their presence or absence does not
+affect the guarantees above. A reader that does not recognise a custom container’s name may skips its bytes.
 
 ## 2. Conventions
 
