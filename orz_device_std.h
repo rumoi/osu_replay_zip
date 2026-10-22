@@ -1251,9 +1251,9 @@ namespace standard {
 						if (std::isfinite(r.score))
 							early_score[i * 2 + fp] = r.score;
 
-						clean = r.escapes * 100 < tablet_frames;
+						if(clean = r.escapes * 100 < tablet_frames)
+							break;
 
-						break;
 					}
 
 				}
