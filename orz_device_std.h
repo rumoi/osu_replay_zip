@@ -24,7 +24,7 @@ namespace standard {
 
 		in.reserve(p.size());
 
-		for (double w : { 0.05, 0.01, 0.002, 0.0005, 0.0002, 0.0001, 0.0001 }) {
+		for (double w : { 0.05, 0.01, 0.002, 0.0005, 0.0002, 0.0001 }) {
 
 			const double win{ std::min(w, 0.2 * s) };
 
@@ -1233,15 +1233,14 @@ namespace standard {
 
 				constexpr size_t N{ 400 };
 
-				for (const auto& q : cands)
-					clean |= prefix_eval(state, q, vals, dt, bounds, N, (N - 1) / 100).escapes * 100 < N;
+				for (const auto& q : cands) {
+					if (clean = (prefix_eval(state, q, vals, dt, bounds, N, (N - 1) / 100).escapes * 100 < N))
+						break;
+				}
 
 				for (size_t i{}; i < abs.size() && !clean; ++i) {
 
 					for (u8 fp : { 0, 1 }) {
-
-						if (clean)
-							break;
 
 						auto q{ abs[i] };
 
@@ -1252,8 +1251,9 @@ namespace standard {
 						if (std::isfinite(r.score))
 							early_score[i * 2 + fp] = r.score;
 
-						clean |= r.escapes * 100 < tablet_frames;
+						clean = r.escapes * 100 < tablet_frames;
 
+						break;
 					}
 
 				}
@@ -1948,13 +1948,15 @@ namespace standard {
 
 			}
 
-			i64 best{ std::numeric_limits<i64>::max() };
+			//i64 best{ std::numeric_limits<i64>::max() };
 
-			size_t best_t{ b };
 			i64 left{}, right{};
 
 			for (const int x : missB)
 				right += x;
+
+			i64 best{ right };
+			size_t best_t{ w0 };
 
 			for (size_t t{ w0 + 1 }; t < w1; ++t) {
 
@@ -1962,12 +1964,9 @@ namespace standard {
 				right -= missB[t - 1 - w0];
 
 				if (left + right < best) {
-
 					best = left + right;
 					best_t = t;
-
 				}
-
 			}
 
 			m.seg[k].start = (u32)best_t;
