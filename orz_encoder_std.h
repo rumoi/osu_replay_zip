@@ -524,7 +524,7 @@ namespace standard {
 	}
 
 	inline float grid_field(const dspace::_axis& a, i64 L) {
-		return a.param.mode == dspace::axis_mode::rational ? dspace::rational_value(a.param, L) : dspace::absolute_field(a, L);
+		return a.param.device.kind == dspace::axis_mode::rational ? dspace::rational_value(a.param, L) : dspace::absolute_field(a, L);
 	}
 
 	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const float> vals,
@@ -779,8 +779,8 @@ namespace standard {
 		dspace::axis_streams on_grid[2];
 
 		for (int a{}; a < 2; ++a)
-			if (m.axis[a].seg.size() == 1 && (m.axis[a].seg[0].p.mode == dspace::axis_mode::absolute ||
-				m.axis[a].seg[0].p.mode == dspace::axis_mode::rational)) {
+			if (m.axis[a].seg.size() == 1 && (m.axis[a].seg[0].p.device.kind == dspace::axis_mode::absolute ||
+				m.axis[a].seg[0].p.device.kind == dspace::axis_mode::rational)) {
 
 				grid[a] = fit_grid(p.st[a].K);
 
@@ -894,10 +894,10 @@ namespace standard {
 
 			for (auto& sg : ax.seg) {
 
-				if (sg.p.mode == dspace::axis_mode::none) {
+				if (sg.p.device.kind == dspace::axis_mode::none) {
 
 					sg.p = {};
-					sg.p.mode = dspace::axis_mode::text;
+					sg.p.device.kind = dspace::axis_mode::text;
 
 				}
 
@@ -912,7 +912,7 @@ namespace standard {
 
 		dspace::axis_params p{};
 
-		p.mode = dspace::axis_mode::text;
+		p.device.kind = dspace::axis_mode::text;
 
 		dspace::_model_info m{};
 
@@ -938,10 +938,10 @@ namespace standard {
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		const bool differ{
-			px.field.scale != py.field.scale || px.field.wide != py.field.wide || px.mouse.sens != py.mouse.sens || px.mouse.poll != py.mouse.poll
+			px.game.scale != py.game.scale || px.game.unrounded_sub != py.game.unrounded_sub || px.device.mouse.sens != py.device.mouse.sens || px.device.mouse.poll != py.device.mouse.poll
 		};
 
-		if (px.mode != dspace::axis_mode::mouse || py.mode != dspace::axis_mode::mouse || !differ)
+		if (px.device.kind != dspace::axis_mode::mouse || py.device.kind != dspace::axis_mode::mouse || !differ)
 			return;
 
 		const dspace::axis_params from[2]{ py, px };
@@ -955,12 +955,12 @@ namespace standard {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
-				if (ratio != from[a].field.scale)
+				if (ratio != from[a].game.scale)
 					continue;
 
 				auto q{ from[a] };
 
-				q.field.off = a ? oy : ox;
+				q.game.off = a ? oy : ox;
 
 				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
 
@@ -987,10 +987,10 @@ namespace standard {
 
 		std::vector<dspace::axis_params> cands;
 
-		if (px.mode == dspace::axis_mode::rational) {
+		if (px.device.kind == dspace::axis_mode::rational) {
 
 			// the same lattice, the offset from the most common residue
-			const i64 D{ px.rational.D }, A{ px.rational.a };
+			const i64 D{ px.device.rational.D }, A{ px.device.rational.a };
 
 			std::map<i64, size_t> res;
 
@@ -1013,28 +1013,28 @@ namespace standard {
 
 			auto q{ px };
 
-			q.rational.b = (int)B;
+			q.device.rational.b = (int)B;
 
 			cands.push_back(q);
 
-		} else if (px.mode == dspace::axis_mode::mouse ||
-			(px.mode == dspace::axis_mode::absolute && px.tablet.mapping == dspace::tablet_mapping::window)) {
+		} else if (px.device.kind == dspace::axis_mode::mouse ||
+			(px.device.kind == dspace::axis_mode::absolute && px.device.absolute.mapping == dspace::tablet_mapping::window)) {
 
 			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
-				if (ratio != px.field.scale)
+				if (ratio != px.game.scale)
 					continue;
 
 				auto q{ px };
 
-				q.field.off = oy;
+				q.game.off = oy;
 
-				if (q.mode == dspace::axis_mode::absolute) {
+				if (q.device.kind == dspace::axis_mode::absolute) {
 
-					q.tablet.half = (float)(H / 2);
-					q.tablet.span = (float)H;
+					q.game.window_half = (float)(H / 2);
+					q.device.absolute.span = (float)H;
 
 				}
 
@@ -1072,7 +1072,7 @@ namespace standard {
 
 			const int a{ 1 - m };
 
-			if (p[m]->mode != dspace::axis_mode::mouse || p[a]->mode == dspace::axis_mode::mouse || p[a]->mode == dspace::axis_mode::none)
+			if (p[m]->device.kind != dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::none)
 				continue;
 
 			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
@@ -1081,12 +1081,12 @@ namespace standard {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
-				if (ratio != p[m]->field.scale)
+				if (ratio != p[m]->game.scale)
 					continue;
 
 				auto q{ *p[m] };
 
-				q.field.off = a ? oy : ox;
+				q.game.off = a ? oy : ox;
 
 				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
 
@@ -1122,7 +1122,7 @@ namespace standard {
 			px = detect_axis_model(state, vals[0], dt, 0, nullptr, ws[0]);
 
 			// y's own search only when x's device does not fit it (not osu!catch, whose y is the catcher's fixed height)
-			if (px.mode != dspace::axis_mode::none) {
+			if (px.device.kind != dspace::axis_mode::none) {
 
 				if (game_mode(state.mode()) == 2 || !device_from_x(state, vals[1], dt, px, py, ws[1]))
 					py = detect_axis_model(state, vals[1], dt, 1, &px, ws[1]);
@@ -1132,12 +1132,12 @@ namespace standard {
 				// x found nothing: detect y on its own, then retry x with y's mapping
 				py = detect_axis_model(state, vals[1], dt, 1, nullptr, ws[1]);
 
-				if (py.mode == dspace::axis_mode::absolute)
+				if (py.device.kind == dspace::axis_mode::absolute)
 					px = detect_axis_model(state, vals[0], dt, 0, &py, ws[0]);
 
 			}
 
-			if (px.mode != dspace::axis_mode::none || py.mode != dspace::axis_mode::none)
+			if (px.device.kind != dspace::axis_mode::none || py.device.kind != dspace::axis_mode::none)
 				refine_window(state, vals, dt, px, py, ws);
 
 			try_other_mouse(state, vals, dt, px, py, ws);
@@ -1156,6 +1156,11 @@ namespace standard {
 		for (int a{}; a < 2 && whole_ok; ++a)
 			try_segments |= (ws[a].escapes.size() + ws[a].repeats) * 100 > vals[a].size() * 3;
 
+		// shortest round-trip text (osu!lazer) dont gain from segments
+		// lazer will need to be handled properly in the future if we want higher gain
+		if (state.exact_text())
+			try_segments = false;
+
 		bool found{};
 
 		if (whole_any) {
@@ -1172,7 +1177,7 @@ namespace standard {
 
 			const auto desktops = [&](int a) {
 
-				return whole.axis[a].seg[0].p.mode != dspace::axis_mode::mouse;
+				return whole.axis[a].seg[0].p.device.kind != dspace::axis_mode::mouse;
 			};
 
 			seg.axis[0] = segment_axis(state, vals[0], dt, 0, nullptr, whole.axis[0].all_none(), desktops(0));
@@ -1273,7 +1278,7 @@ namespace standard {
 
 			const auto text_only = [&](int a) {
 
-				return info.axis[a].seg.size() == 1 && info.axis[a].seg[0].p.mode == dspace::axis_mode::text;
+				return info.axis[a].seg.size() == 1 && info.axis[a].seg[0].p.device.kind == dspace::axis_mode::text;
 			};
 
 			if (text_only(0) && text_only(1)) {
@@ -1300,7 +1305,7 @@ namespace standard {
 		for (int a{}; a < 2; ++a) {
 
 			for (const auto& sg : info.axis[a].seg)
-				++state.stats.axis[(size_t)sg.p.mode];
+				++state.stats.axis[(size_t)sg.p.device.kind];
 
 			state.stats.escapes += best.st[a].escapes.size();
 

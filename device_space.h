@@ -70,12 +70,13 @@ namespace dspace {
 	enum class tablet_mapping : u8 { desktop, window };  // window is stable's sAbsoluteToOsuWindow
 	enum class float_unit : u8 { sse, x87 };
 
-	// window pixels -> playfield
-	// field = (pixels - off) * (1 / scale), shared by mouse and tablet
-	struct field_map {
+	// window pixels -> playfield: (pixels - off) * (1 / scale)
+	struct _game_state_model {
+		float_unit fp;
 		float scale, off;
-		bool wide; // pos - off stays unrounded (x87 register) before the multiply
-		bool operator==(const field_map&) const = default;
+		bool unrounded_sub; // pos - off stays unrounded (x87 register) before the multiply
+		float window_half, origin;  // absolute: size / 2, screen origin - client origin
+		bool operator==(const _game_state_model&) const = default;
 	};
 
 	// value = (a * k + b) / D
@@ -90,28 +91,28 @@ namespace dspace {
 		bool operator==(const mouse_params&) const = default;
 	};
 
-	struct tablet_params {
+	struct _input_device_model {
 
-		tablet_mapping mapping;
-
-		float_unit fp;
-
-		float span, origin, half, speed;  // screen or window size, screen origin - client origin, size / 2, speed
-
-		bool operator==(const tablet_params&) const = default;
-	};
-
-	struct axis_params {
-
-		axis_mode mode;
-
-		field_map field;
+		axis_mode kind;
 
 		rational_params rational;
 
 		mouse_params mouse;
 
-		tablet_params tablet;
+		struct _absolute {
+			tablet_mapping mapping;
+			float span, speed;  // the window or the desktop, speed
+			bool operator==(const _absolute&) const = default;
+		} absolute;
+
+		bool operator==(const _input_device_model&) const = default;
+	};
+
+	struct axis_params {
+
+		_input_device_model device;
+
+		_game_state_model game;
 
 		bool operator==(const axis_params&) const = default;
 	};
@@ -124,7 +125,7 @@ namespace dspace {
 		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1152, 864 }, { 1600, 1024 }, { 1920, 1440 },
 	};
 
-	FORCEINLINE auto playfield(int W, int H) {
+	FORCEINLINE constexpr auto playfield(int W, int H) {
 
 		struct _playfield {
 			float ratio, off_x, off_y;
@@ -166,7 +167,7 @@ namespace dspace {
 		bool any_none() const {
 
 			for (const auto& s : seg)
-				if (s.p.mode == axis_mode::none)
+				if (s.p.device.kind == axis_mode::none)
 					return true;
 
 			return seg.empty();
@@ -175,7 +176,7 @@ namespace dspace {
 		bool all_none() const {
 
 			for (const auto& s : seg)
-				if (s.p.mode != axis_mode::none)
+				if (s.p.device.kind != axis_mode::none)
 					return false;
 
 			return true;
@@ -187,11 +188,11 @@ namespace dspace {
 	};
 
 	FORCEINLINE float rational_value(const axis_params& p, i64 k) {
-		return (float)(((double)p.rational.a * (double)k + p.rational.b) / (double)p.rational.D);
+		return (float)(((double)p.device.rational.a * (double)k + p.device.rational.b) / (double)p.device.rational.D);
 	}
 
 	FORCEINLINE i64 rational_k(const axis_params& p, float x) {
-		return round_i64(((double)x * p.rational.D - p.rational.b) / p.rational.a);
+		return round_i64(((double)x * p.device.rational.D - p.device.rational.b) / p.device.rational.a);
 	}
 
 	// tablet/touch screen - all absolute positional devices
@@ -199,49 +200,49 @@ namespace dspace {
 
 		// all taken from osu!stable
 
-		if (p.tablet.mapping == tablet_mapping::window) {
+		if (p.device.absolute.mapping == tablet_mapping::window) {
 
 			// ((float)((L - 32768) * speed) + 32768) / 65536 * W
 
-			if (p.tablet.fp == float_unit::sse) {
+			if (p.game.fp == float_unit::sse) {
 
-				float a{ (float)(L - 32768) * p.tablet.speed };
+				float a{ (float)(L - 32768) * p.device.absolute.speed };
 				a = a + 32768.f;
 				a = a / 65536.f;
 
-				return a * p.tablet.span;
+				return a * p.device.absolute.span;
 			}
 
-			const float a{ (float)((double)(L - 32768) * p.tablet.speed) };
+			const float a{ (float)((double)(L - 32768) * p.device.absolute.speed) };
 
-			return (float)(((double)a + 32768.0) / 65536.0 * p.tablet.span);
+			return (float)(((double)a + 32768.0) / 65536.0 * p.device.absolute.span);
 		}
 
 		// ToScreenCoords: (float)L / 65536 * width + screen.X; then - ClientBounds.X; then (pos - W/2) * speed + W/2
 		// origin = screen.X - client.X is applied as one sub
-		if (p.tablet.fp == float_unit::sse) {
+		if (p.game.fp == float_unit::sse) {
 
 			float a{ (float)L / 65536.f };
 
-			a = a * p.tablet.span;
+			a = a * p.device.absolute.span;
 
-			a = a - (-p.tablet.origin);
+			a = a - (-p.game.origin);
 
-			if (p.tablet.speed != 1.f) {
-				a = a - p.tablet.half;
-				a = a * p.tablet.speed;
-				a = a + p.tablet.half;
+			if (p.device.absolute.speed != 1.f) {
+				a = a - p.game.window_half;
+				a = a * p.device.absolute.speed;
+				a = a + p.game.window_half;
 			}
 
 			return a;
 		}
 
-		float a{ (float)((double)L / 65536.0 * p.tablet.span) };
+		float a{ (float)((double)L / 65536.0 * p.device.absolute.span) };
 
-		a = (float)((double)a + p.tablet.origin);
+		a = (float)((double)a + p.game.origin);
 
-		if (p.tablet.speed != 1.f)
-			a = (float)(((double)a - p.tablet.half) * p.tablet.speed + p.tablet.half);
+		if (p.device.absolute.speed != 1.f)
+			a = (float)(((double)a - p.game.window_half) * p.device.absolute.speed + p.game.window_half);
 
 		return a;
 	}
@@ -249,30 +250,30 @@ namespace dspace {
 	// GameField.Ratio as the x87 JIT returns it: Height / 384 unrounded, Height = 384 * (float)(H / 480)
 	inline double field_ratio_x87(const axis_params& p) {
 
-		const int H{ (int)std::lround((double)p.field.scale * 480.0) };
+		const int H{ (int)std::lround((double)p.game.scale * 480.0) };
 		const float height{ 384.f * ((float)H / 480.f) };
 
-		return same_bits(height / 384.f, p.field.scale) ? (double)height / 384.0 : (double)p.field.scale;
+		return same_bits(height / 384.f, p.game.scale) ? (double)height / 384.0 : (double)p.game.scale;
 	}
 
 	inline float window_size(const axis_params& p) {
 
-		const int H{ (int)std::lround((double)p.field.scale * 480.0) };
+		const int H{ (int)std::lround((double)p.game.scale * 480.0) };
 
 		if (H <= 0 || H > 20000)
 			return 0.f;
 
 		const auto f{ playfield(0, H) };
 
-		if (!same_bits(f.ratio, p.field.scale))
+		if (!same_bits(f.ratio, p.game.scale))
 			return 0.f;
 
-		if (same_bits(f.off_y, p.field.off))
+		if (same_bits(f.off_y, p.game.off))
 			return (float)H;
 
-		const int W{ (int)std::lround(2.0 * p.field.off + 512.0 * ((double)H / 480.0)) };
+		const int W{ (int)std::lround(2.0 * p.game.off + 512.0 * ((double)H / 480.0)) };
 
-		if (W > 0 && W < 40000 && same_bits(playfield(W, H).off_x, p.field.off))
+		if (W > 0 && W < 40000 && same_bits(playfield(W, H).off_x, p.game.off))
 			return (float)W;
 
 		return 0.f;
@@ -293,15 +294,15 @@ namespace dspace {
 
 		const axis_params& p{ a.param };
 
-		if (p.field.wide && (p.mode == axis_mode::mouse || p.mode == axis_mode::absolute))
-			return (float)(((double)pos - (double)p.field.off) * (1.0 / (double)p.field.scale));
+		if (p.game.unrounded_sub && (p.device.kind == axis_mode::mouse || p.device.kind == axis_mode::absolute))
+			return (float)(((double)pos - (double)p.game.off) * (1.0 / (double)p.game.scale));
 
-		const float d{ pos - p.field.off };
+		const float d{ pos - p.game.off };
 
-		if (p.mode == axis_mode::mouse || (p.mode == axis_mode::absolute && p.tablet.fp == float_unit::x87))
+		if (p.device.kind == axis_mode::mouse || (p.device.kind == axis_mode::absolute && p.game.fp == float_unit::x87))
 			return (float)((double)d / a.ratio_x87);
 
-		const float inv{ 1.f / p.field.scale };
+		const float inv{ 1.f / p.game.scale };
 
 		return d * inv;
 	}
@@ -313,15 +314,15 @@ namespace dspace {
 
 	inline i64 absolute_L_guess(const axis_params& p, float x) {
 
-		double pos{ (double)x * p.field.scale + p.field.off };
+		double pos{ (double)x * p.game.scale + p.game.off };
 
-		if (p.tablet.mapping == tablet_mapping::window)
-			return round_i64(((pos / p.tablet.span) * 65536.0 - 32768.0) / p.tablet.speed + 32768.0);
+		if (p.device.absolute.mapping == tablet_mapping::window)
+			return round_i64(((pos / p.device.absolute.span) * 65536.0 - 32768.0) / p.device.absolute.speed + 32768.0);
 
-		if (p.tablet.speed != 1.f)
-			pos = (pos - p.tablet.half) / p.tablet.speed + p.tablet.half;
+		if (p.device.absolute.speed != 1.f)
+			pos = (pos - p.game.window_half) / p.device.absolute.speed + p.game.window_half;
 
-		return round_i64((pos - p.tablet.origin) * 65536.0 / p.tablet.span);
+		return round_i64((pos - p.game.origin) * 65536.0 / p.device.absolute.span);
 	}
 
 	constexpr i64 MOUSE_MAX_REPORTS{ 1ll << 16 };
@@ -330,7 +331,7 @@ namespace dspace {
 
 		const i64 n{ std::abs(dk) };
 
-		const double want{ std::clamp((double)dt * p.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
+		const double want{ std::clamp((double)dt * p.device.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
 
 		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
@@ -349,7 +350,7 @@ namespace dspace {
 
 			const i64 c{ n / m + (q < n % m) };
 
-			X = (float)((double)X + (double)(sgn * c) * (double)a.param.mouse.sens);
+			X = (float)((double)X + (double)(sgn * c) * (double)a.param.device.mouse.sens);
 
 			if (size > 0.f)
 				X = std::clamp(X, 0.f, size - 1.f);
@@ -489,7 +490,7 @@ namespace dspace {
 
 		const dotnet::text_bounds b{ x, exact_text };
 
-		float Y{ (float)((double)x * a.param.field.scale + a.param.field.off) };
+		float Y{ (float)((double)x * a.param.game.scale + a.param.game.off) };
 		int j;
 
 		ulp_search(Y, MOUSE_SEED_RANGE, j, [&](float v) {
@@ -501,7 +502,7 @@ namespace dspace {
 	}
 
 	FORCEINLINE i64 mouse_dk(const axis_params& p, float x, float X) {
-		return round_i64(std::clamp(((double)x * p.field.scale + p.field.off - X) / p.mouse.sens, -1e7, 1e7));
+		return round_i64(std::clamp(((double)x * p.game.scale + p.game.off - X) / p.device.mouse.sens, -1e7, 1e7));
 	}
 
 	inline bool first_fit(_mouse_candidates& cand, const dotnet::text_bounds& b, int& k, float& Y) {
@@ -572,8 +573,24 @@ namespace dspace {
 		std::vector<int> slack;
 		std::vector<std::pair<u32, float>> escapes;
 		std::vector<float> escape_pred;
-		size_t repeats{};
 		std::vector<float> decoded;
+
+		size_t repeats{};
+
+
+		void clear() {
+
+			K.clear();
+			slack.clear();
+			escapes.clear();
+			escape_pred.clear();
+			decoded.clear();
+
+			repeats = 0;
+
+		}
+
+
 
 	};
 
@@ -717,7 +734,7 @@ namespace dspace {
 			return false;
 		};
 
-		if (p.mode == axis_mode::none) {
+		if (p.device.kind == axis_mode::none) {
 
 			for (size_t i{}; i < vals.size(); ++i)
 				escape(i, NAN);
@@ -730,7 +747,7 @@ namespace dspace {
 			return bounds.empty() ? dotnet::text_bounds{ vals[i], exact_text } : bounds[i];
 		};
 
-		if (p.mode == axis_mode::text) {
+		if (p.device.kind == axis_mode::text) {
 
 			for (size_t i{}; i < vals.size(); ++i) {
 
@@ -791,9 +808,9 @@ namespace dspace {
 
 		};
 
-		if (p.mode == axis_mode::absolute) {
+		if (p.device.kind == axis_mode::absolute) {
 
-			const bool rising{ p.tablet.span > 0.f && p.tablet.speed > 0.f && p.field.scale > 0.f };
+			const bool rising{ p.device.absolute.span > 0.f && p.device.absolute.speed > 0.f && p.game.scale > 0.f };
 
 			lattice([&](float x, const dotnet::text_bounds& b, i64& k, float& v) {
 
@@ -803,7 +820,7 @@ namespace dspace {
 			return o;
 		}
 
-		if (p.mode == axis_mode::rational) {
+		if (p.device.kind == axis_mode::rational) {
 
 			lattice([&](float x, const dotnet::text_bounds& b, i64& k, float& v) {
 
@@ -965,17 +982,17 @@ namespace dspace {
 			const i64 dk{ K[i] - prevK };
 			prevK = K[i];
 
-			if (p.mode == axis_mode::mouse && dk != 0 && (budget -= mouse_reports(p, dk, dt[i])) < 0)
+			if (p.device.kind == axis_mode::mouse && dk != 0 && (budget -= mouse_reports(p, dk, dt[i])) < 0)
 				return false;
 
-			if (p.mode == axis_mode::none) {
+			if (p.device.kind == axis_mode::none) {
 
 				out[i] = escape_value(NAN);
 
 				continue;
 			}
 
-			if (p.mode == axis_mode::text) {
+			if (p.device.kind == axis_mode::text) {
 
 				out[i] = escaped ? escape_value(NAN) : dotnet::from_text_ord(K[i], exact_text);
 
@@ -995,9 +1012,9 @@ namespace dspace {
 
 			held = escaped;
 
-			if (p.mode == axis_mode::rational || p.mode == axis_mode::absolute) {
+			if (p.device.kind == axis_mode::rational || p.device.kind == axis_mode::absolute) {
 
-				const float v{ p.mode == axis_mode::rational ? rational_value(p, K[i]) : absolute_field(a, K[i]) };
+				const float v{ p.device.kind == axis_mode::rational ? rational_value(p, K[i]) : absolute_field(a, K[i]) };
 
 				out[i] = escaped ? escape_value(v) : v;
 
@@ -1069,7 +1086,7 @@ namespace dspace {
 
 	static_assert(std::size(PM_RES) <= (1u << WINDOW_BITS));
 
-	inline int window_of(const field_map& f, int axis) {
+	inline int window_of(const _game_state_model& f, int axis) {
 
 		for (int r{}; r < (int)std::size(PM_RES); ++r) {
 
@@ -1083,7 +1100,7 @@ namespace dspace {
 		return -1;
 	}
 
-	inline void write_field(const field_map& f, int axis, bit_stream& o) {
+	inline void write_field(const _game_state_model& f, int axis, bit_stream& o) {
 
 		const int r{ window_of(f, axis) };
 
@@ -1101,7 +1118,7 @@ namespace dspace {
 
 	}
 
-	inline bool read_field(_bit_view& in, int axis, field_map& f) {
+	inline bool read_field(_bit_view& in, int axis, _game_state_model& f) {
 
 		if (!in.read_bits<1>()) {
 
@@ -1154,36 +1171,36 @@ namespace dspace {
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
-		o.write_bucket((u32)p.mode, 2);
+		o.write_bucket((u32)p.device.kind, 2);
 
-		if (p.mode == axis_mode::rational) {
+		if (p.device.kind == axis_mode::rational) {
 
-			write_u((u32)p.rational.D, o);
-			write_u((u32)p.rational.a, o);
-			write_u((u32)rc::zz(p.rational.b), o);
-
-		}
-
-		if (p.mode == axis_mode::mouse) {
-
-			write_setting(p.mouse.sens, o);
-			write_poll(p.mouse.poll, o);
-			o.push_back(p.field.wide);
-			write_field(p.field, axis, o);
+			write_u((u32)p.device.rational.D, o);
+			write_u((u32)p.device.rational.a, o);
+			write_u((u32)rc::zz(p.device.rational.b), o);
 
 		}
 
-		if (p.mode == axis_mode::absolute) {
+		if (p.device.kind == axis_mode::mouse) {
 
-			o.push_back(p.tablet.mapping == tablet_mapping::window);
-			o.push_back(p.tablet.fp == float_unit::x87);
-			o.push_back(p.field.wide);
+			write_setting(p.device.mouse.sens, o);
+			write_poll(p.device.mouse.poll, o);
+			o.push_back(p.game.unrounded_sub);
+			write_field(p.game, axis, o);
 
-			write_u((u32)p.tablet.span, o);
-			write_u((u32)rc::zz((int)p.tablet.origin), o);
-			write_u((u32)p.tablet.half, o);
-			write_setting(p.tablet.speed, o);
-			write_field(p.field, axis, o);
+		}
+
+		if (p.device.kind == axis_mode::absolute) {
+
+			o.push_back(p.device.absolute.mapping == tablet_mapping::window);
+			o.push_back(p.game.fp == float_unit::x87);
+			o.push_back(p.game.unrounded_sub);
+
+			write_u((u32)p.device.absolute.span, o);
+			write_u((u32)rc::zz((int)p.game.origin), o);
+			write_u((u32)p.game.window_half, o);
+			write_setting(p.device.absolute.speed, o);
+			write_field(p.game, axis, o);
 
 		}
 
@@ -1193,45 +1210,45 @@ namespace dspace {
 
 		p = {};
 
-		p.mode = (axis_mode)in.read_bucket<2>();
+		p.device.kind = (axis_mode)in.read_bucket<2>();
 
-		if (p.mode > axis_mode::text)
+		if (p.device.kind > axis_mode::text)
 			return false; // no detector produces these
 
-		if (p.mode == axis_mode::rational) {
+		if (p.device.kind == axis_mode::rational) {
 
-			p.rational.D = (int)read_u(in);
-			p.rational.a = (int)read_u(in);
-			p.rational.b = (int)rc::unzz(read_u(in));
-
-		}
-
-		if (p.mode == axis_mode::mouse) {
-
-			p.mouse.sens = read_setting(in);
-			p.mouse.poll = read_poll(in);
-
-			if (p.mouse.poll > 8000.f)
-				return false;
-
-			p.field.wide = in.read_bits<1>() != 0;
-
-			if (!read_field(in, axis, p.field))
-				return false;
+			p.device.rational.D = (int)read_u(in);
+			p.device.rational.a = (int)read_u(in);
+			p.device.rational.b = (int)rc::unzz(read_u(in));
 
 		}
 
-		if (p.mode == axis_mode::absolute) {
+		if (p.device.kind == axis_mode::mouse) {
 
-			p.tablet.mapping = in.read_bits<1>() ? tablet_mapping::window : tablet_mapping::desktop;
-			p.tablet.fp = in.read_bits<1>() ? float_unit::x87 : float_unit::sse;
-			p.field.wide = in.read_bits<1>() != 0;
-			p.tablet.span = (float)read_u(in);
-			p.tablet.origin = (float)rc::unzz(read_u(in));
-			p.tablet.half = (float)read_u(in);
-			p.tablet.speed = read_setting(in);
+			p.device.mouse.sens = read_setting(in);
+			p.device.mouse.poll = read_poll(in);
 
-			if (!read_field(in, axis, p.field))
+			if (p.device.mouse.poll > 8000.f)
+				return false;
+
+			p.game.unrounded_sub = in.read_bits<1>() != 0;
+
+			if (!read_field(in, axis, p.game))
+				return false;
+
+		}
+
+		if (p.device.kind == axis_mode::absolute) {
+
+			p.device.absolute.mapping = in.read_bits<1>() ? tablet_mapping::window : tablet_mapping::desktop;
+			p.game.fp = in.read_bits<1>() ? float_unit::x87 : float_unit::sse;
+			p.game.unrounded_sub = in.read_bits<1>() != 0;
+			p.device.absolute.span = (float)read_u(in);
+			p.game.origin = (float)rc::unzz(read_u(in));
+			p.game.window_half = (float)read_u(in);
+			p.device.absolute.speed = read_setting(in);
+
+			if (!read_field(in, axis, p.game))
 				return false;
 
 		}
@@ -1243,18 +1260,18 @@ namespace dspace {
 
 		y = x;
 
-		if (x.mode == axis_mode::rational)
+		if (x.device.kind == axis_mode::rational)
 			return true;
 
-		if (x.mode != axis_mode::mouse)
+		if (x.device.kind != axis_mode::mouse)
 			return false;
 
-		const int r{ window_of(x.field, 0) };
+		const int r{ window_of(x.game, 0) };
 
 		if (r < 0)
 			return false;
 
-		y.field.off = playfield(PM_RES[r][0], PM_RES[r][1]).off_y;
+		y.game.off = playfield(PM_RES[r][0], PM_RES[r][1]).off_y;
 
 		return true;
 	}

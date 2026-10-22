@@ -271,10 +271,11 @@ namespace standard {
 			return double(ok) / t.size();
 		};
 
-		const auto search = [&](int max_div, double min_step) {
+		const auto search = [&](int max_div, double min_step, size_t max_climbs) {
 
 			double best{}, last{ -1.0 };
 			int tried{};
+			size_t climbs{};
 
 			for (size_t j{}; j < d.size() && tried < 8; ++j) {
 
@@ -285,6 +286,9 @@ namespace standard {
 				++tried;
 
 				for (int m{ 1 }; m <= max_div && d[j] / m >= min_step; ++m) {
+					
+					if (climbs++ == max_climbs)
+						return best;
 
 					const double s{ climb(d[j] / m) };
 
@@ -307,10 +311,10 @@ namespace standard {
 			return best;
 		};
 
-		double best_s{ search(32, 0.004) };
+		double best_s{ search(32, 0.004, SIZE_MAX) };
 
 		if (best_s == 0.0)
-			best_s = search(256, 3e-4);
+			best_s = search(256, 0.0003, 512);
 
 		if (best_s == 0.0)
 			return false;
@@ -439,7 +443,7 @@ namespace standard {
 		if (game_mode(state.mode()) == 2)
 			return bits;
 
-		return p.mode == dspace::axis_mode::absolute ? bits * 15 / 16 : p.mode == dspace::axis_mode::mouse ? bits * 17 / 16 : bits;
+		return p.device.kind == dspace::axis_mode::absolute ? bits * 15 / 16 : p.device.kind == dspace::axis_mode::mouse ? bits * 17 / 16 : bits;
 	}
 
 	using dspace::PM_RES;
@@ -535,19 +539,19 @@ namespace standard {
 		return prefix_eval(state, p, vals, dt, bounds, n, escape_cap(bound)).score;
 	}
 
-	static bool near_grid(double v, double step, double tol) {
+	FORCEINLINE bool near_grid(const double v, const double step, const double tol) {
 
 		const double q{ v / step };
 
 		return std::abs(q - (double)dspace::round_i64(q)) <= tol;
 	}
 
-	static int setting_values(double v, double tol, bool exact, float out[2]) {
+	FORCEINLINE int setting_values(const double v, const double tol, const bool exact, float out[2]) {
 
 		int n{};
 
 		if (near_grid(v, 0.01, tol))
-			out[n++] = (float)(std::round(v * 100.) / 100.);
+			out[n++] = (float)(0.01 * u32(v * 100. + 0.5));
 
 		if (exact)
 			out[n++] = (float)v;
@@ -717,6 +721,377 @@ namespace standard {
 		return counted;
 	}
 
+	using step_list = std::vector<std::pair<double, double>>;
+
+	static bool rational_candidate(std::span<const float> p, double s, dspace::axis_params& q) {
+
+		for (int D{ 1 }; D <= 65536; ++D) {
+
+			const double a{ s * D };
+
+			const auto round_a{ std::round(a) };
+
+			if (round_a < 1. || std::abs(a - round_a) >= 0.0001)
+				continue;
+
+			_fast_divisor A((i64)std::llround(a));
+
+			std::map<i64, size_t> res;
+
+			for (size_t i{}; i < p.size(); i += std::max<size_t>(1, p.size() / 2000)) {
+
+				const auto k = (i64)std::llround((double)p[i] * D);
+
+				++res[A.mod_signed(k)];
+
+			}
+
+			i64 B{};
+			size_t bc{};
+
+			for (auto& [v, n] : res) {
+
+				if (n > bc) {
+
+					bc = n;
+					B = v;
+
+				}
+
+			}
+
+			q = {};
+
+			q.device.kind = dspace::axis_mode::rational;
+
+			q.device.rational.D = D;
+
+			q.device.rational.a = (int)A.d;
+			q.device.rational.b = (int)B;
+
+			return true;
+		}
+
+		return false;
+	}
+
+	struct _game_candidate {
+		dspace::_game_state_model game;
+		int win;
+	};
+
+
+	static const auto GAMES_AXIS_TABLE = [] {
+
+		std::array<std::vector<_game_candidate>, 2> g{}; // make std::array with span later
+
+		for (int a{}; a < 2; ++a) {
+
+			for (const auto& [W, H] : PM_RES) {
+
+				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+				_game_candidate c{};
+
+				c.game.scale = ratio;
+				c.game.off = a ? oy : ox;
+				c.win = a ? H : W;
+				c.game.window_half = (float)(c.win / 2);
+
+				const bool seen{ std::any_of(g[a].begin(), g[a].end(), [&c](const _game_candidate& e) {
+
+					return e.game == c.game && e.win == c.win;
+				}) };
+
+				if (!seen)
+					g[a].push_back(c);
+
+			}
+
+		}
+
+		return g;
+	}();
+
+	static auto get_axis_game_candidates(int axis) {
+
+		return std::span<const _game_candidate>{ GAMES_AXIS_TABLE[axis] };
+	}
+
+	static void mouse_candidates(const _game_candidate& g, const step_list& steps, const dspace::axis_params* other, bool refine,
+		std::vector<dspace::axis_params>& mouse) {
+
+		const auto add = [&mouse](const dspace::axis_params& q) {
+
+			for (const auto& m : mouse)
+				if (m.game.scale == q.game.scale && m.game.off == q.game.off
+					&& m.device.mouse.sens == q.device.mouse.sens)
+					return;
+
+			mouse.push_back(q);
+
+		};
+
+		if (other && other->device.kind == dspace::axis_mode::mouse && other->game.scale == g.game.scale) {
+
+			// only the offset differs
+			auto q{ *other };
+
+			q.game.off = g.game.off;
+
+			add(q);
+
+		}
+
+		dspace::axis_params q{};
+
+		q.device.kind = dspace::axis_mode::mouse;
+		q.device.mouse.poll = 1000.f;
+		q.game.scale = g.game.scale;
+		q.game.off = g.game.off;
+
+		for (const auto& [s, c] : steps) {
+
+			const double sens{ s * g.game.scale };
+
+			if (sens < 0.05 || sens > 10.)
+				continue;
+
+			float sv[2];
+			const int n_sens{ setting_values(sens, 0.03, refine, sv) };
+
+			for (int i{}; i < n_sens; ++i) {
+
+				q.device.mouse.sens = sv[i];
+
+				add(q);
+
+			}
+
+		}
+
+	}
+
+	// tablet spans to try on a desktop mapping
+	constexpr int SPANS[]{
+		1920, 2560, 1366, 1360, 1600, 1280, 1680, 1440, 1024, 800,
+		3840, 3440, 1536, 1152, 1400, 1080, 768, 900, 720, 1050, 1200, 600, 2160, 864, 960
+	};
+
+	static void tablet_candidates(const _game_candidate& g, double s, double c, const step_list& steps,
+		const dspace::axis_params* other, bool refine, std::vector<dspace::axis_params>& abs) {
+
+		const float ratio{ g.game.scale };
+
+		if (other && other->device.kind == dspace::axis_mode::absolute && other->game.scale == ratio) {
+
+			auto q{ *other };
+
+			q.game.off = g.game.off;
+			q.game.window_half = g.game.window_half;
+
+			if (other->device.absolute.mapping == dspace::tablet_mapping::window) {
+
+				q.device.absolute.span = (float)g.win;
+				abs.push_back(q);
+
+			} else {
+
+				for (const int span : SPANS) {
+
+					auto r{ q };
+
+					r.device.absolute.span = (float)span;
+					r.game.origin = 0.f;
+
+					abs.push_back(r);
+
+				}
+
+				const double product{ (double)other->device.absolute.span * other->device.absolute.speed };
+				const double units{ s * ratio * 65536. };
+
+				for (int h{ 5 }; h <= 1000 && s > 0.; ++h) {
+
+					const float sp{ (float)(h / 100.) };
+					const double other_span{ product / sp };
+
+					if (std::abs(other_span - std::round(other_span)) > 1e-3)
+						continue;
+
+					const double span_d{ units / sp };
+					const int span{ (int)std::lround(span_d) };
+
+					if (span < 100 || std::abs(span_d - span) > 0.25)
+						continue;
+
+					auto r{ q };
+
+					r.device.absolute.span = (float)span;
+					r.device.absolute.speed = sp;
+
+					const double pos_c{ c * ratio + q.game.off };
+					const double base{ (pos_c - q.game.window_half) / sp + q.game.window_half };
+					const double step{ (double)span / 65536. };
+
+					int found{};
+
+					for (int k{}; found < 4 && k <= 8000; ++k) {
+
+						const int o{ k & 1 ? -(k + 1) / 2 : k / 2 };
+
+						if (near_grid(base - o, step, 0.03)) {
+
+							r.game.origin = (float)o;
+							abs.push_back(r);
+							++found;
+
+						}
+
+					}
+
+				}
+
+			}
+
+		}
+
+		for (const auto& [s, c] : steps) {
+
+			const double q{ s * ratio };
+			const double units{ q * 65536. };
+			const double pos_c{ c * ratio + g.game.off };
+
+			const int win{ g.win };
+
+			dspace::axis_params t{};
+
+			t.device.kind = dspace::axis_mode::absolute;
+			t.game = g.game;
+
+			{ // window mapping
+
+				const double speed{ units / win };
+
+				float sv[2];
+				const int n_speeds{ setting_values(speed, 0.01, refine, sv) };
+
+				if (speed > 0.05 && speed < 10. && n_speeds > 0 && near_grid(pos_c - win / 2., q, 0.05)) {
+
+					auto a{ t };
+
+					a.device.absolute.mapping = dspace::tablet_mapping::window;
+					a.device.absolute.span = (float)win;
+
+					for (int i{}; i < n_speeds; ++i) {
+
+						a.device.absolute.speed = sv[i];
+						abs.push_back(a);
+
+					}
+
+				}
+
+			}
+
+			// desktop mapping
+			for (const int span : SPANS) {
+
+				const double speed{ units / span };
+
+				float sps[2];
+				const int nsp{ setting_values(speed, 0.01, refine, sps) };
+
+				if (speed < 0.05 || speed > 10.0 || nsp == 0)
+					continue;
+
+				for (int si{}; si < nsp; ++si) {
+
+					const float sp{ sps[si] };
+
+					// origin = (screen x - client x)
+					// pos = (L * span / 65536 + origin - half) * speed + half
+					const double base{ (pos_c - t.game.window_half) / sp + t.game.window_half };
+					const double step{ (double)span / 65536. };
+
+					std::vector<int> origins;
+
+					const size_t max_origins{ refine && si + 1 == nsp ? 1u : 4u };
+
+					for (int o{}; origins.size() < max_origins && o <= 4000; ++o) {
+
+						if (near_grid(base - o, step, 0.03))
+							origins.push_back(o);
+
+						if (o && origins.size() < max_origins && near_grid(base + o, step, 0.03))
+							origins.push_back(-o);
+
+					}
+
+					for (const int o : origins) {
+
+						auto a{ t };
+
+						a.device.absolute.mapping = dspace::tablet_mapping::desktop;
+						a.device.absolute.span = (float)span;
+						a.device.absolute.speed = sp;
+						a.game.origin = (float)o;
+
+						abs.push_back(a);
+
+					}
+
+				}
+
+			}
+
+		}
+
+	}
+
+	static void virtual_candidates(const _game_candidate& g, double s, double c, double field_lo, double field_hi,
+		std::vector<dspace::axis_params>& abs, std::set<std::array<float, 4>>& listed, std::vector<virtual_group>& vgroups) {
+
+		const float ratio{ g.game.scale };
+
+		const double units{ s * ratio * 65536. };
+
+		if (!near_grid(units, 1.0, 0.05) || units < 200.)
+			return;
+
+		const int span{ (int)std::llround(units) };
+		const double q{ span / 65536. };
+		const double pos_c{ c * ratio + g.game.off };
+
+		const double window_lo{ field_lo * ratio + g.game.off };
+		const double window_hi{ field_hi * ratio + g.game.off };
+		const int o_from{ (int)std::max(-8000., std::floor(window_hi - span) - 1) };
+		const int o_to{ (int)std::min(8000., std::ceil(window_lo) + 1) };
+
+		vgroups.push_back({ abs.size(), abs.size(), ratio, g.game.off, span, o_from, o_to });
+
+		for (int o{ o_from }; o <= o_to; ++o) {
+
+			if (!near_grid(pos_c - o, q, 0.01))
+				continue;
+
+			dspace::axis_params a{};
+
+			a.device.kind = dspace::axis_mode::absolute;
+			a.game = g.game;
+			a.device.absolute.span = (float)span;
+			a.device.absolute.speed = 1.f;
+			a.game.origin = (float)o;
+
+			if (listed.insert({ a.game.scale, a.game.off, a.device.absolute.span, a.game.origin }).second)
+				abs.push_back(a);
+
+		}
+
+		vgroups.back().to = abs.size();
+
+	}
+
 	// tries to find the best model for one axis.
 	// failing to find one is the huge perf problem - having to try and bruteforce an acceptable solution
 	static dspace::axis_params detect_axis_model(orz_state& state, std::span<const float> vals, std::span<const int> dt,
@@ -724,7 +1099,7 @@ namespace standard {
 
 		const dspace::axis_params none{};
 
-		streams = {};
+		streams.clear();
 
 		if (vals.size() < 64)
 			return none;
@@ -737,7 +1112,7 @@ namespace standard {
 		const std::span<const float> p{ vals.subspan(2) };
 
 		// no step may be found here even though the other axis found a mapping
-		const bool reuse_absolute{ other && other->mode == dspace::axis_mode::absolute };
+		const bool reuse_absolute{ other && other->device.kind == dspace::axis_mode::absolute };
 
 		double s{}, c{};
 
@@ -756,353 +1131,71 @@ namespace standard {
 
 		std::vector<dspace::axis_params> cands;
 
-		// check for a simple rational term first
-
-		for (int D{ 1 }; !refine && D <= 65536; ++D) {
-
-			const double a{ s * D };
-
-			if (std::round(a) < 1. || std::abs(a - std::round(a)) >= 0.0001)
-				continue;
-
-			const i64 A{ std::llround(a) };
-
-			std::map<i64, size_t> res;
-
-			for (size_t i{}; i < p.size(); i += std::max<size_t>(1, p.size() / 2000))
-				++res[((std::llround((double)p[i] * D) % A) + A) % A];
-
-			i64 B{};
-			size_t bc{};
-
-			for (auto& [v, n] : res) {
-
-				if (n > bc) {
-
-					bc = n;
-					B = v;
-
-				}
-
-			}
-
-			dspace::axis_params q{};
-			q.mode = dspace::axis_mode::rational;
-
-			q.rational.D = D;
-
-			q.rational.a = (int)A;
-			q.rational.b = (int)B;
-
+		// a simple rational term first
+		if (dspace::axis_params q; !refine && rational_candidate(p, s, q))
 			cands.push_back(q);
 
-			break;
+		std::vector<dspace::axis_params> mouse, abs;
+
+		const auto& games{ get_axis_game_candidates(axis) };
+
+		for (const auto& g : games) {
+
+			mouse_candidates(g, steps, other, refine, mouse);
+			tablet_candidates(g, s, c, steps, other, refine, abs);
+
 		}
 
 		constexpr size_t PREFIX{ 2000 };
 
-		// refine tries a sensitivity per window, ranks them on fewer frames
 		constexpr size_t REFINE_PREFIX{ 500 };
 
-		{ // window sizes where playfield scale turns the step into a 0.01 sensitivity
+		if (!mouse.empty()) {
 
-			std::vector<dspace::axis_params> mouse;
+			dspace::axis_params best{};
 
-			const auto add = [&](dspace::axis_params q) {
+			double best_score{ std::numeric_limits<double>::max() };
 
-				for (const auto& m : mouse)
-					if (m.field.scale == q.field.scale && m.field.off == q.field.off
-						&& m.mouse.sens == q.mouse.sens)
-						return;
+			for (const auto& q : mouse) {
 
-				mouse.push_back(q);
+				const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
 
-			};
+				if (sc < best_score) {
 
-			if (other && other->mode == dspace::axis_mode::mouse) {
-
-				// same window and mouse as the other axis, so only the offset differs
-
-				for (const auto& [W, H] : PM_RES) {
-
-					const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-					if (ratio != other->field.scale)
-						continue;
-
-					auto q{ *other };
-
-					q.field.off = axis ? oy : ox;
-
-					add(q);
+					best_score = sc;
+					best = q;
 
 				}
 
 			}
 
-			for (const auto& [s, c] : steps)
-			for (const auto& [W, H] : PM_RES) {
+			const auto base{ best };
 
-				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+			for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f }) {
 
-				const double sens{ s * ratio };
-
-				float sv[2];
-				const int n_sens{ setting_values(sens, 0.03, refine, sv) };
-
-				if (sens < 0.05 || sens > 10.0 || n_sens == 0)
+				if (poll == base.device.mouse.poll)
 					continue;
 
-				dspace::axis_params q{};
+				auto q{ base };
 
-				q.mode = dspace::axis_mode::mouse;
-				q.field.scale = ratio;
-				q.mouse.poll = 1000.f;
-				q.field.off = axis ? oy : ox;
+				q.device.mouse.poll = poll;
 
-				for (int i{}; i < n_sens; ++i) {
+				const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
 
-					q.mouse.sens = sv[i];
-					add(q);
+				if (sc < best_score) {
+
+					best_score = sc;
+					best = q;
 
 				}
 
 			}
 
-			if (!mouse.empty()) {
-
-				dspace::axis_params best{};
-
-				double best_score{ std::numeric_limits<double>::max() };
-
-				for (const auto& q : mouse) {
-
-					const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
-
-					if (sc < best_score) {
-
-						best_score = sc;
-						best = q;
-
-					}
-
-				}
-
-				const auto base{ best };
-
-				for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f }) {
-
-					if (poll == base.mouse.poll)
-						continue;
-
-					auto q{ base };
-
-					q.mouse.poll = poll;
-
-					const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
-
-					if (sc < best_score) {
-
-						best_score = sc;
-						best = q;
-
-					}
-
-				}
-
-				cands.push_back(best);
-
-			}
+			cands.push_back(best);
 
 		}
 
-		{ // absolute postion device, 0-65535
-
-			// just check through some common axis sizes
-			constexpr int SPANS[]{
-				1920, 2560, 1366, 1360, 1600, 1280, 1680, 1440, 1024, 800,
-				3840, 3440, 1536, 1152, 1400, 1080, 768, 900, 720, 1050, 1200, 600, 2160, 864, 960
-			};
-
-			std::vector<dspace::axis_params> abs;
-
-			if (reuse_absolute) {
-
-				for (const auto& [W, H] : PM_RES) {
-
-					const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-					if (ratio != other->field.scale)
-						continue;
-
-					auto q{ *other };
-
-					q.field.off = axis ? oy : ox;
-					q.tablet.half = (float)((axis ? H : W) / 2);
-
-					if (other->tablet.mapping == dspace::tablet_mapping::window) {
-
-						q.tablet.span = (float)(axis ? H : W);
-						abs.push_back(q);
-
-					} else {
-
-						for (const int span : SPANS) {
-
-							auto r{ q };
-
-							r.tablet.span = (float)span;
-							r.tablet.origin = 0.f;
-
-							abs.push_back(r);
-
-						}
-
-						const double product{ (double)other->tablet.span * other->tablet.speed };
-						const double units{ s * ratio * 65536. };
-
-						for (int h{ 5 }; h <= 1000 && s > 0.; ++h) {
-
-							const float sp{ (float)(h / 100.) };
-							const double other_span{ product / sp };
-
-							if (std::abs(other_span - std::round(other_span)) > 1e-3)
-								continue;
-
-							const double span_d{ units / sp };
-							const int span{ (int)std::lround(span_d) };
-
-							if (span < 100 || std::abs(span_d - span) > 0.25)
-								continue;
-
-							auto r{ q };
-
-							r.tablet.span = (float)span;
-							r.tablet.speed = sp;
-
-							const double pos_c{ c * ratio + q.field.off };
-							const double base{ (pos_c - q.tablet.half) / sp + q.tablet.half };
-							const double step{ (double)span / 65536. };
-
-							int found{};
-
-							for (int k{}; found < 4 && k <= 8000; ++k) {
-
-								const int o{ k & 1 ? -(k + 1) / 2 : k / 2 };
-
-								if (near_grid(base - o, step, 0.03)) {
-
-									r.tablet.origin = (float)o;
-									abs.push_back(r);
-									++found;
-
-								}
-
-							}
-
-						}
-
-					}
-
-				}
-
-			}
-
-			for (const auto& [s, c] : steps)
-			for (const auto& [W, H] : PM_RES) {
-
-				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-				const double q{ s * ratio };
-				const double units{ q * 65536. };
-				const double pos_c{ c * ratio + (axis ? oy : ox) };
-
-				const int win{ axis ? H : W };
-
-				dspace::axis_params t{};
-
-				t.mode = dspace::axis_mode::absolute;
-				t.field.scale = ratio;
-				t.field.off = axis ? oy : ox;
-				t.tablet.half = (float)(win / 2);
-
-				{ // window mapping
-
-					const double speed{ units / win };
-
-					float sv[2];
-					const int n_speeds{ setting_values(speed, 0.01, refine, sv) };
-
-					if (speed > 0.05 && speed < 10. && n_speeds > 0 && near_grid(pos_c - win / 2., q, 0.05)) {
-
-						auto a{ t };
-
-						a.tablet.mapping = dspace::tablet_mapping::window;
-						a.tablet.span = (float)win;
-
-						for (int i{}; i < n_speeds; ++i) {
-
-							a.tablet.speed = sv[i];
-							abs.push_back(a);
-
-						}
-
-					}
-
-				}
-
-				// desktop mapping
-				for (const int span : SPANS) {
-
-					const double speed{ units / span };
-
-					float sps[2];
-					const int nsp{ setting_values(speed, 0.01, refine, sps) };
-
-					if (speed < 0.05 || speed > 10.0 || nsp == 0)
-						continue;
-
-					for (int si{}; si < nsp; ++si) {
-
-						const float sp{ sps[si] };
-
-						// origin = (screen x - client x)
-						// pos = (L * span / 65536 + origin - half) * speed + half
-						const double base{ (pos_c - t.tablet.half) / sp + t.tablet.half };
-						const double step{ (double)span / 65536. };
-
-						std::vector<int> origins;
-
-						const size_t max_origins{ refine && si + 1 == nsp ? 1u : 4u };
-
-						for (int o{}; origins.size() < max_origins && o <= 4000; ++o) {
-
-							if (near_grid(base - o, step, 0.03))
-								origins.push_back(o);
-
-							if (o && origins.size() < max_origins && near_grid(base + o, step, 0.03))
-								origins.push_back(-o);
-
-						}
-
-						for (const int o : origins) {
-
-							auto a{ t };
-
-							a.tablet.mapping = dspace::tablet_mapping::desktop;
-							a.tablet.span = (float)span;
-							a.tablet.speed = sp;
-							a.tablet.origin = (float)o;
-
-							abs.push_back(a);
-
-						}
-
-					}
-
-				}
-
-			}
+		{ // tablets
 
 			std::vector<float> tv;
 			std::vector<int> tdt;
@@ -1131,7 +1224,7 @@ namespace standard {
 
 			const size_t tablet_frames{ informative ? tv.size() : std::min<size_t>(400, vals.size()) };
 
-			// compute heavy, only run when nothing found so far is close to acceptable
+			// virtual desktops are compute heavy, only tried when nothing found so far is close to acceptable
 			bool clean{};
 
 			std::vector<double> early_score(abs.size() * 2, -1.0);
@@ -1152,7 +1245,7 @@ namespace standard {
 
 						auto q{ abs[i] };
 
-						q.tablet.fp = dspace::float_unit(fp);
+						q.game.fp = dspace::float_unit(fp);
 
 						const auto r{ tablet_eval(q, (tablet_frames - 1) / 100) };
 
@@ -1167,7 +1260,9 @@ namespace standard {
 
 			}
 
-			double field_lo{}, field_hi{};
+			const size_t n_std{ abs.size() };
+
+			std::vector<virtual_group> vgroups;
 
 			if (!clean && virtual_desktops && !p.empty()) {
 
@@ -1178,68 +1273,20 @@ namespace standard {
 
 				std::nth_element(sorted.begin(), lo, sorted.end());
 
-				field_lo = *lo;
+				const double field_lo{ *lo };
 
 				std::nth_element(lo, hi, sorted.end());
 
-				field_hi = *hi;
+				const double field_hi{ *hi };
 
-			}
+				std::set<std::array<float, 4>> listed;
 
-			std::set<std::array<float, 4>> listed;
+				for (const auto& b : abs)
+					if (b.device.absolute.mapping == dspace::tablet_mapping::desktop && b.device.absolute.speed == 1.f)
+						listed.insert({ b.game.scale, b.game.off, b.device.absolute.span, b.game.origin });
 
-			for (const auto& b : abs)
-				if (b.tablet.mapping == dspace::tablet_mapping::desktop && b.tablet.speed == 1.f)
-					listed.insert({ b.field.scale, b.field.off, b.tablet.span, b.tablet.origin });
-
-			const size_t n_std{ abs.size() };
-
-			std::vector<virtual_group> vgroups;
-
-			for (const auto& [W, H] : PM_RES) {
-
-				if (clean || !virtual_desktops)
-					break;
-
-				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-				const double units{ s * ratio * 65536. };
-
-				if (!near_grid(units, 1.0, 0.05) || units < 200.)
-					continue;
-
-				const int span{ (int)std::llround(units) };
-				const double q{ span / 65536. };
-				const double pos_c{ c * ratio + (axis ? oy : ox) };
-
-				const double window_lo{ field_lo * ratio + (axis ? oy : ox) };
-				const double window_hi{ field_hi * ratio + (axis ? oy : ox) };
-				const int o_from{ (int)std::max(-8000., std::floor(window_hi - span) - 1) };
-				const int o_to{ (int)std::min(8000., std::ceil(window_lo) + 1) };
-
-				vgroups.push_back({ abs.size(), abs.size(), ratio, axis ? oy : ox, span, o_from, o_to });
-
-				for (int o{ o_from }; o <= o_to; ++o) {
-
-					if (!near_grid(pos_c - o, q, 0.01))
-						continue;
-
-					dspace::axis_params a{};
-
-					a.mode = dspace::axis_mode::absolute;
-					a.field.scale = ratio;
-					a.field.off = axis ? oy : ox;
-					a.tablet.half = (float)((axis ? H : W) / 2);
-					a.tablet.span = (float)span;
-					a.tablet.speed = 1.f;
-					a.tablet.origin = (float)o;
-
-					if (listed.insert({ a.field.scale, a.field.off, a.tablet.span, a.tablet.origin }).second)
-						abs.push_back(a);
-
-				}
-
-				vgroups.back().to = abs.size();
+				for (const auto& g : games)
+					virtual_candidates(g, s, c, field_lo, field_hi, abs, listed, vgroups);
 
 			}
 
@@ -1275,7 +1322,7 @@ namespace standard {
 
 						auto q{ abs[i] };
 
-						q.tablet.fp = dspace::float_unit(fp);
+						q.game.fp = dspace::float_unit(fp);
 
 						const bool known{ early_score[i * 2 + fp] >= 0. };
 
@@ -1306,7 +1353,7 @@ namespace standard {
 						const int counted{ virtual_lb(fr, g, votes) };
 
 						for (size_t i{ g.from }; i < g.to; ++i)
-							by_lb.push_back({ u32(counted - votes[(int)abs[i].tablet.origin - g.o_from]), (u32)i });
+							by_lb.push_back({ u32(counted - votes[(int)abs[i].game.origin - g.o_from]), (u32)i });
 
 					}
 
@@ -1324,7 +1371,7 @@ namespace standard {
 
 						auto q{ abs[i] };
 
-						q.tablet.fp = dspace::float_unit::sse;
+						q.game.fp = dspace::float_unit::sse;
 
 						const double sc{ tablet_eval(q, cap()).score };
 
@@ -1358,7 +1405,7 @@ namespace standard {
 
 					auto q{ abs[order[i].second / 2] };
 
-					q.tablet.fp = dspace::float_unit(order[i].second % 2);
+					q.game.fp = dspace::float_unit(order[i].second & 1);
 
 					const double sc{ rv.empty() ?
 						prefix_score(state, q, vals, dt, bounds, PREFIX, best_score) :
@@ -1377,11 +1424,11 @@ namespace standard {
 				cands.push_back(best);
 
 				// SSE and x87 often tie on the sampled frame so let the whole replay decide
-				if (best.mode == dspace::axis_mode::absolute) {
+				if (best.device.kind == dspace::axis_mode::absolute) {
 
 					auto flip{ best };
 
-					flip.tablet.fp = best.tablet.fp == dspace::float_unit::sse ? dspace::float_unit::x87 : dspace::float_unit::sse;
+					flip.game.fp = best.game.fp == dspace::float_unit::sse ? dspace::float_unit::x87 : dspace::float_unit::sse;
 					cands.push_back(flip);
 
 				}
@@ -1408,12 +1455,13 @@ namespace standard {
 		for (const auto& q : cands) {
 
 			// a desktop tablet at speed 1 fits the same every span / gcd(span, 65536) - try the one nearest 0 first
-			if (q.mode == dspace::axis_mode::absolute && q.tablet.mapping == dspace::tablet_mapping::desktop &&
-				q.tablet.speed == 1.f && q.tablet.span >= 1.f && q.tablet.span == std::floor(q.tablet.span)) {
+			if (q.device.kind == dspace::axis_mode::absolute && q.device.absolute.mapping == dspace::tablet_mapping::desktop &&
+				q.device.absolute.speed == 1.f && q.device.absolute.span >= 1.f && q.device.absolute.span == std::floor(q.device.absolute.span)) {
 
-				const i64 span{ (i64)q.tablet.span };
+				const i64 span{ (i64)q.device.absolute.span };
+				const i64 o{ (i64)q.game.origin };
+
 				const i64 period{ span / (i64)std::gcd((u64)span, (u64)65536) };
-				const i64 o{ (i64)q.tablet.origin };
 
 				i64 c{ ((o % period) + period) % period };
 
@@ -1424,7 +1472,7 @@ namespace standard {
 
 					auto r{ q };
 
-					r.tablet.origin = (float)c;
+					r.game.origin = (float)c;
 					add_final(r);
 
 				}
@@ -1434,11 +1482,11 @@ namespace standard {
 			add_final(q);
 
 			// the game may keep pos - off unrounded so we have to try both (JIT differences?)
-			if (q.mode == dspace::axis_mode::mouse || q.mode == dspace::axis_mode::absolute) {
+			if (q.device.kind == dspace::axis_mode::mouse || q.device.kind == dspace::axis_mode::absolute) {
 
 				auto r{ q };
 
-				r.field.wide = !r.field.wide;
+				r.game.unrounded_sub = !r.game.unrounded_sub;
 				add_final(r);
 
 			}
@@ -1467,10 +1515,10 @@ namespace standard {
 		for (const auto& q : finals)
 			consider(q);
 
-		if (refine && chosen_cost != SIZE_MAX && (chosen.mode == dspace::axis_mode::mouse || chosen.mode == dspace::axis_mode::absolute)) {
+		if (refine && chosen_cost != SIZE_MAX && (chosen.device.kind == dspace::axis_mode::mouse || chosen.device.kind == dspace::axis_mode::absolute)) {
 
 			const auto setting = [](dspace::axis_params& q) -> float& {
-				return q.mode == dspace::axis_mode::mouse ? q.mouse.sens : q.tablet.speed;
+				return q.device.kind == dspace::axis_mode::mouse ? q.device.mouse.sens : q.device.absolute.speed;
 			};
 
 			auto base{ chosen };
@@ -1524,11 +1572,11 @@ namespace standard {
 		}
 
 		// we are escaping often, the step may be a neighbouring lattice
-		if (!refine && s > 0. && (chosen.mode == dspace::axis_mode::none || best_streams.escapes.size() * 100 > vals.size())) {
+		if (!refine && s > 0. && (chosen.device.kind == dspace::axis_mode::none || best_streams.escapes.size() * 100 > vals.size())) {
 
 			dspace::axis_streams rs;
 
-			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true, s, c) }; r.mode != dspace::axis_mode::none) {
+			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::none) {
 
 				if (const size_t cost{ device_cost(state, r, rs, dt, axis) }; cost < chosen_cost) {
 
@@ -1552,13 +1600,13 @@ namespace standard {
 		dspace::axis_params* pa[2]{ &px, &py };
 
 		const auto window_tablet = [](const dspace::axis_params& q) {
-			return q.mode == dspace::axis_mode::absolute && q.tablet.mapping == dspace::tablet_mapping::window;
+			return q.device.kind == dspace::axis_mode::absolute && q.device.absolute.mapping == dspace::tablet_mapping::window;
 		};
 
 		const int t{ window_tablet(px) ? 0 : window_tablet(py) ? 1 : -1 };
 
 		const auto lattice = [](const dspace::axis_params& q) {
-			return q.mode == dspace::axis_mode::absolute || q.mode == dspace::axis_mode::rational;
+			return q.device.kind == dspace::axis_mode::absolute || q.device.kind == dspace::axis_mode::rational;
 		};
 
 		if (!lattice(px) && !lattice(py))
@@ -1567,24 +1615,24 @@ namespace standard {
 		if ((ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= vals[0].size())
 			return;
 
-		dspace::axis_params tab{ t >= 0 ? *pa[t] : px.mode == dspace::axis_mode::absolute ? px : py };
+		dspace::axis_params tab{ t >= 0 ? *pa[t] : px.device.kind == dspace::axis_mode::absolute ? px : py };
 
-		tab.mode = dspace::axis_mode::absolute;
+		tab.device.kind = dspace::axis_mode::absolute;
 
-		tab.tablet.mapping = dspace::tablet_mapping::window;
-		tab.tablet.origin = 0.f;
+		tab.device.absolute.mapping = dspace::tablet_mapping::window;
+		tab.game.origin = 0.f;
 
 		const std::span<const float> p[2]{ std::span<const float>{ vals[0] }.subspan(2), std::span<const float>{ vals[1] }.subspan(2) };
 
 		double sx{}, sy{}, c{};
 
 		if (t == 0)
-			sx = (double)tab.tablet.speed * tab.tablet.span / 65536. / tab.field.scale;
+			sx = (double)tab.device.absolute.speed * tab.device.absolute.span / 65536. / tab.game.scale;
 		else if (!fit_axis_step(p[0], sx, c))
 			return;
 
 		if (t == 1)
-			sy = (double)tab.tablet.speed * 480. / 65536.;
+			sy = (double)tab.device.absolute.speed * 480. / 65536.;
 		else if (!fit_axis_step(p[1], sy, c))
 			return;
 
@@ -1604,7 +1652,7 @@ namespace standard {
 
 			if (t >= 0) {
 
-				setups.push_back({ aspect, tab.tablet.speed });
+				setups.push_back({ aspect, tab.device.absolute.speed });
 
 				continue;
 			}
@@ -1672,12 +1720,12 @@ namespace standard {
 
 			auto q{ tab };
 
-			q.tablet.speed = setups[si].second;
+			q.device.absolute.speed = setups[si].second;
 
-			q.field.scale = ratio;
-			q.field.off = a ? oy : ox;
-			q.tablet.span = (float)(a ? H : W);
-			q.tablet.half = (float)((a ? H : W) / 2);
+			q.game.scale = ratio;
+			q.game.off = a ? oy : ox;
+			q.device.absolute.span = (float)(a ? H : W);
+			q.game.window_half = (float)((a ? H : W) / 2);
 
 			return q;
 		};
@@ -1778,7 +1826,7 @@ namespace standard {
 				to = n;
 
 			const bool reuse{
-				!m.seg.empty() && m.seg.back().p.mode != dspace::axis_mode::none &&
+				!m.seg.empty() && m.seg.back().p.device.kind != dspace::axis_mode::none &&
 				escapes_of(m.seg.back().p, vals, dt, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
 			};
 
@@ -1790,8 +1838,8 @@ namespace standard {
 					other ? &other->at(from, other_at) : nullptr, unused, virtual_desktops)
 			};
 
-			// a new device: the chunks before it take it too while it codes them at least as small
-			if (p.mode != dspace::axis_mode::none) {
+			// if we find a new device, we should check to see if this device is a better fit on the previous segments.
+			if (p.device.kind != dspace::axis_mode::none) {
 
 				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
 
@@ -1816,7 +1864,7 @@ namespace standard {
 
 			from = to;
 
-			misses_in_row = p.mode == dspace::axis_mode::none ? misses_in_row + 1 : 0;
+			misses_in_row = p.device.kind == dspace::axis_mode::none ? misses_in_row + 1 : 0;
 
 			if (give_up_early && misses_in_row >= SEGMENT_GIVE_UP && from < n) {
 
@@ -1837,14 +1885,14 @@ namespace standard {
 
 			for (size_t k{}; k < m.seg.size(); ++k) {
 
-				if (m.seg[k].p.mode != dspace::axis_mode::none)
+				if (m.seg[k].p.device.kind != dspace::axis_mode::none)
 					continue;
 
 				const size_t from{ m.seg[k].start }, to{ seg_end(k) };
 
 				for (const size_t nb : { k - 1, k + 1 }) {
 
-					if (nb >= m.seg.size() || m.seg[nb].p.mode == dspace::axis_mode::none)
+					if (nb >= m.seg.size() || m.seg[nb].p.device.kind == dspace::axis_mode::none)
 						continue;
 
 					if (escapes_of(m.seg[nb].p, vals, dt, from, to, state.exact_text()) * 2 < to - from) {

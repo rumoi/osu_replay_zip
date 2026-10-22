@@ -156,6 +156,37 @@ enum class orz_tag : u8 {
 
 };
 
+struct _fast_divisor {
+
+	u64 m{};
+	u64 d{};
+
+	_fast_divisor() = default;
+
+	explicit _fast_divisor(u64 divisor) : m{ ~u64(0) / divisor + 1 }, d{ divisor } {}
+
+	static FORCEINLINE u64 mul_high(u64 x, u64 y) {
+		return ((x >> 32) * y + (((x & 0xFFFFFFFFull) * y) >> 32)) >> 32;
+	}
+
+	FORCEINLINE u64 mod(u32 x) const {
+		return mul_high(m * x, d);
+	}
+
+	FORCEINLINE u64 div(u32 x) const {
+		return mul_high(m, x);
+	}
+
+	FORCEINLINE u64 mod_signed(i64 x) const {
+
+		const u64 r = mod((u32)(x >= 0 ? x : -x));
+
+		return x < 0 && r ? d - r : r;
+	}
+
+};
+
+
 struct _lzma_block_cache {
 
 	static constexpr size_t SLOTS{ 8 }, MAX_BLOCK{ 1 << 22 }, HEADER{ 16 };

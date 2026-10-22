@@ -21,30 +21,6 @@ namespace frame_time {
 	constexpr u32 GRID_PERIOD_COUNT{ (u32)std::size(GRID_PERIODS) }, GRID_BINS{ 25 };
 
 	constexpr u32 GRID_CUSTOM{ GRID_PERIOD_COUNT }, GRID_CUSTOM_MAX{ 0xFFFF };
-
-
-	struct _fast_divisor {
-
-		u64 m{};
-		u64 d{};
-
-		_fast_divisor() = default;
-
-		explicit _fast_divisor(u64 divisor) : m{ ~u64(0) / divisor + 1 }, d{ divisor } {}
-
-		static FORCEINLINE u64 mul_high(u64 x, u64 y) {
-			return ((x >> 32) * y + (((x & 0xFFFFFFFFull) * y) >> 32)) >> 32;
-		}
-
-		FORCEINLINE u64 mod(u32 x) const {
-			return mul_high(m * x, d);
-		}
-
-		FORCEINLINE u64 div(u32 x) const {
-			return mul_high(m, x);
-		}
-
-	};
 	
 	struct _time_grid {
 

@@ -921,7 +921,7 @@ namespace frames {
 
 					_move_features mf{};
 
-					mf.mode = (int)params.mode;
+					mf.mode = (int)params.device.kind;
 					mf.bkp = rc::bk(pr);
 					mf.sign = pr < 0 ? 0 : pr == 0 ? 1 : 2;
 
@@ -964,7 +964,7 @@ namespace frames {
 						const u64 other{ q ? (u64)first_escaped : 2 };
 						const u64 ectx[5]{
 							since * 2 + (u64)a,
-							((u64)std::min(bit_length(d), 40) * 5 + (u64)params.mode) * 2 + (u64)a,
+							((u64)std::min(bit_length(d), 40) * 5 + (u64)params.device.kind) * 2 + (u64)a,
 							sb * 32 + (u64)std::min(bit_length(res), 31),
 							other * 64 + since,
 							log_bucket(escape_count[a] * 4096 / (i64)(i + 1)) * 32 + sb,
@@ -992,7 +992,7 @@ namespace frames {
 					if (!q)
 						first_escaped = escaped;
 
-					if (!escaped && params.mode == dspace::axis_mode::mouse && d != 0) {
+					if (!escaped && params.device.kind == dspace::axis_mode::mouse && d != 0) {
 
 						const int s{ slack_value(c, M.slack, encoding ? fd.slack[a][slack_at[a]] : 0, a, d) };
 
@@ -1044,7 +1044,7 @@ namespace frames {
 
 		for (int a{}; a < 2; ++a)
 			if (!side.axis[a].seg.empty())
-				device = std::max(device, side.axis[a].seg[0].p.mode);
+				device = std::max(device, side.axis[a].seg[0].p.device.kind);
 
 		if (device < dspace::axis_mode::rational || device > dspace::axis_mode::absolute)
 			return is_relax(side.mode) ? set_relax_other : set_no_device;
