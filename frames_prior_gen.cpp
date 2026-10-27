@@ -386,7 +386,10 @@ namespace {
 
 			const size_t keep{ std::min(lines.size(), CANDIDATE_LINES) };
 
-			std::partial_sort(lines.begin(), lines.begin() + keep, lines.end(), [](const _line& a, const _line& b) { return a.rank > b.rank; });
+			// ties by model, then line, so the result does not depend on the sort's implementation
+			std::partial_sort(lines.begin(), lines.begin() + keep, lines.end(), [](const _line& a, const _line& b) {
+				return a.rank != b.rank ? a.rank > b.rank : a.model != b.model ? a.model < b.model : a.index < b.index;
+			});
 			lines.resize(keep);
 
 			for (const auto& l : lines) {
@@ -476,7 +479,9 @@ namespace {
 
 		}
 
-		std::sort(picks.begin(), picks.end(), [](const _pick& a, const _pick& b) { return a.gain > b.gain; });
+		std::sort(picks.begin(), picks.end(), [](const _pick& a, const _pick& b) {
+			return a.gain != b.gain ? a.gain > b.gain : a.candidate < b.candidate;
+		});
 
 		if (picks.size() > entries)
 			picks.resize(entries);
