@@ -1,11 +1,11 @@
 // Generates frames_prior.h: the starting state of the context mixing models (orz_frames.h, orz_modes.h) for each prior
 // set, fit to a list of replays. Not part of the orz build; compile it with the same headers and the LZMA SDK.
 //
-// usage: frames_prior_gen list.txt [entries] [sets at once] [cache file] > frames_prior.h
+// usage: frames_prior_gen list.txt [entries] [sets at once] [cache directory] > frames_prior.h
 //   list.txt holds one replay per line: an .osr, or replay data without the .osr header in a file named
 //   replay-<osu|taiko|fruits|mania>-*. entries caps the counters of each set, those saving the most bits first.
-//   Sets are fit in parallel (default 4 at once). The encoded replays wait in the cache file (default a temporary one)
-//   and are read back for every pass, so memory does not grow with the replays.
+//   Sets are fit in parallel (default 4 at once). The encoded replays wait in the cache directory, a file per set
+//   (default a temporary directory), and are read back for every pass, so memory does not grow with the replays.
 //
 // Per set, over its replays:
 //   1. train shared models on every replay; counters used in many replays are candidates, starting from their pooled
@@ -86,13 +86,14 @@ namespace {
 
 	};
 
-	// false for a replay of another set, or one no set models (kept verbatim)
-	bool decode(const std::vector<u8>& orz, u32 set, _replay& r) {
+	// the prior set a replay trains, SETS for none (kept verbatim, or frames no set models). with_frames also decodes its
+	// frames, as the models take them
+	u32 decode(const std::vector<u8>& orz, _replay& r, bool with_frames) {
 
 		_orz_file file{};
 
 		if (!file.decode(orz) || (file.encode_info & ORZ_ENCODE_INFO::replay_verbatim))
-			return false;
+			return SETS;
 
 		const u32 flags{ file.encode_info };
 
@@ -102,20 +103,20 @@ namespace {
 
 			const modes::kind mode{ modes::mode_of(get_e_mode(flags)) };
 
+			if (!with_frames)
+				return frames::set_taiko + mode;
+
 			_decoded_orz d;
 
-			if (frames::set_taiko + mode != set || !orz_decode_frames(orz, d) || d.frames.size() < r.frames)
-				return false;
+			if (!orz_decode_frames(orz, d) || d.frames.size() < r.frames)
+				return SETS;
 
 			// without the closing seed frame
 			r.R.assign(d.frames.begin(), d.frames.begin() + r.frames);
 			r.prepared = modes::prepare(r.R, mode, (flags & ORZ_ENCODE_INFO::text_shortest) != 0);
 
-			return true;
+			return frames::set_taiko + mode;
 		}
-
-		if (set >= frames::set_taiko)
-			return false;
 
 		std::span<const u8> data;
 
@@ -126,7 +127,7 @@ namespace {
 		standard::_frames_head head{};
 
 		if (!standard::read_head(data, get_e_mode(flags) == e_mode::osu_autopilot, head))
-			return false;
+			return SETS;
 
 		r.info = std::move(head.info);
 
@@ -137,14 +138,17 @@ namespace {
 		r.side.ap = head.ap;
 		r.side.std_default_time = head.std_default_time;
 
-		if (frames::prior_set(r.side) != set)
-			return false;
+		const u32 set{ frames::prior_set(r.side) };
 
-		frames::_models models{};
+		if (with_frames) {
 
-		frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames };
+			frames::_models models{};
 
-		return true;
+			frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames };
+
+		}
+
+		return set;
 	}
 
 	// one set's models, at training size or for a replay
@@ -178,12 +182,16 @@ namespace {
 
 	};
 
-	// a set's replays decoded one at a time, as their decoded frames together would not fit in memory. The cache holds
-	// the encoded replays in list order, each as its size then its bytes
+	// a set's encoded replays in list order, each as its size then its bytes
+	std::filesystem::path cache_file(const std::filesystem::path& cache, u32 set) {
+		return cache / ("set" + std::to_string(set) + ".orz");
+	}
+
+	// a set's replays decoded one at a time, as their decoded frames together would not fit in memory
 	template<typename F>
 	void each_replay(const std::filesystem::path& cache, u32 set, F&& f) {
 
-		FILE* file{ fopen(cache.string().c_str(), "rb") };
+		FILE* file{ fopen(cache_file(cache, set).string().c_str(), "rb") };
 
 		if (!file)
 			return;
@@ -199,7 +207,7 @@ namespace {
 
 			_replay r;
 
-			if (decode(orz, set, r))
+			if (decode(orz, r, true) == set)
 				f(r);
 
 		}
@@ -699,7 +707,7 @@ int main(int argc, char** argv) {
 
 	if (argc < 2) {
 
-		fprintf(stderr, "usage: frames_prior_gen list.txt [entries] [sets at once] [cache file] > frames_prior.h\n");
+		fprintf(stderr, "usage: frames_prior_gen list.txt [entries] [sets at once] [cache directory] > frames_prior.h\n");
 
 		return 1;
 	}
@@ -708,7 +716,11 @@ int main(int argc, char** argv) {
 	const u32 at_once{ argc > 3 ? (u32)std::max(1, atoi(argv[3])) : 4u };
 
 	const std::filesystem::path cache{ argc > 4 ? std::filesystem::path(argv[4]) : std::filesystem::temp_directory_path() /
-		("frames_prior_gen-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".orz") };
+		("frames_prior_gen-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())) };
+
+	std::error_code error;
+
+	std::filesystem::create_directories(cache, error);
 
 	std::vector<std::string> paths;
 
@@ -722,20 +734,25 @@ int main(int argc, char** argv) {
 
 	}
 
-	// encoded once, in parallel a chunk at a time, and kept in the cache in list order
+	// encoded once, in parallel a chunk at a time, and kept in their sets' cache files in list order
 	{
-		FILE* file{ fopen(cache.string().c_str(), "wb") };
+		FILE* files[SETS]{};
 
-		if (!file) {
+		for (u32 s{}; s < SETS; ++s) {
 
-			fprintf(stderr, "can not write %s\n", cache.string().c_str());
+			if (!(files[s] = fopen(cache_file(cache, s).string().c_str(), "wb"))) {
 
-			return 1;
+				fprintf(stderr, "can not write %s\n", cache_file(cache, s).string().c_str());
+
+				return 1;
+			}
+
 		}
 
 		constexpr size_t CHUNK{ 1024 };
 
 		std::vector<std::vector<u8>> encoded(CHUNK);
+		u32 set_of[CHUNK]{};
 
 		for (size_t base{}; base < paths.size(); base += CHUNK) {
 
@@ -750,6 +767,7 @@ int main(int argc, char** argv) {
 					for (size_t i; (i = next++) < n;) {
 
 						orz_state state{};
+						_replay r;
 
 						const auto data{ read_file(paths[base + i].c_str()) };
 
@@ -760,6 +778,8 @@ int main(int argc, char** argv) {
 						else
 							replay_data_to_orz(data, get_e_mode(f), encoded[i], state);
 
+						set_of[i] = decode(encoded[i], r, false);
+
 					}
 
 				});
@@ -769,16 +789,20 @@ int main(int argc, char** argv) {
 
 			for (size_t i{}; i < n; ++i) {
 
+				if (set_of[i] == SETS)
+					continue;
+
 				const u32 size{ (u32)encoded[i].size() };
 
-				fwrite(&size, sizeof size, 1, file);
-				fwrite(encoded[i].data(), 1, size, file);
+				fwrite(&size, sizeof size, 1, files[set_of[i]]);
+				fwrite(encoded[i].data(), 1, size, files[set_of[i]]);
 
 			}
 
 		}
 
-		fclose(file);
+		for (FILE* f : files)
+			fclose(f);
 
 	}
 
@@ -803,9 +827,11 @@ int main(int argc, char** argv) {
 
 	}
 
-	std::error_code error;
+	for (u32 s{}; s < SETS; ++s)
+		std::filesystem::remove(cache_file(cache, s), error);
 
-	std::filesystem::remove(cache, error);
+	if (argc <= 4)
+		std::filesystem::remove(cache, error);
 
 	std::vector<u32> keys, values;
 	std::vector<i32> weights;
