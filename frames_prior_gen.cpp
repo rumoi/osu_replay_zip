@@ -1,10 +1,11 @@
 // Generates frames_prior.h: the starting state of the context mixing models (orz_frames.h, orz_modes.h) for each prior
 // set, fit to a list of replays. Not part of the orz build; compile it with the same headers and the LZMA SDK.
 //
-// usage: frames_prior_gen list.txt [entries] [sets at once] > frames_prior.h
+// usage: frames_prior_gen list.txt [entries] [sets at once] [cache file] > frames_prior.h
 //   list.txt holds one replay per line: an .osr, or replay data without the .osr header in a file named
 //   replay-<osu|taiko|fruits|mania>-*. entries caps the counters of each set, those saving the most bits first.
-//   Sets are fit in parallel (default 4 at once); an osu!standard set takes about 7 GB while it trains.
+//   Sets are fit in parallel (default 4 at once). The encoded replays wait in the cache file (default a temporary one)
+//   and are read back for every pass, so memory does not grow with the replays.
 //
 // Per set, over its replays:
 //   1. train shared models on every replay; counters used in many replays are candidates, starting from their pooled
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -176,11 +178,24 @@ namespace {
 
 	};
 
-	// replays decoded one at a time, as their decoded frames together would not fit in memory
+	// a set's replays decoded one at a time, as their decoded frames together would not fit in memory. The cache holds
+	// the encoded replays in list order, each as its size then its bytes
 	template<typename F>
-	void each_replay(const std::vector<std::vector<u8>>& encoded, u32 set, F&& f) {
+	void each_replay(const std::filesystem::path& cache, u32 set, F&& f) {
 
-		for (const auto& orz : encoded) {
+		FILE* file{ fopen(cache.string().c_str(), "rb") };
+
+		if (!file)
+			return;
+
+		std::vector<u8> orz;
+
+		for (u32 size; fread(&size, sizeof size, 1, file) == 1;) {
+
+			orz.resize(size);
+
+			if (fread(orz.data(), 1, size, file) != size)
+				break;
 
 			_replay r;
 
@@ -189,6 +204,7 @@ namespace {
 
 		}
 
+		fclose(file);
 	}
 
 	// model index of a table in the list
@@ -206,7 +222,7 @@ namespace {
 	struct _counting : cm::bit_trainer {
 
 		struct _table {
-			std::vector<u32> ones, seen; // per counter
+			std::vector<u64> ones, seen; // per counter
 			std::vector<u32> replays, last; // per line
 		};
 
@@ -318,7 +334,7 @@ namespace {
 		return { p.start.data(), p.keys.data(), p.values.data(), p.weight_start.data(), p.weights.data(), p.apm_start.data(), p.apm.data() };
 	}
 
-	_set_prior fit(const std::vector<std::vector<u8>>& encoded, u32 set, size_t entries) {
+	_set_prior fit(const std::filesystem::path& cache, u32 set, size_t entries) {
 
 		_set_prior out{};
 
@@ -348,7 +364,7 @@ namespace {
 
 			}
 
-			each_replay(encoded, set, [&](_replay& r) {
+			each_replay(cache, set, [&](_replay& r) {
 
 				M.run(counting, set, r);
 
@@ -448,7 +464,7 @@ namespace {
 
 			}
 
-			each_replay(encoded, set, [&](_replay& r) {
+			each_replay(cache, set, [&](_replay& r) {
 
 				M.run(trials, set, r);
 
@@ -523,7 +539,7 @@ namespace {
 			std::vector<u32> weights_n[FRAMES_PRIOR_MODELS], apm_n[FRAMES_PRIOR_MODELS];
 			size_t inputs[FRAMES_PRIOR_MODELS]{};
 
-			each_replay(encoded, set, [&](_replay& r) {
+			each_replay(cache, set, [&](_replay& r) {
 
 				_set_models M{};
 				cm::bit_trainer t{};
@@ -683,13 +699,16 @@ int main(int argc, char** argv) {
 
 	if (argc < 2) {
 
-		fprintf(stderr, "usage: frames_prior_gen list.txt [entries] [sets at once] > frames_prior.h\n");
+		fprintf(stderr, "usage: frames_prior_gen list.txt [entries] [sets at once] [cache file] > frames_prior.h\n");
 
 		return 1;
 	}
 
 	const size_t entries{ argc > 2 ? (size_t)atoll(argv[2]) : 36000 };
 	const u32 at_once{ argc > 3 ? (u32)std::max(1, atoi(argv[3])) : 4u };
+
+	const std::filesystem::path cache{ argc > 4 ? std::filesystem::path(argv[4]) : std::filesystem::temp_directory_path() /
+		("frames_prior_gen-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".orz") };
 
 	std::vector<std::string> paths;
 
@@ -703,33 +722,63 @@ int main(int argc, char** argv) {
 
 	}
 
-	// encoded once, decoded again for each pass
-	std::vector<std::vector<u8>> encoded(paths.size());
-
+	// encoded once, in parallel a chunk at a time, and kept in the cache in list order
 	{
-		std::atomic<size_t> next{};
-		std::vector<std::thread> workers;
+		FILE* file{ fopen(cache.string().c_str(), "wb") };
 
-		for (u32 w{}; w < std::max(1u, std::thread::hardware_concurrency()); ++w)
-			workers.emplace_back([&] {
+		if (!file) {
 
-				for (size_t i; (i = next++) < paths.size();) {
+			fprintf(stderr, "can not write %s\n", cache.string().c_str());
 
-					orz_state state{};
+			return 1;
+		}
 
-					const auto data{ read_file(paths[i].c_str()) };
+		constexpr size_t CHUNK{ 1024 };
 
-					if (const u32 f{ flags_of(paths[i]) }; f & ORZ_ENCODE_INFO::has_osr_header)
-						osr_to_orz(data, encoded[i], state);
-					else
-						replay_data_to_orz(data, get_e_mode(f), encoded[i], state);
+		std::vector<std::vector<u8>> encoded(CHUNK);
 
-				}
+		for (size_t base{}; base < paths.size(); base += CHUNK) {
 
-			});
+			const size_t n{ std::min(CHUNK, paths.size() - base) };
 
-		for (auto& w : workers)
-			w.join();
+			std::atomic<size_t> next{};
+			std::vector<std::thread> workers;
+
+			for (u32 w{}; w < std::max(1u, std::thread::hardware_concurrency()); ++w)
+				workers.emplace_back([&] {
+
+					for (size_t i; (i = next++) < n;) {
+
+						orz_state state{};
+
+						const auto data{ read_file(paths[base + i].c_str()) };
+
+						encoded[i].clear();
+
+						if (const u32 f{ flags_of(paths[base + i]) }; f & ORZ_ENCODE_INFO::has_osr_header)
+							osr_to_orz(data, encoded[i], state);
+						else
+							replay_data_to_orz(data, get_e_mode(f), encoded[i], state);
+
+					}
+
+				});
+
+			for (auto& w : workers)
+				w.join();
+
+			for (size_t i{}; i < n; ++i) {
+
+				const u32 size{ (u32)encoded[i].size() };
+
+				fwrite(&size, sizeof size, 1, file);
+				fwrite(encoded[i].data(), 1, size, file);
+
+			}
+
+		}
+
+		fclose(file);
 
 	}
 
@@ -745,7 +794,7 @@ int main(int argc, char** argv) {
 			workers.emplace_back([&] {
 
 				for (u32 s; (s = next++) < SETS;)
-					sets[s] = fit(encoded, s, entries);
+					sets[s] = fit(cache, s, entries);
 
 			});
 
@@ -753,6 +802,10 @@ int main(int argc, char** argv) {
 			w.join();
 
 	}
+
+	std::error_code error;
+
+	std::filesystem::remove(cache, error);
 
 	std::vector<u32> keys, values;
 	std::vector<i32> weights;
