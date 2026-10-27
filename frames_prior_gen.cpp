@@ -3,7 +3,9 @@
 //
 // usage: frames_prior_gen list.txt [entries] [sets at once] [cache directory] > frames_prior.h
 //   list.txt holds one replay per line: an .osr, or replay data without the .osr header in a file named
-//   replay-<osu|taiko|fruits|mania>-*. entries caps the counters of each set, those saving the most bits first.
+//   replay-<osu|taiko|fruits|mania>-*. With - for the list, the replays come from stdin instead, each as a mode byte
+//   (an e_mode, relax included, or 255 for an .osr), its size in 4 bytes, then its bytes. entries caps the counters
+//   of each set, those saving the most bits first.
 //   Sets are fit in parallel (default 4 at once). The encoded replays wait in the cache directory, a file per set
 //   (default a temporary directory), and are read back for every pass, so memory does not grow with the replays.
 //
@@ -26,6 +28,7 @@
 #include <fstream>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include "orz_shared.h"
@@ -67,6 +70,9 @@ namespace {
 	constexpr int STARTS{ 2 }, CONFIDENCES{ (int)std::size(CONFIDENCE) }, TRIALS{ STARTS * CONFIDENCES + 1 }; // then flat
 
 	constexpr int MIX_ROUNDS{ 4 };
+
+	// the mode byte of a replay from stdin that is an .osr
+	constexpr u8 OSR_RECORD{ 255 };
 
 	using _models_list = std::array<cm::model*, FRAMES_PRIOR_MODELS>;
 
@@ -722,9 +728,12 @@ int main(int argc, char** argv) {
 
 	std::filesystem::create_directories(cache, error);
 
+	const bool from_stdin{ std::string_view(argv[1]) == "-" };
+
 	std::vector<std::string> paths;
 
-	{
+	if (!from_stdin) {
+
 		std::ifstream list(argv[1]);
 		std::string path;
 
@@ -733,6 +742,21 @@ int main(int argc, char** argv) {
 				paths.push_back(path);
 
 	}
+
+	// a replay from stdin: false at the end of the stream
+	const auto read_record = [](std::vector<u8>& data, u8& mode) {
+
+		u32 size;
+
+		if (fread(&mode, 1, 1, stdin) != 1 || fread(&size, sizeof size, 1, stdin) != 1)
+			return false;
+
+		data.resize(size);
+
+		return fread(data.data(), 1, size, stdin) == size;
+	};
+
+	size_t replays{};
 
 	// encoded once, in parallel a chunk at a time, and kept in their sets' cache files in list order
 	{
@@ -751,12 +775,22 @@ int main(int argc, char** argv) {
 
 		constexpr size_t CHUNK{ 1024 };
 
-		std::vector<std::vector<u8>> encoded(CHUNK);
+		std::vector<std::vector<u8>> records(CHUNK), encoded(CHUNK);
+		u8 modes[CHUNK]{};
 		u32 set_of[CHUNK]{};
 
-		for (size_t base{}; base < paths.size(); base += CHUNK) {
+		for (size_t base{};; base += CHUNK) {
 
-			const size_t n{ std::min(CHUNK, paths.size() - base) };
+			size_t n{};
+
+			if (from_stdin)
+				while (n < CHUNK && read_record(records[n], modes[n]))
+					++n;
+			else
+				n = std::min(CHUNK, paths.size() - std::min(base, paths.size()));
+
+			if (n == 0)
+				break;
 
 			std::atomic<size_t> next{};
 			std::vector<std::thread> workers;
@@ -769,14 +803,21 @@ int main(int argc, char** argv) {
 						orz_state state{};
 						_replay r;
 
-						const auto data{ read_file(paths[base + i].c_str()) };
+						if (!from_stdin) {
+
+							const u32 f{ flags_of(paths[base + i]) };
+
+							records[i] = read_file(paths[base + i].c_str());
+							modes[i] = (f & ORZ_ENCODE_INFO::has_osr_header) ? OSR_RECORD : (u8)get_e_mode(f);
+
+						}
 
 						encoded[i].clear();
 
-						if (const u32 f{ flags_of(paths[base + i]) }; f & ORZ_ENCODE_INFO::has_osr_header)
-							osr_to_orz(data, encoded[i], state);
-						else
-							replay_data_to_orz(data, get_e_mode(f), encoded[i], state);
+						if (modes[i] == OSR_RECORD)
+							osr_to_orz(records[i], encoded[i], state);
+						else if (modes[i] < (u32)e_mode::e_mode_max)
+							replay_data_to_orz(records[i], (e_mode)modes[i], encoded[i], state);
 
 						set_of[i] = decode(encoded[i], r, false);
 
@@ -799,6 +840,8 @@ int main(int argc, char** argv) {
 
 			}
 
+			replays += n;
+
 		}
 
 		for (FILE* f : files)
@@ -806,7 +849,7 @@ int main(int argc, char** argv) {
 
 	}
 
-	fprintf(stderr, "encoded %zu replays\n", paths.size());
+	fprintf(stderr, "encoded %zu replays\n", replays);
 
 	_set_prior sets[SETS];
 
