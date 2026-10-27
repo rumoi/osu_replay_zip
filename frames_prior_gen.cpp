@@ -277,6 +277,17 @@ namespace {
 		double bits[TRIALS]{};
 	};
 
+	// log2(p / 65536) per 16-bit probability p, looked up as the trials take it for every bit of every candidate
+	const auto LOG2{ [] {
+
+		std::vector<double> l(65537);
+
+		for (int p{ 1 }; p <= 65536; ++p)
+			l[p] = std::log2(p / 65536.0);
+
+		return l;
+	}() };
+
 	// pass 2: follows the candidates through each replay from every start, confidence and flat
 	struct _trials : cm::bit_trainer {
 
@@ -322,7 +333,7 @@ namespace {
 
 				const int p{ std::clamp((int)c.trial[t].p, 32, 65504) };
 
-				c.bits[t] -= std::log2((y ? p : 65536 - p) / 65536.0);
+				c.bits[t] -= LOG2[y ? p : 65536 - p];
 				cm::update(c.trial[t], y);
 
 			}
