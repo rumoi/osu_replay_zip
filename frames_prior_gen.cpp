@@ -1,13 +1,18 @@
 // Generates frames_prior.h: the starting state of the context mixing models (orz_frames.h, orz_modes.h) for each prior
 // set, fit to a list of replays. Not part of the orz build; compile it with the same headers and the LZMA SDK.
 //
-// usage: frames_prior_gen list.txt [entries] [sets at once] [cache directory] > frames_prior.h
+// usage: frames_prior_gen [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h
+//        frames_prior_gen --reuse [--pooled] cache_directory [entries] [sets at once] > frames_prior.h
 //   list.txt holds one replay per line: an .osr, or replay data without the .osr header in a file named
 //   replay-<osu|taiko|fruits|mania>-*. With - for the list, the replays come from stdin instead, each as a mode byte
 //   (an e_mode, relax included, or 255 for an .osr), its size in 4 bytes, then its bytes. entries caps the counters
-//   of each set, those saving the most bits first.
+//   of each set, those saving the most bits first; with --pooled it caps all sets' counters together, so the counters
+//   go to whichever sets they save the most bits in.
 //   Sets are fit in parallel (default 4 at once). The encoded replays wait in the cache directory, a file per set
 //   (default a temporary directory), and are read back for every pass, so memory does not grow with the replays.
+//   --keep leaves them there (the directory must be given), with each set's candidate counters and the bits each
+//   saves, and --reuse fits from such a directory: only pass 3 runs, so other entries or --pooled cost a fraction of
+//   a fit.
 //
 // Per set, over its replays:
 //   1. train shared models on every replay; counters used in many replays are candidates, starting from their pooled
@@ -347,7 +352,18 @@ namespace {
 		std::vector<u32> keys, values;
 		std::vector<i32> weights;
 		std::vector<u16> apm;
+	};
+
+	// a candidate counter's best start: the bits it saves over starting flat, and its frames_prior.h entry
+	struct _pick {
+		double gain;
+		u32 model, key, value;
+	};
+
+	// passes 1 and 2 of a set: its candidates that save bits, in candidate order
+	struct _set_trials {
 		size_t replays{};
+		std::vector<_pick> picks;
 	};
 
 	// an apm entry before any update
@@ -359,9 +375,9 @@ namespace {
 		return { p.start.data(), p.keys.data(), p.values.data(), p.weight_start.data(), p.weights.data(), p.apm_start.data(), p.apm.data() };
 	}
 
-	_set_prior fit(const std::filesystem::path& cache, u32 set, size_t entries) {
+	_set_trials trials_of(const std::filesystem::path& cache, u32 set) {
 
-		_set_prior out{};
+		_set_trials out{};
 
 		// 1. shared models over every replay
 		std::vector<_candidate> candidates;
@@ -499,45 +515,78 @@ namespace {
 
 		}
 
-		struct _pick {
-			double gain;
-			u32 candidate, trial;
-		};
+		for (const auto& c : trials.candidates) {
 
-		std::vector<_pick> picks;
-
-		for (u32 i{}; i < trials.candidates.size(); ++i) {
-
-			const auto& c{ trials.candidates[i] };
 			u32 best{ TRIALS - 1 };
 
 			for (u32 t{}; t < TRIALS - 1; ++t)
 				if (c.bits[t] < c.bits[best])
 					best = t;
 
-			if (best != TRIALS - 1)
-				picks.push_back({ c.bits[TRIALS - 1] - c.bits[best], i, best });
+			if (best == TRIALS - 1)
+				continue;
+
+			const u32 confidence{ CONFIDENCE[best % CONFIDENCES] };
+
+			out.picks.push_back({ c.bits[TRIALS - 1] - c.bits[best], c.model, (u32)c.key, c.start[best / CONFIDENCES] | confidence << 16 | c.slot << 24 });
 
 		}
 
-		std::sort(picks.begin(), picks.end(), [](const _pick& a, const _pick& b) {
-			return a.gain != b.gain ? a.gain > b.gain : a.candidate < b.candidate;
-		});
+		return out;
+	}
 
-		if (picks.size() > entries)
-			picks.resize(entries);
+	// a set's trials kept in the cache directory, for --reuse by the same build: the replays and pick count, then the picks
+	std::filesystem::path trials_file(const std::filesystem::path& cache, u32 set) {
+		return cache / ("set" + std::to_string(set) + ".trials");
+	}
+
+	bool save_trials(const std::filesystem::path& cache, u32 set, const _set_trials& t) {
+
+		FILE* file{ fopen(trials_file(cache, set).string().c_str(), "wb") };
+
+		if (!file)
+			return false;
+
+		const u64 head[2]{ t.replays, t.picks.size() };
+		const bool ok{ fwrite(head, sizeof head, 1, file) == 1 && fwrite(t.picks.data(), sizeof(_pick), t.picks.size(), file) == t.picks.size() };
+
+		return fclose(file) == 0 && ok;
+	}
+
+	bool load_trials(const std::filesystem::path& cache, u32 set, _set_trials& t) {
+
+		FILE* file{ fopen(trials_file(cache, set).string().c_str(), "rb") };
+
+		if (!file)
+			return false;
+
+		u64 head[2];
+		bool ok{ fread(head, sizeof head, 1, file) == 1 };
+
+		if (ok) {
+
+			t.replays = head[0];
+			t.picks.resize(head[1]);
+
+			ok = fread(t.picks.data(), sizeof(_pick), t.picks.size(), file) == t.picks.size();
+
+		}
+
+		fclose(file);
+
+		return ok;
+	}
+
+	// 3. a set's prior from the picks it keeps (indices into t.picks, most bits saved first)
+	_set_prior mix(const std::filesystem::path& cache, u32 set, const _set_trials& t, const std::vector<u32>& kept) {
+
+		_set_prior out{};
 
 		// by model, most bits saved first
 		std::vector<std::pair<u32, u32>> counters[FRAMES_PRIOR_MODELS];
 
-		for (const auto& p : picks) {
-
-			const auto& c{ trials.candidates[p.candidate] };
-			const u32 confidence{ CONFIDENCE[p.trial % CONFIDENCES] };
-
-			counters[c.model].push_back({ (u32)c.key, c.start[p.trial / CONFIDENCES] | confidence << 16 | c.slot << 24 });
-
-		}
+		for (const u32 i : kept)
+			counters[t.picks[i].model].push_back({ t.picks[i].key, t.picks[i].value });
 
 		out.start.push_back(0);
 
@@ -662,7 +711,7 @@ namespace {
 
 		}
 
-		fprintf(stderr, "set %u: %zu replays, %zu counters\n", set, out.replays, out.keys.size());
+		fprintf(stderr, "set %u: %zu replays, %zu counters\n", set, t.replays, out.keys.size());
 
 		return out;
 	}
@@ -722,30 +771,52 @@ namespace {
 
 int main(int argc, char** argv) {
 
-	if (argc < 2) {
+	bool keep{}, reuse{}, pooled{};
+	std::vector<const char*> args;
 
-		fprintf(stderr, "usage: frames_prior_gen list.txt [entries] [sets at once] [cache directory] > frames_prior.h\n");
+	for (int i{ 1 }; i < argc; ++i) {
+
+		const std::string_view arg{ argv[i] };
+
+		if (arg == "--keep")
+			keep = true;
+		else if (arg == "--reuse")
+			reuse = true;
+		else if (arg == "--pooled")
+			pooled = true;
+		else
+			args.push_back(argv[i]);
+
+	}
+
+	if (args.empty() || (keep && (reuse || args.size() < 4))) {
+
+		fprintf(stderr, "usage: frames_prior_gen [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h\n"
+			"       frames_prior_gen --reuse [--pooled] cache_directory [entries] [sets at once] > frames_prior.h\n");
 
 		return 1;
 	}
 
-	const size_t entries{ argc > 2 ? (size_t)atoll(argv[2]) : 36000 };
-	const u32 at_once{ argc > 3 ? (u32)std::max(1, atoi(argv[3])) : 4u };
+	const size_t entries{ args.size() > 1 ? (size_t)atoll(args[1]) : 36000 };
+	const u32 at_once{ args.size() > 2 ? (u32)std::max(1, atoi(args[2])) : 4u };
 
-	const std::filesystem::path cache{ argc > 4 ? std::filesystem::path(argv[4]) : std::filesystem::temp_directory_path() /
+	// the list's replays are encoded into the cache unless it is reused, and removed at the end unless kept
+	const bool temporary{ !reuse && args.size() < 4 };
+
+	const std::filesystem::path cache{ reuse ? args[0] : !temporary ? args[3] : std::filesystem::temp_directory_path() /
 		("frames_prior_gen-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())) };
 
 	std::error_code error;
 
 	std::filesystem::create_directories(cache, error);
 
-	const bool from_stdin{ std::string_view(argv[1]) == "-" };
+	const bool from_stdin{ !reuse && std::string_view(args[0]) == "-" };
 
 	std::vector<std::string> paths;
 
-	if (!from_stdin) {
+	if (!reuse && !from_stdin) {
 
-		std::ifstream list(argv[1]);
+		std::ifstream list(args[0]);
 		std::string path;
 
 		while (std::getline(list, path))
@@ -767,10 +838,10 @@ int main(int argc, char** argv) {
 		return fread(data.data(), 1, size, stdin) == size;
 	};
 
-	size_t replays{};
-
 	// encoded once, in parallel a chunk at a time, and kept in their sets' cache files in list order
-	{
+	if (!reuse) {
+
+		size_t replays{};
 		FILE* files[SETS]{};
 
 		for (u32 s{}; s < SETS; ++s) {
@@ -858,13 +929,13 @@ int main(int argc, char** argv) {
 		for (FILE* f : files)
 			fclose(f);
 
+		fprintf(stderr, "encoded %zu replays\n", replays);
+
 	}
 
-	fprintf(stderr, "encoded %zu replays\n", replays);
+	// f(set) for every set, at_once in parallel
+	const auto each_set = [&](auto&& f) {
 
-	_set_prior sets[SETS];
-
-	{
 		std::atomic<u32> next{};
 		std::vector<std::thread> workers;
 
@@ -872,19 +943,81 @@ int main(int argc, char** argv) {
 			workers.emplace_back([&] {
 
 				for (u32 s; (s = next++) < SETS;)
-					sets[s] = fit(cache, s, entries);
+					f(s);
 
 			});
 
 		for (auto& w : workers)
 			w.join();
 
+	};
+
+	_set_trials trials[SETS];
+	std::atomic<bool> failed{};
+
+	each_set([&](u32 s) {
+
+		if (!reuse)
+			trials[s] = trials_of(cache, s);
+
+		if (reuse ? !load_trials(cache, s, trials[s]) : keep && !save_trials(cache, s, trials[s])) {
+
+			fprintf(stderr, "can not %s %s\n", reuse ? "read" : "write", trials_file(cache, s).string().c_str());
+
+			failed = true;
+
+		}
+
+	});
+
+	if (failed)
+		return 1;
+
+	// the picks each set keeps, most bits saved first: up to entries per set, or with --pooled across all of them
+	std::vector<u32> kept[SETS];
+
+	{
+		struct _rank {
+			double gain;
+			u32 set, pick;
+		};
+
+		std::vector<_rank> ranks;
+
+		for (u32 s{}; s < SETS; ++s)
+			for (u32 i{}; i < trials[s].picks.size(); ++i)
+				ranks.push_back({ trials[s].picks[i].gain, s, i });
+
+		std::sort(ranks.begin(), ranks.end(), [](const _rank& a, const _rank& b) {
+			return a.gain != b.gain ? a.gain > b.gain : a.set != b.set ? a.set < b.set : a.pick < b.pick;
+		});
+
+		size_t total{};
+
+		for (const auto& r : ranks) {
+
+			if (pooled ? total < entries : kept[r.set].size() < entries) {
+
+				kept[r.set].push_back(r.pick);
+				++total;
+
+			}
+
+		}
+
 	}
 
-	for (u32 s{}; s < SETS; ++s)
-		std::filesystem::remove(cache_file(cache, s), error);
+	_set_prior sets[SETS];
 
-	if (argc <= 4)
+	each_set([&](u32 s) {
+		sets[s] = mix(cache, s, trials[s], kept[s]);
+	});
+
+	if (!keep && !reuse)
+		for (u32 s{}; s < SETS; ++s)
+			std::filesystem::remove(cache_file(cache, s), error);
+
+	if (temporary)
 		std::filesystem::remove(cache, error);
 
 	std::vector<u32> keys, values;
