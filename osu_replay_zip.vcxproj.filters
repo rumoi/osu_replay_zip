@@ -101,6 +101,9 @@
     <ClInclude Include="cm.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="crc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="frames_prior.h">
       <Filter>Header Files</Filter>
     </ClInclude>
