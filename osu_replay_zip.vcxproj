@@ -157,6 +157,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cm.h" />
+    <ClInclude Include="crc.h" />
     <ClInclude Include="device_space.h" />
     <ClInclude Include="frames_prior.h" />
     <ClInclude Include="Lib\7zTypes.h" />

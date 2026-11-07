@@ -10,16 +10,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <emmintrin.h>
-#include <nmmintrin.h>
 #include <fstream>
 #include <new>
 #include <span>
 #include <string>
 #include <vector>
 
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <emmintrin.h>
+#endif
+
 // replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
 #include "LzmaDec.h"
+#include "crc.h"
 #include "orz_types.h"
 #include "osu_lzma.h"
 
@@ -43,15 +46,17 @@ static_assert(FLT_EVAL_METHOD == 0, "float must not use extended precision (x87)
 
 #if defined(_MSC_VER)
 #define FORCEINLINE __forceinline
-#define TARGET_SSE42
 #else
 #define FORCEINLINE inline __attribute__((always_inline))
-#define TARGET_SSE42 __attribute__((target("sse4.2"))) // the CRC instructions, without building everything for SSE 4.2
 #endif
 
-// MSVC generates terrible code for std::bit_cast<float>(u32) - have to use this
 FORCEINLINE float float_from_bits(u32 bits) {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+	// MSVC generates terrible code for std::bit_cast<float>(u32) - have to use this
 	return _mm_cvtss_f32(_mm_castsi128_ps(_mm_cvtsi32_si128((int)bits)));
+#else
+	return std::bit_cast<float>(bits);
+#endif
 }
 
 // same float bits (tells -0 from 0, NaNs apart)
@@ -905,48 +910,6 @@ using _osr = std::vector<_osr_frame>;
 constexpr float POS_DEFAULT_X{ 256.f }, POS_DEFAULT_Y{ -500.f };
 
 static_assert(sizeof(_osr_frame) == 16, "replay_crc hashes frames as 16 bytes");
-
-TARGET_SSE42 inline u32 crc32c(u32 crc, const void* data, size_t size) {
-
-	const u8* p{ (const u8*)data };
-
-#if defined(_M_X64) || defined(__x86_64__)
-
-	u64 c{ crc };
-
-	for (; size >= 8; size -= 8, p += 8) {
-
-		u64 v;
-
-		memcpy(&v, p, 8);
-
-		c = _mm_crc32_u64(c, v);
-
-	}
-
-	u32 c32{ (u32)c };
-
-#else
-
-	u32 c32{ crc };
-
-	for (; size >= 4; size -= 4, p += 4) {
-
-		u32 v;
-
-		memcpy(&v, p, 4);
-
-		c32 = _mm_crc32_u32(c32, v);
-
-	}
-
-#endif
-
-	for (; size; --size)
-		c32 = _mm_crc32_u8(c32, *p++);
-
-	return c32;
-}
 
 // where the replay CRC starts: not 0, so an all-zero header (a cut file reads as zeros) does not check out
 constexpr u32 ORZ_CRC_SEED{ 0xFFFFFFFF };
