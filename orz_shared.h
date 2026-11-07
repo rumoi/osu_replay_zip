@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#if defined(_MSC_VER)
 #include <emmintrin.h>
 #endif
 
@@ -51,7 +51,7 @@ static_assert(FLT_EVAL_METHOD == 0, "float must not use extended precision (x87)
 #endif
 
 FORCEINLINE float float_from_bits(u32 bits) {
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#if defined(_MSC_VER)
 	// MSVC generates terrible code for std::bit_cast<float>(u32) - have to use this
 	return _mm_cvtss_f32(_mm_castsi128_ps(_mm_cvtsi32_si128((int)bits)));
 #else

@@ -1,24 +1,18 @@
 #pragma once
 
-// CRC32C: the Castagnoli polynomial, bits reflected, no inversion in or out, as the SSE 4.2 crc32 instruction computes it
-
-#include <array>
-#include <cstddef>
 #include <cstring>
 
 #include "orz_types.h"
 
 #if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
-#define ORZ_CRC32C_SSE42
 #include <nmmintrin.h>
-#elif defined(__ARM_FEATURE_CRC32)
-#define ORZ_CRC32C_ARM
+#elif defined(__aarch64__)
 #include <arm_acle.h>
 #endif
 
 namespace orz {
 
-#if defined(ORZ_CRC32C_SSE42)
+#if defined(_M_X64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 
 #if defined(_MSC_VER)
 #define TARGET_SSE42
@@ -68,9 +62,9 @@ TARGET_SSE42 inline u32 crc32c(u32 crc, const void* data, size_t size) {
 	return c32;
 }
 
-#elif defined(ORZ_CRC32C_ARM)
+#elif defined(__aarch64__)
 
-inline u32 crc32c(u32 crc, const void* data, size_t size) {
+__attribute__((target("+crc"))) inline u32 crc32c(u32 crc, const void* data, size_t size) {
 
 	const u8* p{ (const u8*)data };
 
@@ -86,37 +80,6 @@ inline u32 crc32c(u32 crc, const void* data, size_t size) {
 
 	for (; size; --size)
 		crc = __crc32cb(crc, *p++);
-
-	return crc;
-}
-
-#else
-
-// a byte at a time from a table, where there are no CRC instructions
-inline u32 crc32c(u32 crc, const void* data, size_t size) {
-
-	static constexpr auto table{ [] {
-
-		std::array<u32, 256> t{};
-
-		for (u32 i{}; i < 256; ++i) {
-
-			u32 c{ i };
-
-			for (int k{}; k < 8; ++k)
-				c = (c >> 1) ^ (0x82F63B78 & (0u - (c & 1)));
-
-			t[i] = c;
-
-		}
-
-		return t;
-	}() };
-
-	const u8* p{ (const u8*)data };
-
-	for (; size; --size)
-		crc = table[(crc ^ *p++) & 0xFF] ^ (crc >> 8);
 
 	return crc;
 }
