@@ -108,6 +108,45 @@ bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u
 	return orz_decode_frames(raw_bytes, out, tables, options);
 }
 
+// the cursor model an ORZ file's frames are coded with, as orz_state::device; false for anything that is not a valid file.
+// Reads only the frames stream's head, so the CRC is not checked
+bool orz_read_device(std::span<const u8> raw_bytes, dspace::_model_info& out) {
+
+	out = {};
+
+	try {
+
+		_orz_file file{};
+
+		if (!file.decode(raw_bytes) || file.frame_count > ORZ_MAX_FRAMES)
+			return false;
+
+		const u32 info{ file.encode_info };
+
+		const e_mode mode{ get_e_mode(info) };
+
+		if (mode >= e_mode::e_mode_max)
+			return false;
+
+		if ((info & ORZ_ENCODE_INFO::replay_verbatim) || uses_modes_coder(mode))
+			return true;
+
+		standard::_frames_head head{};
+
+		// as standard::decode: a file without frames needs no head
+		if (!standard::read_head(container_data(file, orz_tag::frames), mode == e_mode::osu_autopilot, head))
+			return file.frame_count == 0;
+
+		out = std::move(head.info);
+
+		return true;
+
+	} catch (const std::exception&) {
+		return false;
+	}
+
+}
+
 std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file) {
 
 	const u32 info{ file.encode_info };

@@ -1107,11 +1107,14 @@ namespace standard {
 
 	}
 
-	// the first hinted device that fits both axes as device_from_x's must, each axis's last segment for the whole replay
+	// the first hinted device that fits both axes as device_from_x's must, each axis's last segment for the whole replay.
+	// hint: its index in state.hints.devices
 	inline bool hinted_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
+		const _shared_streams& shared, dspace::_model_info& info, _positions& best, int& hint) {
 
-		for (const auto& h : state.hints.devices) {
+		for (size_t i{}; i < state.hints.devices.size(); ++i) {
+
+			const auto& h{ state.hints.devices[i] };
 
 			dspace::_model_info m{};
 
@@ -1162,6 +1165,7 @@ namespace standard {
 
 				info = m;
 				best = position_streams(info, vals, dt, shared, state);
+				hint = (int)i;
 
 				return true;
 			}
@@ -1310,6 +1314,7 @@ namespace standard {
 
 		dspace::_model_info info{ all_text() };
 		_positions best{};
+		int hint{ -1 };
 
 		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text. Relax
 		// and autopilot do not go together.
@@ -1320,7 +1325,7 @@ namespace standard {
 		else {
 
 			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 &&
-				(hinted_device_model(state, vals, dt, shared, info, best) || detect_device_model(state, vals, dt, shared, info, best)) };
+				(hinted_device_model(state, vals, dt, shared, info, best, hint) || detect_device_model(state, vals, dt, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
@@ -1336,6 +1341,7 @@ namespace standard {
 
 					info = all_text();
 					best = std::move(text);
+					hint = -1;
 
 				}
 
@@ -1362,6 +1368,7 @@ namespace standard {
 		}
 
 		state.device = info;
+		state.device_hint = hint;
 
 		write_orz(r, best, shared, state);
 

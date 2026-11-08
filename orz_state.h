@@ -36,6 +36,8 @@ struct orz_state {
 
 	// the cursor model the output's frames are coded with, empty when osu!standard's coder did not code them
 	dspace::_model_info device{};
+	// device came from hints.devices[device_hint] (a mouse's poll rate picked again), -1 when it did not come from a hint
+	int device_hint{ -1 };
 
 	// not reset by reset_volatile
 	_table_memory tables{}; // can be reused by the next encode/decode
@@ -92,6 +94,7 @@ struct orz_state {
 		text.clear();
 
 		device = {};
+		device_hint = -1;
 
 		stats = {};
 

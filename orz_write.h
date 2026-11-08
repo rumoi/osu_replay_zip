@@ -88,6 +88,7 @@ inline void write_verbatim(orz_state& state) {
 
 	state.seed = {};
 	state.device = {};
+	state.device_hint = -1;
 
 	state.file.container.clear();
 	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest);
