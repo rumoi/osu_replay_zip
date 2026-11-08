@@ -1107,6 +1107,70 @@ namespace standard {
 
 	}
 
+	// the first hinted device that fits both axes as device_from_x's must, each axis's last segment for the whole replay
+	inline bool hinted_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
+
+		for (const auto& h : state.hints.devices) {
+
+			dspace::_model_info m{};
+
+			bool fits{ true };
+
+			for (int a{}; a < 2 && fits; ++a) {
+
+				const auto kind{ h.axis[a].seg.empty() ? dspace::axis_mode::none : h.axis[a].seg.back().p.device.kind };
+
+				if (kind == dspace::axis_mode::none || kind == dspace::axis_mode::text)
+					fits = false;
+				else {
+
+					auto p{ h.axis[a].seg.back().p };
+
+					const size_t limit{ vals[a].size() / 1000 };
+
+					const auto st{ dspace::encode_axis(p, vals[a], dt, state.exact_text(), {}, limit + 1) };
+
+					// a device finer than the replay's (half the speed or sensitivity) fits it too, but codes larger: every step
+					// of K shares a factor
+					i64 step{};
+
+					for (size_t i{ 1 }; i < st.K.size(); ++i)
+						step = std::gcd(step, st.K[i] - st.K[i - 1]);
+
+					fits = st.escapes.size() + st.repeats <= limit && step <= 1;
+
+					// the poll rate that codes a mouse best changes from replay to replay: picked as detect_axis_model does
+					if (fits && p.device.kind == dspace::axis_mode::mouse) {
+
+						std::vector<dotnet::text_bounds> bounds(std::min<size_t>(vals[a].size(), 2000));
+
+						for (size_t i{}; i < bounds.size(); ++i)
+							bounds[i] = dotnet::text_bounds{ vals[a][i], state.exact_text() };
+
+						p = best_poll(state, p, prefix_score(state, p, vals[a], dt, bounds, bounds.size()), vals[a], dt, bounds, bounds.size());
+
+					}
+
+					m.axis[a] = dspace::axis_model{ p };
+
+				}
+
+			}
+
+			if (fits) {
+
+				info = m;
+				best = position_streams(info, vals, dt, shared, state);
+
+				return true;
+			}
+
+		}
+
+		return false;
+	}
+
 	inline bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
 		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
@@ -1255,7 +1319,8 @@ namespace standard {
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
-			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
+			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 &&
+				(hinted_device_model(state, vals, dt, shared, info, best) || detect_device_model(state, vals, dt, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
@@ -1295,6 +1360,8 @@ namespace standard {
 			}
 
 		}
+
+		state.device = info;
 
 		write_orz(r, best, shared, state);
 

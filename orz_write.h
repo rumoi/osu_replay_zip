@@ -87,6 +87,7 @@ inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 inline void write_verbatim(orz_state& state) {
 
 	state.seed = {};
+	state.device = {};
 
 	state.file.container.clear();
 	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest);

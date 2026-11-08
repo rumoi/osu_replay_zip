@@ -539,6 +539,36 @@ namespace standard {
 		return prefix_eval(state, p, vals, dt, bounds, n, escape_cap(bound)).score;
 	}
 
+	// base at the poll rate that scores best on the first n frames, base's own scoring base_score
+	static dspace::axis_params best_poll(const orz_state& state, const dspace::axis_params& base, double base_score,
+		std::span<const float> vals, std::span<const int> dt, std::span<const dotnet::text_bounds> bounds, size_t n) {
+
+		auto best{ base };
+		double best_score{ base_score };
+
+		for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f }) {
+
+			if (poll == base.device.mouse.poll)
+				continue;
+
+			auto q{ base };
+
+			q.device.mouse.poll = poll;
+
+			const double sc{ prefix_score(state, q, vals, dt, bounds, n, best_score) };
+
+			if (sc < best_score) {
+
+				best_score = sc;
+				best = q;
+
+			}
+
+		}
+
+		return best;
+	}
+
 	FORCEINLINE bool near_grid(const double v, const double step, const double tol) {
 
 		const double q{ v / step };
@@ -1169,29 +1199,7 @@ namespace standard {
 
 			}
 
-			const auto base{ best };
-
-			for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f }) {
-
-				if (poll == base.device.mouse.poll)
-					continue;
-
-				auto q{ base };
-
-				q.device.mouse.poll = poll;
-
-				const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
-
-				if (sc < best_score) {
-
-					best_score = sc;
-					best = q;
-
-				}
-
-			}
-
-			cands.push_back(best);
+			cands.push_back(best_poll(state, best, best_score, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX));
 
 		}
 

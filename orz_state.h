@@ -34,8 +34,16 @@ struct orz_state {
 	std::vector<_osr_frame> input;
 	std::string text;
 
+	// the cursor model the output's frames are coded with, empty when osu!standard's coder did not code them
+	dspace::_model_info device{};
+
 	// not reset by reset_volatile
 	_table_memory tables{}; // can be reused by the next encode/decode
+
+	struct {
+		// devices of the player's earlier replays, most likely first: one that still fits skips the device search
+		std::span<const dspace::_model_info> devices;
+	} hints;
 
 	struct {
 		bool disable_device{};
@@ -82,6 +90,8 @@ struct orz_state {
 		output.clear();
 		input.clear();
 		text.clear();
+
+		device = {};
 
 		stats = {};
 
