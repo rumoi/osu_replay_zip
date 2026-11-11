@@ -41,6 +41,9 @@ namespace setup {
 		return v > 0. && std::abs(v - std::round(v)) < 0.05;
 	}
 
+	// the output ranges a tablet driver spreads its counts over, the likeliest first: 65535, a doubled 0..32767, 65536
+	constexpr double DRIVER_RANGES[]{ 65535., 65534., 65536. };
+
 	// A window starts on a whole pixel of its desktop. Shifting every coded integer moves it by that many of the pixels
 	// one integer covers (reach / 65536), so a start read off another form of the same device can sit between two
 	// pixels: the first whole one from the desktop's start that a whole shift reaches, or the start as read.
@@ -444,11 +447,9 @@ namespace setup {
 
 				s.desktop[a] = (u32)std::lround(desktop[a]);
 
-				// shifting every coded integer moves the window by whole pixels only every desktop / gcd(desktop, range)
-				// of them, so its position is known up to that period. The coded one is kept: the game's float rounding
-				// follows the origin, and only that one is sure to give the replay back.
+				// the window's position as coded: the game's float rounding follows the origin, and only that one is sure to
+				// give the replay back
 				s.window_at[a] = (i32)std::llround(at[a]);
-				s.window_period[a] = (u32)std::max<i64>(1, (i64)s.desktop[a] / (i64)std::gcd((u64)std::max<u32>(1, s.desktop[a]), (u64)(halved_integers ? 32768 : 65536)));
 
 				if (step[a] > 0. && s.window[a]) {
 
@@ -459,7 +460,7 @@ namespace setup {
 					double exact{ counts };
 					bool over_desktop{};
 
-					for (const double r : { 65535., 65534., 65536. }) {
+					for (const double r : DRIVER_RANGES) {
 
 						const double over_range{ r / step[a] };
 
@@ -481,7 +482,7 @@ namespace setup {
 					// An area mapped to one monitor of several is whole over that monitor only. The driver spreads the desktop
 					// over its range and the game over 65536, so the game's window holds 65536 / range of the driver's: the
 					// area is that much less than the counts across it.
-					for (const double r : { 65535., 65534., 65536. }) {
+					for (const double r : DRIVER_RANGES) {
 
 						if (over_desktop || !whole(counts * r / 65536.))
 							continue;
@@ -575,7 +576,8 @@ namespace setup {
 
 			for (int a{}; a < 2; ++a) {
 
-				// the period is the reconciled desktop's
+				// shifting every coded integer moves the window by whole pixels only every desktop / gcd(desktop, range) of
+				// them, so its position is known up to that period, of the reconciled desktop
 				s.window_period[a] = (u32)std::max<i64>(1, (i64)s.desktop[a] / (i64)std::gcd((u64)std::max<u32>(1, s.desktop[a]), (u64)(halved_integers ? 32768 : 65536)));
 
 				place_window(s, a);

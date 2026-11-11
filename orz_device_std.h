@@ -782,35 +782,35 @@ namespace standard {
 		int win;
 	};
 
+	// a window's game mapping on an axis, added to a list that does not hold it yet
+	static void add_game(std::vector<_game_candidate>& games, int W, int H, int axis) {
+
+		const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+		_game_candidate c{};
+
+		c.game.scale = ratio;
+		c.game.off = axis ? oy : ox;
+		c.win = axis ? H : W;
+		c.game.window_half = (float)(c.win / 2);
+
+		const bool seen{ std::any_of(games.begin(), games.end(), [&c](const _game_candidate& e) {
+
+			return e.game == c.game && e.win == c.win;
+		}) };
+
+		if (!seen)
+			games.push_back(c);
+
+	}
 
 	static const auto GAMES_AXIS_TABLE = [] {
 
 		std::array<std::vector<_game_candidate>, 2> g{}; // make std::array with span later
 
-		for (int a{}; a < 2; ++a) {
-
-			for (const auto& [W, H] : PM_RES) {
-
-				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-				_game_candidate c{};
-
-				c.game.scale = ratio;
-				c.game.off = a ? oy : ox;
-				c.win = a ? H : W;
-				c.game.window_half = (float)(c.win / 2);
-
-				const bool seen{ std::any_of(g[a].begin(), g[a].end(), [&c](const _game_candidate& e) {
-
-					return e.game == c.game && e.win == c.win;
-				}) };
-
-				if (!seen)
-					g[a].push_back(c);
-
-			}
-
-		}
+		for (int a{}; a < 2; ++a)
+			for (const auto& [W, H] : PM_RES)
+				add_game(g[a], W, H, a);
 
 		return g;
 	}();
@@ -1302,28 +1302,8 @@ namespace standard {
 
 		for (const auto& hint : state.hints) {
 
-			if (hint.width && hint.height && hint.width <= 32767 && hint.height <= 32767) {
-
-				const int W{ (int)hint.width }, H{ (int)hint.height };
-
-				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-				_game_candidate c{};
-
-				c.game.scale = ratio;
-				c.game.off = axis ? oy : ox;
-				c.win = axis ? H : W;
-				c.game.window_half = (float)(c.win / 2);
-
-				const bool seen{ std::any_of(h.games.begin(), h.games.end(), [&c](const _game_candidate& e) {
-
-					return e.game == c.game && e.win == c.win;
-				}) };
-
-				if (!seen)
-					h.games.push_back(c);
-
-			}
+			if (hint.width && hint.height && hint.width <= 32767 && hint.height <= 32767)
+				add_game(h.games, (int)hint.width, (int)hint.height, axis);
 
 			if (hint.sens > 0.f)
 				h.mouse.push_back({ hint.sens, hint.poll });

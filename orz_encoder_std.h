@@ -697,15 +697,6 @@ namespace standard {
 		for (const auto& e : st.escapes)
 			escaped[e.first] = 1;
 
-		i64 low{ std::numeric_limits<i64>::max() };
-
-		for (size_t i{}; i < st.K.size(); ++i)
-			if (!escaped[i])
-				low = std::min(low, st.K[i]);
-
-		if (low == std::numeric_limits<i64>::max() || low <= -(1 << 24))
-			return {};
-
 		// where each integer the replay visits sits within a step, however long the cursor stayed on it
 		std::vector<i64> visited;
 
@@ -718,8 +709,10 @@ namespace standard {
 		std::sort(visited.begin(), visited.end());
 		visited.erase(std::unique(visited.begin(), visited.end()), visited.end());
 
-		if (visited.empty())
+		if (visited.empty() || visited.front() <= -(1 << 24))
 			return {};
+
+		const i64 low{ visited.front() };
 
 		std::vector<double> at(visited.size());
 
@@ -765,35 +758,24 @@ namespace standard {
 
 		i64 r_low{ std::numeric_limits<i64>::max() }, r_high{ std::numeric_limits<i64>::min() }, j_low{ std::numeric_limits<i64>::max() };
 
-		for (int pass{}; pass < 2; ++pass) {
+		for (const i64 k : visited) {
 
-			for (size_t i{}; i < st.K.size(); ++i) {
+			const double q{ (double)(k - low) / step - phase };
+			const double whole{ std::floor(q + 1e-9) };
 
-				if (escaped[i] || st.K[i] >= (1 << 24))
-					continue;
+			// off the lattice
+			if (q - whole >= width)
+				continue;
 
-				const double q{ (double)(st.K[i] - low) / step - phase };
-				const double whole{ std::floor(q + 1e-9) };
+			// visited is in order, so the first integer on the lattice has the lowest index
+			const i64 j{ (i64)whole };
 
-				// off the lattice
-				if (q - whole >= width)
-					continue;
+			j_low = std::min(j_low, j);
 
-				const i64 j{ (i64)whole };
+			const i64 r{ (i64)((u64)k << 32) - (i64)(A * (u64)(j - j_low)) };
 
-				if (pass == 0) {
-
-					j_low = std::min(j_low, j);
-
-					continue;
-				}
-
-				const i64 r{ (i64)((u64)st.K[i] << 32) - (i64)(A * (u64)(j - j_low)) };
-
-				r_low = std::min(r_low, r);
-				r_high = std::max(r_high, r);
-
-			}
+			r_low = std::min(r_low, r);
+			r_high = std::max(r_high, r);
 
 		}
 
@@ -1158,7 +1140,7 @@ namespace standard {
 
 				size_t cost{ grid_cost(m.axis[a].seg[0].p, grid[a], on_grid[a], dt, a, state.exact_text()) };
 
-				for (const double range : { 65535., 65534., 65536. }) {
+				for (const double range : setup::DRIVER_RANGES) {
 
 					const double n{ std::round(range / step) };
 
@@ -1198,7 +1180,7 @@ namespace standard {
 					// the game's integers a window spans
 					const double window{ (named ? (double)named : 2. * q.game.window_half) / setup::tablet_line(q).quantum };
 
-					for (const double range : { 65535., 65534., 65536. }) {
+					for (const double range : setup::DRIVER_RANGES) {
 
 						const double across{ window * range / 65536. };
 						const double counts{ std::round(across / ((double)grid[a].A / 4294967296.)) };
