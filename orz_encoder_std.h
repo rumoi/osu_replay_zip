@@ -110,9 +110,9 @@ namespace standard {
 		sh.grid = frame_time::pick_grid(sh.delta);
 
 		// a game clock off the usual play rates has its ticks on none of the listed grids: one of their own period
-		if (const setup::_ticks ticks{ setup::ticks_of(r) }; ticks.rate > 0.f) {
+		if (const float rate{ frame_time::tick_rate(r) }; rate > 0.f) {
 
-			sh.custom = frame_time::custom_grid(sh.delta, (double)ticks.rate * (1000. / 60.), sh.grid);
+			sh.custom = frame_time::custom_grid(sh.delta, (double)rate * (1000. / 60.), sh.grid);
 
 			if (sh.custom.num)
 				sh.grid = frame_time::GRID_CUSTOM;
@@ -1085,14 +1085,14 @@ namespace standard {
 				for (const auto& h : state.hints) {
 
 					// the same device, whatever play rate its replay had
-					auto hinted_device{ h.axis[a] };
+					auto hinted_device{ setup::device(h, a) };
 
 					hinted_device.game.rate = m.axis[a].seg[0].p.game.rate;
 
 					if (grid[a].on || hinted_device != m.axis[a].seg[0].p)
 						continue;
 
-					const _native_grid hinted{ h.grid_steps[a] > 0. ? grid_of_step(p.st[a], h.grid_steps[a]) : _native_grid{} };
+					const _native_grid hinted{ h.grid_step[a] > 0. ? grid_of_step(p.st[a], h.grid_step[a]) : _native_grid{} };
 
 					if (!hinted.on)
 						continue;
@@ -1695,7 +1695,7 @@ namespace standard {
 			missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
 
 		state.setup = setup::of(info, best.fitted, missed);
-		state.setup.clock_rate = setup::clock_rate(r, state.header_rate, (double)shared.period().num / (double)shared.period().den);
+		state.clock_rate = frame_time::clock_rate(r, state.header_rate, (double)shared.period().num / (double)shared.period().den);
 
 		write_orz(r, best, shared, state);
 

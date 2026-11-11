@@ -51,14 +51,14 @@ namespace setup {
 		return at;
 	}
 
-	// a setup as a prior for an encode: its display, driver and client as each axis's device, its tablet lattice as the
-	// native grid's step. The parts are taken apart: a device that no longer fits is searched again, an area that no
-	// longer fits is fit again.
-	inline dspace::device_hint hint(const dspace::_setup& s) {
+	// The device a setup stands for on an axis, kind none where it has none: its display, driver and client as the
+	// axis's device. A setup handed back as a hint is taken apart this way: a device that no longer fits is searched
+	// again, and the tablet's lattice goes by its step (grid_step) and is fit again.
+	inline dspace::axis_params device(const dspace::_setup& s, int a) {
 
 		using input = dspace::_setup::input;
 
-		dspace::device_hint h{};
+		dspace::axis_params q{};
 
 		// whole pixels: the lattice of one pixel in field units, offset by where the playfield starts. Only the height
 		// is known, and the width only matters through being even, as nearly every window's is.
@@ -70,78 +70,58 @@ namespace setup {
 
 			const auto field{ dspace::playfield(s.window[0] ? (int)s.window[0] : 2 * H, H) };
 
-			for (int a{}; a < 2; ++a) {
+			// value = (pixel - off) * A / D, so b = -A * off, kept within one step
+			const i64 b{ (i64)std::llround(-(double)A * (double)(a ? field.off_y : field.off_x)) };
 
-				// value = (pixel - off) * A / D, so b = -A * off, kept within one step
-				const i64 b{ (i64)std::llround(-(double)A * (double)(a ? field.off_y : field.off_x)) };
+			q.device.kind = dspace::axis_mode::rational;
+			q.device.rational.D = D;
+			q.device.rational.a = A;
+			q.device.rational.b = (int)(((b % A) + A) % A);
 
-				dspace::axis_params q{};
-
-				q.device.kind = dspace::axis_mode::rational;
-				q.device.rational.D = D;
-				q.device.rational.a = A;
-				q.device.rational.b = (int)(((b % A) + A) % A);
-
-				h.axis[a] = q;
-				h.missed[a] = s.missed[a];
-
-			}
-
-			return h;
+			return q;
 		}
 
 		if (!s.window[0] || !s.window[1])
-			return h;
+			return q;
+
+		if (s.kind == input::mouse) {
+
+			q.device.kind = dspace::axis_mode::mouse;
+			q.device.mouse.sens = s.sens;
+			q.device.mouse.poll = s.poll > 0.f ? s.poll : 1000.f;
+
+		} else if (s.kind == input::tablet && s.desktop[a]) {
+
+			q.device.kind = dspace::axis_mode::absolute;
+			q.device.absolute.speed = s.sens > 0.f ? s.sens : 1.f;
+			q.game.window_half = (float)(s.window[a] / 2);
+			q.game.fp = s.x87[a] ? dspace::float_unit::x87 : dspace::float_unit::sse;
+
+			if (s.to_window[a]) {
+
+				q.device.absolute.mapping = dspace::tablet_mapping::window;
+				q.device.absolute.span = (float)s.window[a];
+				q.game.product_rounded = s.product_rounded[a];
+
+			} else {
+
+				q.device.absolute.mapping = dspace::tablet_mapping::desktop;
+				q.device.absolute.span = (float)s.desktop[a];
+				q.game.origin = (float)-s.window_at[a];
+				q.game.origin_unrounded = s.origin_unrounded[a];
+
+			}
+
+		} else
+			return q;
 
 		const auto field{ dspace::playfield((int)s.window[0], (int)s.window[1]) };
 
-		for (int a{}; a < 2; ++a) {
+		q.game.scale = field.ratio;
+		q.game.off = a ? field.off_y : field.off_x;
+		q.game.unrounded_sub = s.unrounded_sub[a];
 
-			dspace::axis_params q{};
-
-			q.game.scale = field.ratio;
-			q.game.off = a ? field.off_y : field.off_x;
-			q.game.unrounded_sub = s.unrounded_sub[a];
-
-			if (s.kind == input::mouse) {
-
-				q.device.kind = dspace::axis_mode::mouse;
-				q.device.mouse.sens = s.sens;
-				q.device.mouse.poll = s.poll > 0.f ? s.poll : 1000.f;
-
-			} else if (s.kind == input::tablet && s.desktop[a]) {
-
-				q.device.kind = dspace::axis_mode::absolute;
-				q.device.absolute.speed = s.sens > 0.f ? s.sens : 1.f;
-				q.game.window_half = (float)(s.window[a] / 2);
-				q.game.fp = s.x87[a] ? dspace::float_unit::x87 : dspace::float_unit::sse;
-
-				if (s.to_window[a]) {
-
-					q.device.absolute.mapping = dspace::tablet_mapping::window;
-					q.device.absolute.span = (float)s.window[a];
-					q.game.product_rounded = s.product_rounded[a];
-
-				} else {
-
-					q.device.absolute.mapping = dspace::tablet_mapping::desktop;
-					q.device.absolute.span = (float)s.desktop[a];
-					q.game.origin = (float)-s.window_at[a];
-					q.game.origin_unrounded = s.origin_unrounded[a];
-
-				}
-
-				h.grid_steps[a] = s.grid_step[a];
-
-			} else
-				continue;
-
-			h.axis[a] = q;
-			h.missed[a] = s.missed[a];
-
-		}
-
-		return h;
+		return q;
 	}
 
 	// grid: the native grid that fits each axis, coded on or not. missed: the share of each axis's positions the model
@@ -273,78 +253,6 @@ namespace setup {
 		}
 
 		return s;
-	}
-
-	struct _ticks {
-		float rate; // audio time against real time, 0: too few clean ticks to say
-	};
-
-	// The 60 Hz ticks: the game records a frame on the first update after each 60th of a second of real time, so ticks
-	// are 16.67 ms of audio apart at normal speed, 25 with double time, 12.5 with half time.
-	inline _ticks ticks_of(const _osr& r) {
-
-		constexpr int LO{ 8 }, HI{ 45 }; // audio ms a tick can be apart
-
-		const size_t n{ r.size() };
-
-		size_t by_delta[HI + 2]{};
-
-		for (const auto& f : r)
-			if (f.delta >= LO && f.delta <= HI)
-				++by_delta[f.delta];
-
-		// the commonest spacing, over three neighbouring values
-		const auto around = [&](int d) { return by_delta[d - 1] + by_delta[d] + by_delta[d + 1]; };
-
-		int mode{ LO + 1 };
-
-		for (int d{ LO + 2 }; d < HI; ++d)
-			mode = around(d) > around(mode) ? d : mode;
-
-		// Ticks keep to their own grid whatever else is recorded. Where the game's frames are long a tick falls on one
-		// of the two frame counts around the period, and the mean spacing is still the period. A frame recorded between
-		// two ticks splits their spacing in two, one part short: a spacing with a short neighbour is not counted.
-		const int lo{ (int)(0.6 * mode) }, hi{ (int)(1.65 * mode) };
-
-		const auto whole = [&](size_t i) { return r[i].delta >= lo && r[i].delta <= hi; };
-
-		const auto clean = [&](size_t i) { return whole(i - 1) && whole(i) && whole(i + 1); };
-
-		double sum{};
-		size_t count{};
-
-		for (size_t i{ 1 }; i + 1 < n; ++i) {
-
-			if (!clean(i))
-				continue;
-
-			sum += (double)r[i].delta;
-			++count;
-		}
-
-		if (count < 50)
-			return {};
-
-		return { (float)(sum / (double)count / (1000. / 60.)) };
-	}
-
-	// How fast audio time ran against real time, 0 where the replay does not show it. play_rate is the rate the replay's
-	// mods state (0: unknown); grid_ms is the period of the grid the times are coded on, 0 for none.
-	inline float clock_rate(const _osr& r, float play_rate, double grid_ms) {
-
-		float rate{ ticks_of(r).rate };
-
-		// the ticks' mean spacing reads up to a few percent short where other frames fall between them: the grid the
-		// times are coded on is their exact period where the two agree
-		if (const double on_grid{ grid_ms / (1000. / 60.) }; rate >= 0.92 * on_grid && rate <= 1.015 * on_grid)
-			rate = (float)on_grid;
-
-		// a known play rate the ticks agree with is exact
-		for (const float known : { play_rate, 1.f, 1.5f, 0.75f })
-			if (known > 0.f && std::abs(rate / known - 1.f) < 0.015f)
-				return known;
-
-		return rate;
 	}
 
 }

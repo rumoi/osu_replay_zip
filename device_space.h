@@ -203,8 +203,10 @@ namespace dspace {
 		i64 C; // 32:32 fixed p
 	};
 
-	// the hardware and software configuration behind a coding model (orz_setup.h): what a caller keeps of an encode and
-	// hands back as a hint for the player's next replay. Unknown parts are 0.
+	// The hardware and software configuration behind a coding model (orz_setup.h): what an encode says of the player's
+	// setup, and what a caller hands back as a hint for the player's next replays. Nothing in a hint is trusted: the
+	// device it stands for is a candidate for the search, and has to fit the replay as any other does. Unknown parts
+	// are 0.
 	struct _setup {
 
 		enum class input : u8 {
@@ -233,28 +235,11 @@ namespace dspace {
 		// the window mapping's product rounded
 		bool x87[2]{}, unrounded_sub[2]{}, origin_unrounded[2]{}, product_rounded[2]{};
 
-		float missed[2]{}; // the share of each axis's positions the model did not give
-
-		// audio time against real time, from the 60 Hz ticks (setup::clock_rate): the play rate (1, 1.5 with double time,
-		// 0.75 with half time) where the game's clock ran true, 0 where the replay does not show it
-		float clock_rate{};
+		// the share of each axis's positions the model did not give: as a hint, the setup is taken again while it fits
+		// about as well
+		float missed[2]{};
 
 		bool operator==(const _setup&) const = default;
-	};
-
-	// what a caller knows of the setup a replay was recorded with: the device an earlier replay of the player was coded
-	// with (setup::hint makes one of that encode's setup). Nothing in a hint is trusted. A hint gives the device search
-	// candidates, and a hinted device has to fit the replay as any other candidate does.
-	struct device_hint {
-
-		// an axis's device as an earlier encode chose it, kind none when not known
-		axis_params axis[2]{};
-
-		// the step of each axis's native grid, in coded integers per tablet count (its offset is fit again), 0: none
-		double grid_steps[2]{};
-
-		// the share of positions axis[] missed where it came from: it is taken again while it fits about as well
-		float missed[2]{};
 	};
 
 	FORCEINLINE float rational_value(const axis_params& p, i64 k) {

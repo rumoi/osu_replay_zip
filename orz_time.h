@@ -497,6 +497,75 @@ namespace frame_time {
 		return true;
 	}
 
+	// Audio time against real time by the 60 Hz ticks, 0 with too few clean ticks to say. The game records a frame on the
+	// first update after each 60th of a second of real time, so ticks are 16.67 ms of audio apart at normal speed, 25
+	// with double time, 12.5 with half time.
+	inline float tick_rate(const _osr& r) {
+
+		constexpr int LO{ 8 }, HI{ 45 }; // audio ms a tick can be apart
+
+		const size_t n{ r.size() };
+
+		size_t by_delta[HI + 2]{};
+
+		for (const auto& f : r)
+			if (f.delta >= LO && f.delta <= HI)
+				++by_delta[f.delta];
+
+		// the commonest spacing, over three neighbouring values
+		const auto around = [&](int d) { return by_delta[d - 1] + by_delta[d] + by_delta[d + 1]; };
+
+		int mode{ LO + 1 };
+
+		for (int d{ LO + 2 }; d < HI; ++d)
+			mode = around(d) > around(mode) ? d : mode;
+
+		// Ticks keep to their own grid whatever else is recorded. Where the game's frames are long a tick falls on one
+		// of the two frame counts around the period, and the mean spacing is still the period. A frame recorded between
+		// two ticks splits their spacing in two, one part short: a spacing with a short neighbour is not counted.
+		const int lo{ (int)(0.6 * mode) }, hi{ (int)(1.65 * mode) };
+
+		const auto whole = [&](size_t i) { return r[i].delta >= lo && r[i].delta <= hi; };
+
+		const auto clean = [&](size_t i) { return whole(i - 1) && whole(i) && whole(i + 1); };
+
+		double sum{};
+		size_t count{};
+
+		for (size_t i{ 1 }; i + 1 < n; ++i) {
+
+			if (!clean(i))
+				continue;
+
+			sum += (double)r[i].delta;
+			++count;
+		}
+
+		if (count < 50)
+			return 0.f;
+
+		return (float)(sum / (double)count / (1000. / 60.));
+	}
+
+	// How fast audio time ran against real time, 0 where the replay does not show it. play_rate is the rate the replay's
+	// mods state (0: unknown); grid_ms is the period of the grid the times are coded on, 0 for none.
+	inline float clock_rate(const _osr& r, float play_rate, double grid_ms) {
+
+		float rate{ tick_rate(r) };
+
+		// the ticks' mean spacing reads up to a few percent short where other frames fall between them: the grid the
+		// times are coded on is their exact period where the two agree
+		if (const double on_grid{ grid_ms / (1000. / 60.) }; rate >= 0.92 * on_grid && rate <= 1.015 * on_grid)
+			rate = (float)on_grid;
+
+		// a known play rate the ticks agree with is exact
+		for (const float known : { play_rate, 1.f, 1.5f, 0.75f })
+			if (known > 0.f && std::abs(rate / known - 1.f) < 0.015f)
+				return known;
+
+		return rate;
+	}
+
 }
 
 }

@@ -13,6 +13,7 @@
 
 #include "orz_state.h"
 #include "device_space.h"
+#include "orz_setup.h"
 
 namespace orz {
 
@@ -1190,7 +1191,7 @@ namespace standard {
 
 		for (size_t k{}; k < state.hints.size(); ++k) {
 
-			auto q{ state.hints[k].axis[axis] };
+			auto q{ setup::device(state.hints[k], axis) };
 
 			if (!is_device(q.device.kind))
 				continue;
@@ -1198,7 +1199,7 @@ namespace standard {
 			bool seen{};
 
 			for (size_t j{}; j < k && !seen; ++j)
-				seen = state.hints[j].axis[axis] == q;
+				seen = setup::device(state.hints[j], axis) == q;
 
 			// a hinted device is from another replay: this one's play rate
 			q.game.rate = state.play_rate;
@@ -1342,7 +1343,7 @@ namespace standard {
 
 			for (const auto& h : state.hints) {
 
-				const auto& q{ h.axis[axis] };
+				const auto q{ setup::device(h, axis) };
 
 				auto& list{ q.device.kind == dspace::axis_mode::mouse ? mouse : q.device.kind == dspace::axis_mode::absolute ? abs : cands };
 
