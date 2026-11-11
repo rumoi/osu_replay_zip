@@ -1171,10 +1171,10 @@ namespace standard {
 
 			const auto base{ best };
 
-			for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f }) {
+			const auto try_poll = [&](float poll) {
 
 				if (poll == base.device.mouse.poll)
-					continue;
+					return;
 
 				auto q{ base };
 
@@ -1189,7 +1189,19 @@ namespace standard {
 
 				}
 
-			}
+			};
+
+			for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f })
+				try_poll(poll);
+
+			// Frame times are the song's and a mouse reports in real time: under double time a frame holds two thirds of
+			// its reports (1000 a second look like 667), under half time four thirds. A file names any whole rate up to
+			// 8000, so the best of the usual ones is tried as the frames see it at each speed.
+			const float usual{ best.device.mouse.poll };
+
+			for (const float play : { 1.5f, 0.75f })
+				if (const float seen{ std::round(usual / play) }; seen <= 8000.f)
+					try_poll(seen);
 
 			cands.push_back(best);
 
