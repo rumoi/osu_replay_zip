@@ -450,24 +450,6 @@ namespace standard {
 
 	using dspace::PM_RES;
 
-	// The windows of PM_RES in the order the search tries them: by how many players use each, the most first, so that
-	// what fits several windows as well lands on the likeliest. (A file names a window by its place in PM_RES itself,
-	// which stays as it is.) Counted over the players of a replay corpus, each once by their usual window; windows
-	// nobody used keep their place at the end.
-	constexpr u8 WINDOW_SEARCH_ORDER[]{ 0, 2, 1, 4, 6, 11, 8, 9, 14, 10, 23, 3, 21, 12, 17, 7, 13, 15, 18, 19, 20, 22, 5, 16 };
-
-	static_assert(std::size(WINDOW_SEARCH_ORDER) == std::size(PM_RES));
-
-	static const auto SEARCH_WINDOWS = [] {
-
-		std::array<std::array<int, 2>, std::size(PM_RES)> w{};
-
-		for (size_t i{}; i < std::size(PM_RES); ++i)
-			w[i] = { PM_RES[WINDOW_SEARCH_ORDER[i]][0], PM_RES[WINDOW_SEARCH_ORDER[i]][1] };
-
-		return w;
-	}();
-
 	struct prefix_result {
 		double score;
 		size_t escapes;
@@ -807,7 +789,7 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			for (const auto& [W, H] : SEARCH_WINDOWS) {
+			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
@@ -1917,7 +1899,7 @@ namespace standard {
 		// A desktop at speed 1 gives the same positions for another window when its integers land on the same field
 		// values there: the desktop is as many field units across (a window twice the size on a desktop twice the size),
 		// and the field starts a whole number of integers further along it. Only the float rounding tells the two apart,
-		// often not at all: the window listed first (the likelier, SEARCH_WINDOWS) stands, and the other is a variant
+		// often not at all: the window listed first (the likelier, PM_RES's order) stands, and the other is a variant
 		// of it.
 		const auto other_window_of = [](const dspace::axis_params& x, const dspace::axis_params& y) {
 

@@ -123,12 +123,15 @@ namespace dspace {
 		bool operator==(const axis_params&) const = default;
 	};
 
-	// common window sizes
+	// Common window sizes, the likeliest first: by how many players use each, counted over the players of a replay
+	// corpus, each once by their usual window (sizes nobody used keep their place at the end), with 2560x1440 kept
+	// second as it grows more common. The device search tries them in this order, so that what fits several windows
+	// as well lands on the likeliest, and a file names a window by its place here.
 	constexpr int PM_RES[][2]{
-		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1360, 768 }, { 1600, 900 }, { 1280, 720 },
-		{ 1680, 1050 }, { 1920, 1200 }, { 1440, 900 }, { 1280, 800 }, { 1280, 1024 }, { 1024, 768 },
-		{ 800, 600 }, { 3840, 2160 }, { 2560, 1080 }, { 3440, 1440 }, { 1536, 864 }, { 1280, 960 },
-		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1152, 864 }, { 1600, 1024 }, { 1920, 1440 },
+		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1600, 900 }, { 1680, 1050 }, { 1024, 768 },
+		{ 1440, 900 }, { 1280, 800 }, { 2560, 1080 }, { 1280, 1024 }, { 1920, 1440 }, { 1360, 768 },
+		{ 1152, 864 }, { 800, 600 }, { 1280, 960 }, { 1920, 1200 }, { 3840, 2160 }, { 3440, 1440 },
+		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1600, 1024 }, { 1280, 720 }, { 1536, 864 },
 	};
 
 	FORCEINLINE constexpr auto playfield(int W, int H) {

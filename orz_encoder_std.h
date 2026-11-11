@@ -1397,7 +1397,7 @@ namespace standard {
 
 			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
 
-			for (const auto& [W, H] : SEARCH_WINDOWS) {
+			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
@@ -1466,7 +1466,7 @@ namespace standard {
 		} else if (px.device.kind == dspace::axis_mode::mouse ||
 			(px.device.kind == dspace::axis_mode::absolute && px.device.absolute.mapping == dspace::tablet_mapping::window)) {
 
-			for (const auto& [W, H] : SEARCH_WINDOWS) {
+			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
@@ -1523,7 +1523,7 @@ namespace standard {
 
 			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
 
-			for (const auto& [W, H] : SEARCH_WINDOWS) {
+			for (const auto& [W, H] : PM_RES) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
