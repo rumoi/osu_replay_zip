@@ -150,6 +150,7 @@ enum ORZ_OPTION : u32 {
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
+constexpr u32 OSR_MOD_DOUBLE_TIME{ 1 << 6 }, OSR_MOD_HALF_TIME{ 1 << 8 };
 
 enum class orz_tag : u8 {
 

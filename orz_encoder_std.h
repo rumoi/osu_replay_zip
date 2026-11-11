@@ -11,6 +11,7 @@
 #include "orz_time.h"
 #include "orz_frames.h"
 #include "orz_device_std.h"
+#include "orz_setup.h"
 
 namespace orz {
 
@@ -74,8 +75,20 @@ namespace standard {
 		std::vector<u32> keys; // folded, K1 / K2 imply M1 / M2
 		std::vector<int> table;
 		u32 grid{};
+		frame_time::_grid_period custom{}; // the period when grid is GRID_CUSTOM
 		bool std_default_pos{};
 		bool std_default_time{};
+
+		frame_time::_grid_period period() const {
+
+			return grid == frame_time::GRID_CUSTOM ? custom : frame_time::GRID_PERIODS[grid];
+		}
+
+		frame_time::_time_grid time_grid() const {
+
+			return frame_time::_time_grid{ period() };
+		}
+
 	};
 
 	inline bool std_default_pos_of(const _osr& r) {
@@ -96,6 +109,16 @@ namespace standard {
 		sh.table = frame_time::build_table(std::span{ sh.delta }.subspan(std_default_time ? 2 : 0));
 		sh.grid = frame_time::pick_grid(sh.delta);
 
+		// a game clock off the usual play rates has its ticks on none of the listed grids: one of their own period
+		if (const setup::_ticks ticks{ setup::ticks_of(r) }; ticks.rate > 0.f) {
+
+			sh.custom = frame_time::custom_grid(sh.delta, (double)ticks.rate * (1000. / 60.), sh.grid);
+
+			if (sh.custom.num)
+				sh.grid = frame_time::GRID_CUSTOM;
+
+		}
+
 		sh.repeated = repeat::flags(r);
 		sh.sample = repeat::sample_of(sh.repeated);
 
@@ -107,11 +130,7 @@ namespace standard {
 		return sh;
 	}
 
-	struct _native_grid {
-		bool on;
-		u64 A; // 32:32 fixed p
-		i64 C; // 32:32 fixed p
-	};
+	using dspace::_native_grid;
 
 	inline i64 grid_value(const _native_grid& g, i64 j) {
 
@@ -196,8 +215,8 @@ namespace standard {
 			if (n * 10 >= most * 9)
 				s = std::max(s, st);
 
-		if (s < 1.5 || most * 2 < (i64)d.size() - 1)
-			return {};
+		// a step the gaps agree on: the device's own lattice, one count a step
+		const bool coarse{ s >= 1.5 && most * 2 >= (i64)d.size() - 1 };
 
 		struct _fitter {
 
@@ -221,7 +240,7 @@ namespace standard {
 				return u;
 			}
 
-			void sweep(double reach_steps, double q_step, const std::vector<double>& u) {
+			void sweep(double reach_steps, double q_step, const std::vector<double>& u, double least = 1.2) {
 
 				constexpr int BINS{ 256 };
 
@@ -236,7 +255,7 @@ namespace standard {
 					const double N{ n0 + q * q_step }, st{ span / N };
 
 					// a wide reach can pass zero steps
-					if (N <= 0 || st < 1.2)
+					if (N <= 0 || st < least)
 						continue;
 
 					std::fill(std::begin(hist), std::end(hist), 0);
@@ -464,63 +483,325 @@ namespace standard {
 
 		};
 
-		const double guess{ s };
-
 		_fitter f{ d, (double)(d.back() - d.front()) };
 
 		f.few = f.sample(256);
 		f.many = f.sample(2048);
 
-		if (const size_t count{ f.fit_from(guess) }; count * 10 < d.size() * 9) {
+		// the grid of the lattice the fitter holds, off where it holds none
+		const auto grid_of = [&]() -> _native_grid {
 
-			double best{ f.gain(count) }, best_s{ f.s }, best_phase{ f.phase };
-			std::vector<double> tried{ guess };
+			if (f.on.empty())
+				return {};
 
-			for (const double pr : pairs)
-				for (int k{ 1 }; k <= 6; ++k) {
+			// Any lattice holds its share of any integers, all but the 1 - 1 / step it skips, and one under 1.5 integers a
+			// count holds most. Fit to integers that are on none, the best still misses about that share; a tablet's own
+			// misses a small part of it (what the device model escaped, the cursor held at an edge). Half of it divides
+			// the two.
+			if (f.s < 1.5 && (double)(d.size() - f.on.size()) > (double)d.size() * (1. - 1. / f.s) / 2.)
+				return {};
 
-					const double st{ pr / k };
+			double lo;
 
-					const bool seen{ std::any_of(tried.begin(), tried.end(), [&](double t) {
+			const double w{ f.window(f.s, lo) };
+			const u64 A{ (u64)std::llround(f.s * 4294967296.) };
 
-						return std::abs(st - t) < t * 0.005;
-					}) };
+			if (w <= 0 || A == 0)
+				return {};
 
-					if (st < 1.2 || seen)
-						continue;
+			return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
+		};
 
-					tried.push_back(st);
+		if (coarse) {
 
-					if (const double g{ f.gain(f.fit_from(st)) }; g > best) {
+			const double guess{ s };
 
-						best = g;
-						best_s = f.s;
-						best_phase = f.phase;
+			if (const size_t count{ f.fit_from(guess) }; count * 10 < d.size() * 9) {
+
+				double best{ f.gain(count) }, best_s{ f.s }, best_phase{ f.phase };
+				std::vector<double> tried{ guess };
+
+				for (const double pr : pairs)
+					for (int k{ 1 }; k <= 6; ++k) {
+
+						const double st{ pr / k };
+
+						const bool seen{ std::any_of(tried.begin(), tried.end(), [&](double t) {
+
+							return std::abs(st - t) < t * 0.005;
+						}) };
+
+						if (st < 1.2 || seen)
+							continue;
+
+						tried.push_back(st);
+
+						if (const double g{ f.gain(f.fit_from(st)) }; g > best) {
+
+							best = g;
+							best_s = f.s;
+							best_phase = f.phase;
+
+						}
 
 					}
 
+				f.s = best_s;
+				f.phase = best_phase;
+
+				if (best == std::numeric_limits<double>::lowest())
+					f.on.clear();
+
+				else if (f.refine(true) == 0)
+					f.refine(false);
+
+			}
+
+			// The span's count of steps can settle off the gaps' own estimates: a step just under 2 leaves gaps of 2 and a
+			// few of 1, and reads as one just over 2 with those left off it. The lattice at an estimate near the one
+			// found stands where it holds more of the integers.
+			double lo;
+
+			const double found{ f.s };
+
+			size_t held{ f.window(f.s, lo) > 0 ? f.on.size() : 0 };
+
+			for (size_t k{}; k < cand.size() && held < d.size(); ++k) {
+
+				const double st{ cand[k].first };
+
+				const bool seen{ std::any_of(cand.begin(), cand.begin() + k, [&](const auto& c) {
+
+					return std::abs(st - c.first) < st * 0.001;
+				}) };
+
+				if (seen || std::abs(st - found) > found * 0.05)
+					continue;
+
+				const double s0{ f.s }, phase0{ f.phase };
+				const auto on0{ f.on }, j0{ f.j };
+				const auto up0{ f.up }, dn0{ f.dn };
+
+				f.s = st;
+				f.sweep(std::max(8., f.span / st * 0.005), 0.25, f.few);
+
+				size_t direct{ f.refine(true) };
+
+				if (direct == 0)
+					direct = f.refine(false);
+
+				if (direct > held)
+					held = direct;
+
+				else {
+
+					f.s = s0;
+					f.phase = phase0;
+					f.on = on0;
+					f.j = j0;
+					f.up = up0;
+					f.dn = dn0;
+
 				}
 
-			if (best == std::numeric_limits<double>::lowest())
-				return {};
+			}
 
-			f.s = best_s;
-			f.phase = best_phase;
-
-			if (f.refine(true) == 0)
-				f.refine(false);
+			if (const _native_grid g{ grid_of() }; g.on)
+				return g;
 
 		}
 
-		double lo;
+		// A lattice under 1.5 integers a count leaves gaps of 1 and 2, which say little of its step. What shows it are the
+		// integers it never lands on: one every step / (step - 1), each alone among visited ones. How far apart those are
+		// gives the step, to within fine_reach counts across the span. It is looked for where the gaps agree on no
+		// step, or on one that then holds no lattice (near 1.5 every gap of 1, 2 or 3 is within reach of a step).
+		double fine_reach{};
 
-		const double w{ f.window(f.s, lo) };
-		const u64 A{ (u64)std::llround(f.s * 4294967296.) };
+		std::unordered_map<i64, int> apart;
 
-		if (w <= 0 || A == 0)
+		i64 last{};
+		bool any{};
+
+		for (size_t i{ 1 }; i + 2 < d.size(); ++i) {
+
+			// d[i] + 1 was never visited, the two integers either side of it were
+			if (d[i + 1] - d[i] != 2 || d[i] - d[i - 1] != 1 || d[i + 2] - d[i + 1] != 1)
+				continue;
+
+			if (any)
+				++apart[d[i] - last];
+
+			any = true;
+			last = d[i];
+
+		}
+
+		i64 g1{};
+		int n1{};
+
+		for (const auto& [g, n] : apart)
+			if (n > n1 || (n == n1 && g < g1)) {
+
+				g1 = g;
+				n1 = n;
+
+			}
+
+		const int below{ apart.count(g1 - 1) ? apart[g1 - 1] : 0 }, above{ apart.count(g1 + 1) ? apart[g1 + 1] : 0 };
+		const i64 g2{ below >= above ? g1 - 1 : g1 + 1 };
+		const int n2{ std::max(below, above) }, n{ n1 + n2 };
+
+		// the lattice's own spacing stands out: integers the replay happened not to visit are any distance apart
+		int other{};
+
+		for (const auto& [g, c] : apart)
+			if (std::abs(g - g1) > 1 && g < 2 * g1 - 1)
+				other = std::max(other, c);
+
+		if (n < 32 || n1 < 2 * other)
 			return {};
 
-		return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
+		const double every{ (double)(g1 * n1 + g2 * n2) / n };
+		const double share{ (double)n2 / n };
+
+		s = every / (every - 1.);
+
+		// the estimate's deviation as a share of the step: four of them across the span, in counts
+		const double deviation{ std::sqrt(std::max(share * (1. - share), 1. / n) / n) / (every * (every - 1.)) };
+
+		fine_reach = std::min(64., 2. + 4. * deviation * (double)(d.back() - d.front()) / s);
+
+		// the lattice holds the replay's integers only where its counts stay in step across the whole span: by less
+		// than the share of integers it skips, which a few samples show unless it is small
+		const double skips{ 1. - 1. / s };
+
+		f.s = s;
+		f.sweep(fine_reach, skips / 4., skips < 0.15 ? f.many : f.few, 1.);
+
+		if (f.refine(true) == 0)
+			f.refine(false);
+
+		return grid_of();
+	}
+
+	// The grid of a known step under st's integers: the lattice of that step holding the most of them. A few sit off
+	// any (the cursor held at an edge, a frame of another device) and are left to escape; off when more than a
+	// hundredth do.
+	inline _native_grid grid_of_step(const dspace::axis_streams& st, double step) {
+
+		if (!(step > 1.) || !(step < 65536.) || st.K.size() < 64)
+			return {};
+
+		std::vector<u8> escaped(st.K.size());
+
+		for (const auto& e : st.escapes)
+			escaped[e.first] = 1;
+
+		i64 low{ std::numeric_limits<i64>::max() };
+
+		for (size_t i{}; i < st.K.size(); ++i)
+			if (!escaped[i])
+				low = std::min(low, st.K[i]);
+
+		if (low == std::numeric_limits<i64>::max() || low <= -(1 << 24))
+			return {};
+
+		// where each integer the replay visits sits within a step, however long the cursor stayed on it
+		std::vector<i64> visited;
+
+		visited.reserve(st.K.size());
+
+		for (size_t i{}; i < st.K.size(); ++i)
+			if (!escaped[i] && st.K[i] < (1 << 24))
+				visited.push_back(st.K[i]);
+
+		std::sort(visited.begin(), visited.end());
+		visited.erase(std::unique(visited.begin(), visited.end()), visited.end());
+
+		if (visited.empty())
+			return {};
+
+		std::vector<double> at(visited.size());
+
+		for (size_t i{}; i < visited.size(); ++i) {
+
+			const double q{ (double)(visited[i] - low) / step };
+
+			at[i] = q - std::floor(q);
+
+		}
+
+		std::sort(at.begin(), at.end());
+
+		// one lattice's integers sit within an integer of each other there: the stretch that wide holding the most of
+		// them starts at the lattice's phase
+		const double width{ 1. / step };
+		const size_t n{ at.size() };
+
+		size_t most{}, first{};
+
+		for (size_t b{}, e{}; b < n; ++b) {
+
+			e = std::max(e, b);
+
+			while (e < b + n && at[e % n] + (e >= n ? 1. : 0.) - at[b] < width)
+				++e;
+
+			if (e - b > most) {
+
+				most = e - b;
+				first = b;
+
+			}
+
+		}
+
+		if (most * 100 < n * 99)
+			return {};
+
+		const double phase{ at[first] };
+
+		const u64 A{ (u64)std::llround(step * 4294967296.) };
+
+		i64 r_low{ std::numeric_limits<i64>::max() }, r_high{ std::numeric_limits<i64>::min() }, j_low{ std::numeric_limits<i64>::max() };
+
+		for (int pass{}; pass < 2; ++pass) {
+
+			for (size_t i{}; i < st.K.size(); ++i) {
+
+				if (escaped[i] || st.K[i] >= (1 << 24))
+					continue;
+
+				const double q{ (double)(st.K[i] - low) / step - phase };
+				const double whole{ std::floor(q + 1e-9) };
+
+				// off the lattice
+				if (q - whole >= width)
+					continue;
+
+				const i64 j{ (i64)whole };
+
+				if (pass == 0) {
+
+					j_low = std::min(j_low, j);
+
+					continue;
+				}
+
+				const i64 r{ (i64)((u64)st.K[i] << 32) - (i64)(A * (u64)(j - j_low)) };
+
+				r_low = std::min(r_low, r);
+				r_high = std::max(r_high, r);
+
+			}
+
+		}
+
+		// value(j) = (A * j + C) >> 32 gives every integer back when C is in [r_high, r_low + 2^32)
+		if (r_high - r_low >= (1ll << 32))
+			return {};
+
+		return { true, A, r_high + ((1ll << 32) - 1 - (r_high - r_low)) / 2 };
 	}
 
 	inline float grid_field(const dspace::_axis& a, i64 L) {
@@ -611,6 +892,40 @@ namespace standard {
 		near[0] = grid_field(a, L - 1);
 		near[1] = grid_field(a, L + 1);
 
+	}
+
+	// axis_cost of an axis on a grid. A position one native count off its grid value is coded as the side it is on
+	// (grid_near): a few bits, where axis_cost would count an escaped value.
+	inline size_t grid_cost(const dspace::axis_params& p, const _native_grid& g, const dspace::axis_streams& st, std::span<const int> dt,
+		int axis, bool exact_text) {
+
+		const dspace::_axis a{ p };
+
+		dspace::axis_streams far{};
+
+		far.K = st.K;
+		far.slack = st.slack;
+
+		size_t near{};
+
+		for (size_t j{}; j < st.escapes.size(); ++j) {
+
+			const i64 L{ grid_value(g, st.K[st.escapes[j].first]) };
+			const float x{ st.escapes[j].second };
+
+			if (same_bits(x, grid_field(a, L - 1)) || same_bits(x, grid_field(a, L + 1))) {
+
+				++near;
+
+				continue;
+			}
+
+			far.escapes.push_back(st.escapes[j]);
+			far.escape_pred.push_back(st.escape_pred[j]);
+
+		}
+
+		return axis_cost(far, dt, axis, exact_text) + 4 * near;
 	}
 
 	// after the autopilot parameters in the head of the frames stream, per axis
@@ -750,6 +1065,8 @@ namespace standard {
 
 		std::vector<u8> frames; // the frames stream
 		std::array<dspace::axis_streams, 2> st;
+		_native_grid grid[2]{}; // the native grids the frames were coded on
+		_native_grid fitted[2]{}; // the native grids that fit, coded on or not
 		bool autopilot{}; // coded with the autopilot path model
 
 		size_t size() const {
@@ -771,7 +1088,7 @@ namespace standard {
 		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream model_head{};
 
-		frame_time::write_table(model_head, shared.table, shared.grid);
+		frame_time::write_table(model_head, shared.table, shared.grid, shared.custom);
 		dspace::write_info(m, model_head);
 		write_autopilot(ap, model_head);
 
@@ -782,10 +1099,131 @@ namespace standard {
 			if (m.axis[a].seg.size() == 1 && (m.axis[a].seg[0].p.device.kind == dspace::axis_mode::absolute ||
 				m.axis[a].seg[0].p.device.kind == dspace::axis_mode::rational)) {
 
-				grid[a] = fit_grid(p.st[a].K);
+				// a hinted grid of this very device is kept while it holds all but 0.1% of the positions
+				for (const auto& h : state.hints) {
+
+					// the same device, whatever play rate its replay had
+					auto hinted_device{ h.axis[a] };
+
+					hinted_device.game.rate = m.axis[a].seg[0].p.game.rate;
+
+					if (grid[a].on || hinted_device != m.axis[a].seg[0].p)
+						continue;
+
+					const _native_grid hinted{ h.grid[a].on ? h.grid[a] : h.grid_steps[a] > 0. ? grid_of_step(p.st[a], h.grid_steps[a]) : _native_grid{} };
+
+					if (!hinted.on)
+						continue;
+
+					auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), hinted) };
+
+					// a finer grid than the tablet's holds the positions too, at a higher cost: on the tablet's own grid
+					// neighbouring counts are the most common gap between the counts a replay visits
+					std::vector<i64> js{ st.K };
+
+					std::sort(js.begin(), js.end());
+					js.erase(std::unique(js.begin(), js.end()), js.end());
+
+					size_t neighbours{};
+
+					for (size_t k{ 1 }; k < js.size(); ++k)
+						neighbours += js[k] - js[k - 1] == 1;
+
+					if (neighbours * 2 < js.size())
+						continue;
+
+					if ((st.escapes.size() - std::min(st.escapes.size(), p.st[a].escapes.size())) * 1000 <= st.K.size()) {
+
+						grid[a] = hinted;
+						on_grid[a] = std::move(st);
+
+					}
+
+				}
 
 				if (grid[a].on)
-					on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), grid[a]);
+					continue;
+
+				grid[a] = fit_grid(p.st[a].K);
+
+				if (!grid[a].on)
+					continue;
+
+				on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), grid[a]);
+
+				// a driver spreads a whole number of tablet counts over its output range (65535, a doubled 32767, 65536),
+				// so a fitted step near such a one is that one. The integers of a lattice of N counts are on one of
+				// range - N too, and the fit can land on either: the tablet's own is the one its counts move smoothly on.
+				const double step{ (double)grid[a].A / 4294967296. };
+
+				size_t cost{ grid_cost(m.axis[a].seg[0].p, grid[a], on_grid[a], dt, a, state.exact_text()) };
+
+				for (const double range : { 65535., 65534., 65536. }) {
+
+					const double n{ std::round(range / step) };
+
+					if (std::abs(range / step - n) >= 0.05 || n < 64.)
+						continue;
+
+					for (const double counts : { n, range - n }) {
+
+						const _native_grid exact{ counts >= 64. ? grid_of_step(p.st[a], range / counts) : _native_grid{} };
+
+						if (!exact.on || exact.A == grid[a].A)
+							continue;
+
+						auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), exact) };
+
+						if (const size_t c{ grid_cost(m.axis[a].seg[0].p, exact, st, dt, a, state.exact_text()) }; c < cost) {
+
+							cost = c;
+							grid[a] = exact;
+							on_grid[a] = std::move(st);
+
+						}
+
+					}
+
+					break;
+				}
+
+				// An area mapped to the game's monitor is a whole number of counts across it, and a fit leaves the step free by
+				// a fraction of a count: where the lattice of the whole number holds the integers as well (to the margin a
+				// plain setting is kept by), it is the one. The driver spreads the desktop over its range and the game over
+				// 65536, so the window is counted in the driver's.
+				if (const auto& q{ m.axis[a].seg[0].p }; q.device.kind == dspace::axis_mode::absolute) {
+
+					const u32 named{ setup::window_of_axis(q) };
+
+					// the game's integers a window spans
+					const double window{ (named ? (double)named : 2. * q.game.window_half) / setup::tablet_line(q).quantum };
+
+					for (const double range : { 65535., 65534., 65536. }) {
+
+						const double across{ window * range / 65536. };
+						const double counts{ std::round(across / ((double)grid[a].A / 4294967296.)) };
+
+						const _native_grid whole{ counts >= 64. ? grid_of_step(p.st[a], across / counts) : _native_grid{} };
+
+						if (!whole.on)
+							continue;
+
+						if (whole.A != grid[a].A) {
+
+							auto st{ grid_streams(q, p.st[a], vals[a], state.exact_text(), whole) };
+
+							if (grid_cost(q, whole, st, dt, a, state.exact_text()) > cost + cost / VARIANT_MARGIN)
+								continue;
+
+							grid[a] = whole;
+							on_grid[a] = std::move(st);
+
+						}
+
+						break;
+					}
+
+				}
 
 			}
 
@@ -829,12 +1267,15 @@ namespace standard {
 
 			}
 
-			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, state.mode(), ap, shared.std_default_time };
+			const frames::_side side{ m.axis, shared.table, shared.time_grid(), state.mode(), ap, shared.std_default_time };
 
 			add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
 
 			return head.data;
 		};
+
+		p.fitted[0] = grid[0];
+		p.fitted[1] = grid[1];
 
 		bool use_grid{ grid[0].on || grid[1].on };
 
@@ -853,8 +1294,12 @@ namespace standard {
 
 		if (use_grid)
 			for (int a{}; a < 2; ++a)
-				if (grid[a].on)
+				if (grid[a].on) {
+
 					p.st[a].decoded = on_grid[a].decoded;
+					p.grid[a] = grid[a];
+
+				}
 
 		p.frames = std::move(best);
 
@@ -938,7 +1383,8 @@ namespace standard {
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		const bool differ{
-			px.game.scale != py.game.scale || px.game.unrounded_sub != py.game.unrounded_sub || px.device.mouse.sens != py.device.mouse.sens || px.device.mouse.poll != py.device.mouse.poll
+			px.game.scale != py.game.scale || px.game.unrounded_sub != py.game.unrounded_sub || px.device.mouse.sens != py.device.mouse.sens || px.device.mouse.poll != py.device.mouse.poll ||
+			px.game.rate != py.game.rate
 		};
 
 		if (px.device.kind != dspace::axis_mode::mouse || py.device.kind != dspace::axis_mode::mouse || !differ)
@@ -951,7 +1397,7 @@ namespace standard {
 
 			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
 
-			for (const auto& [W, H] : PM_RES) {
+			for (const auto& [W, H] : SEARCH_WINDOWS) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
@@ -1020,7 +1466,7 @@ namespace standard {
 		} else if (px.device.kind == dspace::axis_mode::mouse ||
 			(px.device.kind == dspace::axis_mode::absolute && px.device.absolute.mapping == dspace::tablet_mapping::window)) {
 
-			for (const auto& [W, H] : PM_RES) {
+			for (const auto& [W, H] : SEARCH_WINDOWS) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
@@ -1077,7 +1523,7 @@ namespace standard {
 
 			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
 
-			for (const auto& [W, H] : PM_RES) {
+			for (const auto& [W, H] : SEARCH_WINDOWS) {
 
 				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
 
@@ -1142,6 +1588,8 @@ namespace standard {
 
 			try_other_mouse(state, vals, dt, px, py, ws);
 			share_mouse(state, vals, dt, px, py, ws);
+			plain_tablet(state, vals, dt, px, py, ws);
+			one_arithmetic(state, vals, dt, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
@@ -1228,6 +1676,9 @@ namespace standard {
 
 		const _shared_streams shared{ shared_streams(r, std_default_pos, std_default_time) };
 
+		// the .osr's mods say the play rate; bare replay data leaves it to the device search (report_rates)
+		state.play_rate = state.header_rate > 0.f ? state.header_rate : 1.f;
+
 		const bool relax{ is_relax(state.mode()) };
 
 		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
@@ -1295,6 +1746,13 @@ namespace standard {
 			}
 
 		}
+
+		state.model = { info, { best.grid[0], best.grid[1] } };
+
+		for (int a{}; a < 2; ++a)
+			state.model.missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
+		state.setup = setup::of(state.model, best.fitted);
+		setup::timing(r, state.header_rate, (double)shared.period().num / (double)shared.period().den, state.setup);
 
 		write_orz(r, best, shared, state);
 

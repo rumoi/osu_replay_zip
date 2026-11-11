@@ -270,6 +270,72 @@ namespace frame_time {
 		return best;
 	}
 
+	// pick_grid's estimate for one grid: the bits the deltas take with its phase as their only context
+	inline double grid_bits(std::span<const int> delta, const _time_grid& grid) {
+
+		constexpr int SYM{ 48 };
+
+		u32 counts[GRID_BINS][SYM]{};
+
+		i64 now{};
+
+		for (const int d : delta) {
+
+			++counts[grid.bin(now)][std::clamp(d, 0, SYM - 1)];
+
+			now += d;
+		}
+
+		double bits{};
+
+		for (const auto& row : counts) {
+
+			u32 total{};
+
+			for (const u32 c : row)
+				total += c;
+
+			for (const u32 c : row)
+				if (c)
+					bits += c * std::log2((double)total / c) + 0.5 * std::log2((double)total);
+
+		}
+
+		return bits;
+	}
+
+	// A grid for ticks about `period` ms apart when that is none of the listed periods: a game clock off the usual play
+	// rates. The periods tried are whole 24ths of a millisecond, which holds every hundredth of the three play rates'
+	// periods. num 0 when the listed grid (index `listed`) serves the deltas as well.
+	inline _grid_period custom_grid(std::span<const int> delta, double period, u32 listed) {
+
+		for (u32 g{ 1 }; g < GRID_PERIOD_COUNT; ++g)
+			if (std::abs(period * (double)GRID_PERIODS[g].den / (double)GRID_PERIODS[g].num - 1.) < 0.015)
+				return {};
+
+		constexpr u32 DEN{ 24 };
+
+		_grid_period best{};
+
+		// a custom period has to earn its bytes in the head, and more than a fit to noise would
+		double best_bits{ 0.98 * grid_bits(delta, _time_grid{ listed }) };
+
+		// the ticks' mean spacing reads a little short where other frames fall between them
+		for (u32 k{ std::max(1u, (u32)(period * 0.985 * DEN)) }; k <= (u32)(period * 1.075 * DEN) + 1 && k <= GRID_CUSTOM_MAX; ++k) {
+
+			const double bits{ grid_bits(delta, _time_grid{ _grid_period{ k, DEN } }) };
+
+			if (bits < best_bits) {
+
+				best_bits = bits;
+				best = { k, DEN };
+			}
+
+		}
+
+		return best;
+	}
+
 	inline void write_gamma(u32 r, bit_stream& t) {
 
 		const u32 v{ r + 1 };

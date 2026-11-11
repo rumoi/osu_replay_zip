@@ -114,6 +114,7 @@ bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want, _table_
 struct _osr_header {
 
 	e_mode mode;
+	float rate; // the play rate its mods give
 
 	std::span<const u8> before_life; // the game mode up to the mods, stored as they are
 	_life_bar life;
@@ -202,6 +203,9 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 	const bool relax{ (header_values->mods & OSR_MOD_RELAX) != 0 && game_mode != 3 };
 
 	h.mode = (e_mode)(relax ? (u32)e_mode::osu_relax + game_mode : game_mode);
+
+	// double time (nightcore sets it too) and half time
+	h.rate = (header_values->mods & OSR_MOD_DOUBLE_TIME) ? 1.5f : (header_values->mods & OSR_MOD_HALF_TIME) ? 0.75f : 1.f;
 
 	const size_t life_start{ pos };
 
@@ -381,6 +385,8 @@ bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state)
 			state.after_life.assign(h.after_life.begin(), h.after_life.end());
 			state.tail.assign(h.tail.begin(), h.tail.end());
 			state.life = std::move(h.life);
+
+			state.header_rate = h.rate;
 
 			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
 
