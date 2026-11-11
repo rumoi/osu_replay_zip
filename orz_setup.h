@@ -685,12 +685,18 @@ namespace setup {
 		return { (float)(period / (1000. / 60.)), (float)(off / (double)count) };
 	}
 
+	// the longest gap between frames, in audio ms, that the readings below tabulate. A replay's own clock rate sets how
+	// long a gap they look at, and a replay can claim any rate: the tables hold this many whatever it says.
+	constexpr int BURST_MAX{ 32 };
+
 	// The game's frame time, in audio ms, from frames recorded singly (on a key or a combo change, between ticks). They
 	// land on the game's own frames, so no gap between two frames is shorter than a frame time, and every longer gap
 	// is as common as any other. 0: too few short gaps to say. The answer is a whole millisecond: 1 is 1 or less.
 	inline double single_frame_ms(const _osr& r, int burst_max) {
 
-		size_t gaps[33]{}, count{};
+		burst_max = std::clamp(burst_max, 1, BURST_MAX);
+
+		size_t gaps[BURST_MAX + 1]{}, count{};
 
 		for (const auto& f : r)
 			if (f.delta >= 1 && f.delta <= burst_max) {
@@ -730,6 +736,8 @@ namespace setup {
 	// ground between the frames either side), and only gaps short of the period, where the share has not reached 1.
 	inline _period single_report_ms(const _osr& r, float rate, int burst_max) {
 
+		burst_max = std::clamp(burst_max, 1, BURST_MAX);
+
 		// the cursor at each time the replay has: frames can share a millisecond, and a report shows on any of them
 		struct _point {
 			i64 at;
@@ -758,7 +766,7 @@ namespace setup {
 
 		const size_t n{ p.size() };
 
-		size_t gaps[33]{}, moved[33]{};
+		size_t gaps[BURST_MAX + 1]{}, moved[BURST_MAX + 1]{};
 
 		// Travelling: at least 0.4 field units per ms of real time between two times that stand clear of the gap, 12 ms
 		// of real time or more on either side. Times any closer would mostly show movement when a report fell in the
@@ -861,7 +869,7 @@ namespace setup {
 			rate = play_rate > 0.f ? play_rate : 1.f;
 
 		// frames this close together (10 ms of real time) were not waiting for a tick
-		const int burst_max{ (int)(10.f * rate) };
+		const int burst_max{ (int)std::clamp(10.f * rate, 1.f, (float)BURST_MAX) };
 
 		const auto close = [&](size_t i) { return r[i].delta >= 0 && r[i].delta <= burst_max; };
 
@@ -910,7 +918,7 @@ namespace setup {
 				// second any game does, the times being whole milliseconds
 				const size_t lo{ (size_t)frame_ms };
 
-				s.frame_steady = s.frame_hz < 520.f && (double)(by_delta[lo] + by_delta[lo + 1]) >= 0.95 * (double)frames;
+				s.frame_steady = s.frame_hz < 520.f && lo + 1 < std::size(by_delta) && (double)(by_delta[lo] + by_delta[lo + 1]) >= 0.95 * (double)frames;
 			}
 
 		}
