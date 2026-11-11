@@ -1321,6 +1321,9 @@ namespace dspace {
 
 	static_assert(std::size(POLL_RATES) == 7);
 
+	// a mouse axis's play rate code past the game's three: the rate follows as float bits
+	constexpr u32 RATE_CUSTOM{ 3 };
+
 	inline void write_poll(float poll, bit_stream& o) {
 
 		u32 k{};
@@ -1361,7 +1364,14 @@ namespace dspace {
 
 			write_setting(p.device.mouse.sens, o);
 			write_poll(p.device.mouse.poll, o);
-			o.write_bits<2>(p.game.rate == 1.5f ? 1 : p.game.rate == 0.75f ? 2 : 0);
+			// the play rate: one of the game's three, or any other as its float's bits, the sign left out
+			const u32 rate{ p.game.rate == 1.5f ? 1u : p.game.rate == 0.75f ? 2u : p.game.rate == 1.f || !(p.game.rate > 0.f) ? 0u : RATE_CUSTOM };
+
+			o.write_bits<2>(rate);
+
+			if (rate == RATE_CUSTOM)
+				o.write_bits<31>(std::bit_cast<u32>(p.game.rate));
+
 			o.push_back(p.game.unrounded_sub);
 			write_field(p.game, axis, o);
 
@@ -1413,12 +1423,16 @@ namespace dspace {
 
 			constexpr float RATES[]{ 1.f, 1.5f, 0.75f };
 
-			const u32 rate{ (u32)in.read_bits<2>() };
+			if (const u32 rate{ (u32)in.read_bits<2>() }; rate != RATE_CUSTOM)
+				p.game.rate = RATES[rate];
+			else {
 
-			if (rate >= std::size(RATES))
-				return false;
+				p.game.rate = std::bit_cast<float>((u32)in.read_bits<31>());
 
-			p.game.rate = RATES[rate];
+				if (!(p.game.rate > 0.f) || !std::isfinite(p.game.rate))
+					return false;
+
+			}
 
 			p.game.unrounded_sub = in.read_bits<1>() != 0;
 
