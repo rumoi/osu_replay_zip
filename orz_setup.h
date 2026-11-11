@@ -1,8 +1,7 @@
 #pragma once
 
-// the setup behind an osu!standard coding model. Several models give the same positions: a tablet mapped to the window
-// at speed 2 is one mapped to a desktop twice as wide, a driver with half the output range doubles every speed. What
-// they share is where a tablet count lands in the window, so the setup is stated in those terms.
+// the setup behind an osu!standard coding model: what its two axes say together of the window, the device and the
+// game's arithmetic, in the terms a caller keeps and hands back as a hint for the player's next replay
 
 #include <cmath>
 #include <numeric>
@@ -37,9 +36,6 @@ namespace setup {
 		return v > 0. && std::abs(v - std::round(v)) < 0.05;
 	}
 
-	// the output ranges a tablet driver spreads its counts over, the likeliest first: 65535, a doubled 0..32767, 65536
-	constexpr double DRIVER_RANGES[]{ 65535., 65534., 65536. };
-
 	// A window starts on a whole pixel of its desktop. Shifting every coded integer moves it by that many of the pixels
 	// one integer covers (reach / 65536), so a start read off another form of the same device can sit between two
 	// pixels: the first whole one from the desktop's start that a whole shift reaches, or the start as read.
@@ -53,29 +49,6 @@ namespace setup {
 				return to;
 
 		return at;
-	}
-
-	// the in-game sensitivity a tablet's two axes stand for, 1 when they do not agree on another: the same factor between
-	// the pixels the coded integers cover and the window on both axes, and too little over the window to be a second
-	// monitor beside it. reach, window: per axis.
-	inline float tablet_sensitivity(const double reach[2], const double window[2]) {
-
-		if (!(window[0] > 0.) || !(window[1] > 0.) || !(reach[0] > 0.) || !(reach[1] > 0.))
-			return 1.f;
-
-		const double rx{ reach[0] / window[0] }, ry{ reach[1] / window[1] };
-
-		if (std::abs(rx - ry) >= 0.004 * rx || std::abs(rx - 1.) <= 0.004)
-			return 1.f;
-
-		if (rx > 1. && reach[0] - window[0] >= 640.)
-			return 1.f;
-
-		// settings are in hundredths
-		if (std::abs(rx * 100. - std::round(rx * 100.)) > 0.03)
-			return 1.f;
-
-		return (float)(0.01 * std::round(rx * 100.));
 	}
 
 	// a setup as a prior for an encode: its display, driver and client as each axis's device, its tablet lattice as the
@@ -138,9 +111,6 @@ namespace setup {
 
 			} else if (s.kind == input::tablet && s.desktop[a]) {
 
-				// a doubled range is coded in the driver's own integers, over a desktop twice as wide
-				const double span{ (double)s.desktop[a] * (s.range == 32767 ? 2. : 1.) };
-
 				q.device.kind = dspace::axis_mode::absolute;
 				q.device.absolute.speed = s.sens > 0.f ? s.sens : 1.f;
 				q.game.window_half = (float)(s.window[a] / 2);
@@ -148,16 +118,14 @@ namespace setup {
 
 				if (s.to_window[a]) {
 
-					// the window stands for the desktop, so a doubled range is coded in the speed
 					q.device.absolute.mapping = dspace::tablet_mapping::window;
 					q.device.absolute.span = (float)s.window[a];
-					q.device.absolute.speed *= s.range == 32767 ? 2.f : 1.f;
 					q.game.product_rounded = s.product_rounded[a];
 
 				} else {
 
 					q.device.absolute.mapping = dspace::tablet_mapping::desktop;
-					q.device.absolute.span = (float)span;
+					q.device.absolute.span = (float)s.desktop[a];
 					q.game.origin = (float)-s.window_at[a];
 					q.game.origin_unrounded = s.origin_unrounded[a];
 
@@ -176,18 +144,19 @@ namespace setup {
 		return h;
 	}
 
-	// fitted: the native grid that fits each axis, for those the model was not coded on
-	inline dspace::_setup of(const dspace::_coding_model& m, const dspace::_native_grid fitted[2] = nullptr) {
+	// grid: the native grid that fits each axis, coded on or not. missed: the share of each axis's positions the model
+	// did not give.
+	inline dspace::_setup of(const dspace::_model_info& m, const dspace::_native_grid grid[2], const float missed[2]) {
 
 		using dspace::axis_mode;
 		using input = dspace::_setup::input;
 
 		dspace::_setup s{};
 
-		s.missed[0] = m.missed[0];
-		s.missed[1] = m.missed[1];
+		s.missed[0] = missed[0];
+		s.missed[1] = missed[1];
 
-		const auto& ax{ m.axes.axis };
+		const auto& ax{ m.axis };
 
 		if (ax[0].seg.size() != 1 || ax[1].seg.size() != 1)
 			return s;
@@ -200,19 +169,9 @@ namespace setup {
 
 			s.kind = input::tablet;
 
-			const dspace::_native_grid grid[2]{
-				m.grid[0].on || !fitted ? m.grid[0] : fitted[0],
-				m.grid[1].on || !fitted ? m.grid[1] : fitted[1]
-			};
-
-			_tablet_line line[2];
-			double step[2]{}; // coded integers per tablet count
-
 			// per axis: the pixels the coded integers' range covers, where the window starts in them, the speed coded
-			double reach[2]{}, at[2]{}, window[2]{};
+			double reach[2]{}, at[2]{};
 			float speed[2]{ 1.f, 1.f };
-
-			bool half_range{ true }, full_range{ true }, any_grid{};
 
 			for (int a{}; a < 2; ++a) {
 
@@ -223,46 +182,23 @@ namespace setup {
 				s.origin_unrounded[a] = p[a]->game.origin_unrounded;
 				s.product_rounded[a] = p[a]->game.product_rounded;
 
-				line[a] = tablet_line(*p[a]);
-
 				// the field mapping names the window; the half size only enters the arithmetic at other speeds
 				s.window[a] = window_of_axis(*p[a]);
 
 				if (s.window[a] == 0)
 					s.window[a] = (u32)std::lround(2. * p[a]->game.window_half);
 
-				window[a] = s.window[a];
+				reach[a] = d.span;
+				speed[a] = d.speed;
 
-				if (d.mapping == dspace::tablet_mapping::desktop) {
-
-					reach[a] = d.span;
+				// through the desktop, or the game's own mapping onto the window
+				if (d.mapping == dspace::tablet_mapping::desktop)
 					at[a] = -(double)p[a]->game.origin;
-					speed[a] = d.speed;
-
-				} else {
-
-					// the game's own mapping onto the window, at its sensitivity
-					reach[a] = d.span;
-					speed[a] = d.speed;
+				else
 					s.to_window[a] = true;
 
-				}
-
-				if (!grid[a].on)
-					continue;
-
-				any_grid = true;
-
-				step[a] = s.grid_step[a] = (double)grid[a].A / 4294967296.;
-
-				// The driver's range shows in which makes the area whole: counted over the desktop, or across the window,
-				// which holds 65536 / range of the driver's. A 0..32767 range arrives doubled, so 65534 stands for it.
-				const double across{ window[a] > 0. ? window[a] / (step[a] * line[a].quantum) : 0. };
-
-				const auto fits = [&](double r) { return whole(r / step[a]) || whole(across * r / 65536.); };
-
-				half_range &= fits(65534.) && !fits(65535.);
-				full_range &= fits(65535.) && !fits(65534.);
+				if (grid[a].on)
+					s.grid_step[a] = (double)grid[a].A / 4294967296.;
 
 			}
 
@@ -274,8 +210,10 @@ namespace setup {
 					if (speed[a] == 1.f)
 						continue;
 
-					reach[a] = line[a].quantum * 65536.;
-					at[a] = whole_start(-line[a].at_zero, reach[a]);
+					const _tablet_line line{ tablet_line(*p[a]) };
+
+					reach[a] = line.quantum * 65536.;
+					at[a] = whole_start(-line.at_zero, reach[a]);
 					speed[a] = 1.f;
 					s.to_window[a] = false;
 
@@ -285,79 +223,13 @@ namespace setup {
 
 			s.sens = speed[0];
 
-			// coded at speed 1, the sensitivity may still be in what the integers cover
-			if (s.sens == 1.f && !s.to_window[0] && !s.to_window[1]) {
-
-				if (const float sens{ tablet_sensitivity(reach, window) }; sens != 1.f) {
-
-					s.sens = sens;
-
-					for (int a{}; a < 2; ++a) {
-
-						reach[a] = window[a];
-						at[a] = 0.;
-
-					}
-
-				}
-
-			}
-
-			// a 0..32767 range arrives as even integers, and the model then codes the driver's own, half as many: the desktop
-			// it implies is twice the real one. Where the grids do not show the range, a desktop no pair of monitors spans
-			// does, and so does one twice the window both ways: four such monitors in a square are rarer than that driver
-			// on one.
-			const bool halved_integers{ any_grid && half_range ? true : any_grid && full_range ? false :
-				reach[0] > 5200. || reach[1] > 2200. || (reach[0] == 2. * window[0] && reach[1] == 2. * window[1])
-			};
-
-			s.range = halved_integers ? 32767 : 65535;
-
-			// No desktop is half its window: where the integers cover the window alone, the doubled range is in the speed,
-			// coded at twice the game's sensitivity.
-			const bool doubled_speed{ halved_integers && reach[0] == window[0] && reach[1] == window[1] };
-
-			if (doubled_speed)
-				s.sens *= 0.5f;
-
-			double desktop[2]{};
-
 			for (int a{}; a < 2; ++a) {
 
-				desktop[a] = reach[a] / (halved_integers && !doubled_speed ? 2. : 1.);
-
-				s.desktop[a] = (u32)std::lround(desktop[a]);
+				s.desktop[a] = (u32)std::lround(reach[a]);
 
 				// the window's position as coded: the game's float rounding follows the origin, and only that one is sure to
 				// give the replay back
 				s.window_at[a] = (i32)std::llround(at[a]);
-
-			}
-
-			// the axes are fit apart and can settle on different windows: a window 4/3 the size on a desktop 4/3 the size
-			// gives the same positions. One window serves both when the other axis's desktop stays whole at its size, and
-			// its window still starts on a whole pixel of it.
-			const double hx{ (double)p[0]->game.scale * 480. }, hy{ (double)p[1]->game.scale * 480. };
-
-			if (std::abs(hx - hy) > 0.5 && hx > 0. && hy > 0.) {
-
-				const double to_y{ hy / hx };
-
-				const auto on_pixel = [](double at) { return std::abs(at - std::round(at)) < 0.05; };
-
-				if (const double dx{ desktop[0] * to_y }; whole(dx) && whole(s.window[0] * to_y) && on_pixel(s.window_at[0] * to_y)) {
-
-					s.desktop[0] = (u32)std::lround(dx);
-					s.window[0] = (u32)std::lround(s.window[0] * to_y);
-					s.window_at[0] = (i32)std::lround(s.window_at[0] * to_y);
-
-				} else if (const double dy{ desktop[1] / to_y }; whole(dy) && whole(s.window[1] / to_y) && on_pixel(s.window_at[1] / to_y)) {
-
-					s.desktop[1] = (u32)std::lround(dy);
-					s.window[1] = (u32)std::lround(s.window[1] / to_y);
-					s.window_at[1] = (i32)std::lround(s.window_at[1] / to_y);
-
-				}
 
 			}
 

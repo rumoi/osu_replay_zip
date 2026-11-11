@@ -1092,7 +1092,7 @@ namespace standard {
 					if (grid[a].on || hinted_device != m.axis[a].seg[0].p)
 						continue;
 
-					const _native_grid hinted{ h.grid[a].on ? h.grid[a] : h.grid_steps[a] > 0. ? grid_of_step(p.st[a], h.grid_steps[a]) : _native_grid{} };
+					const _native_grid hinted{ h.grid_steps[a] > 0. ? grid_of_step(p.st[a], h.grid_steps[a]) : _native_grid{} };
 
 					if (!hinted.on)
 						continue;
@@ -1140,7 +1140,7 @@ namespace standard {
 
 				size_t cost{ grid_cost(m.axis[a].seg[0].p, grid[a], on_grid[a], dt, a, state.exact_text()) };
 
-				for (const double range : setup::DRIVER_RANGES) {
+				for (const double range : { 65535., 65534., 65536. }) {
 
 					const double n{ std::round(range / step) };
 
@@ -1167,44 +1167,6 @@ namespace standard {
 					}
 
 					break;
-				}
-
-				// An area mapped to the game's monitor is a whole number of counts across it, and a fit leaves the step free by
-				// a fraction of a count: where the lattice of the whole number holds the integers as well (to the margin a
-				// plain setting is kept by), it is the one. The driver spreads the desktop over its range and the game over
-				// 65536, so the window is counted in the driver's.
-				if (const auto& q{ m.axis[a].seg[0].p }; q.device.kind == dspace::axis_mode::absolute) {
-
-					const u32 named{ setup::window_of_axis(q) };
-
-					// the game's integers a window spans
-					const double window{ (named ? (double)named : 2. * q.game.window_half) / setup::tablet_line(q).quantum };
-
-					for (const double range : setup::DRIVER_RANGES) {
-
-						const double across{ window * range / 65536. };
-						const double counts{ std::round(across / ((double)grid[a].A / 4294967296.)) };
-
-						const _native_grid whole{ counts >= 64. ? grid_of_step(p.st[a], across / counts) : _native_grid{} };
-
-						if (!whole.on)
-							continue;
-
-						if (whole.A != grid[a].A) {
-
-							auto st{ grid_streams(q, p.st[a], vals[a], state.exact_text(), whole) };
-
-							if (grid_cost(q, whole, st, dt, a, state.exact_text()) > cost + cost / VARIANT_MARGIN)
-								continue;
-
-							grid[a] = whole;
-							on_grid[a] = std::move(st);
-
-						}
-
-						break;
-					}
-
 				}
 
 			}
@@ -1570,8 +1532,6 @@ namespace standard {
 
 			try_other_mouse(state, vals, dt, px, py, ws);
 			share_mouse(state, vals, dt, px, py, ws);
-			plain_tablet(state, vals, dt, px, py, ws);
-			one_arithmetic(state, vals, dt, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
@@ -1729,11 +1689,12 @@ namespace standard {
 
 		}
 
-		state.model = { info, { best.grid[0], best.grid[1] } };
+		float missed[2];
 
 		for (int a{}; a < 2; ++a)
-			state.model.missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
-		state.setup = setup::of(state.model, best.fitted);
+			missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
+
+		state.setup = setup::of(info, best.fitted, missed);
 		state.setup.clock_rate = setup::clock_rate(r, state.header_rate, (double)shared.period().num / (double)shared.period().den);
 
 		write_orz(r, best, shared, state);

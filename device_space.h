@@ -203,15 +203,8 @@ namespace dspace {
 		i64 C; // 32:32 fixed p
 	};
 
-	// what an osu!standard encode chose to predict the cursor with: the device model of each axis and its native grid
-	struct _coding_model {
-		_model_info axes;
-		_native_grid grid[2]{};
-		float missed[2]{}; // the share of each axis's positions its device did not give (escaped)
-	};
-
-	// the hardware and software configuration behind a coding model, in terms that do not depend on which of several
-	// equivalent models was coded (orz_setup.h). Unknown parts are 0.
+	// the hardware and software configuration behind a coding model (orz_setup.h): what a caller keeps of an encode and
+	// hands back as a hint for the player's next replay. Unknown parts are 0.
 	struct _setup {
 
 		enum class input : u8 {
@@ -230,8 +223,7 @@ namespace dspace {
 		float sens{}, poll{};
 
 		// tablet
-		u32 range{}; // the driver's output range: 65535, or 32767 (which the system doubles)
-		u32 desktop[2]{}; // pixels that range covers: one monitor, or the virtual desktop
+		u32 desktop[2]{}; // pixels the coded integers cover: one monitor, or the virtual desktop
 		i32 window_at[2]{}; // the window's position within them, as coded
 		bool to_window[2]{}; // the range is mapped onto the window itself (the game's option), not through the desktop
 		double grid_step[2]{}; // the tablet's lattice as coded: coded integers per tablet count, 0: none
@@ -251,63 +243,18 @@ namespace dspace {
 	};
 
 	// what a caller knows of the setup a replay was recorded with: the device an earlier replay of the player was coded
-	// with, a window size the client reported. Nothing in a hint is trusted. A hint gives the device search candidates
-	// and narrows what it lists, and a hinted device has to fit the replay as any other candidate does.
+	// with (setup::hint makes one of that encode's setup). Nothing in a hint is trusted. A hint gives the device search
+	// candidates, and a hinted device has to fit the replay as any other candidate does.
 	struct device_hint {
 
-		// an axis's device as an earlier encode chose it (orz_state::model), kind none when not known
+		// an axis's device as an earlier encode chose it, kind none when not known
 		axis_params axis[2]{};
 
-		// parts of a setup, 0 when not known
-		axis_mode kind{}; // mouse or absolute
-		u32 width{}, height{}; // the game window, any size
-		float sens{}, poll{}; // mouse sensitivity and polling rate
-
-		// the native grid of each axis, used when axis[] is taken and the grid still fits
-		_native_grid grid[2]{};
-
-		// or only its step, in coded integers per tablet count (the grid's offset is then fit)
+		// the step of each axis's native grid, in coded integers per tablet count (its offset is fit again), 0: none
 		double grid_steps[2]{};
 
 		// the share of positions axis[] missed where it came from: it is taken again while it fits about as well
 		float missed[2]{};
-
-		// a whole coding model: its devices and their grids
-		static device_hint from(const _coding_model& m) {
-
-			device_hint h{ from(m.axes) };
-
-			h.grid[0] = m.grid[0];
-			h.grid[1] = m.grid[1];
-
-			h.missed[0] = m.missed[0];
-			h.missed[1] = m.missed[1];
-
-			return h;
-		}
-
-		// the device of each axis's first segment that has one
-		static device_hint from(const _model_info& m) {
-
-			device_hint h{};
-
-			for (int a{}; a < 2; ++a) {
-
-				for (const auto& sg : m.axis[a].seg) {
-
-					if (sg.p.device.kind == axis_mode::none || sg.p.device.kind == axis_mode::text)
-						continue;
-
-					h.axis[a] = sg.p;
-
-					break;
-				}
-
-			}
-
-			return h;
-		}
-
 	};
 
 	FORCEINLINE float rational_value(const axis_params& p, i64 k) {

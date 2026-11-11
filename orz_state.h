@@ -25,10 +25,7 @@ struct orz_state {
 	// osu!standard device hints for the next encodes, the likeliest first (not reset by reset_volatile)
 	std::vector<dspace::device_hint> hints;
 
-	// what the last osu!standard encode coded the cursor with (text axes when it found no device)
-	dspace::_coding_model model{};
-
-	// the setup that model stands for (orz_setup.h), unknown parts 0
+	// the setup the last osu!standard encode's device model stands for (orz_setup.h), unknown parts 0
 	dspace::_setup setup{};
 
 	_orz_file file{};
@@ -51,14 +48,10 @@ struct orz_state {
 
 	struct {
 		bool disable_device{};
-		bool search_all{}; // no early accepts in the device search: every stage runs, to measure what they cost or lose
 	} debug;
 
 	struct {
 		size_t files{}, axis[5]{}, escapes{}, frames{}, segmented{};
-
-		// hinted devices tried on an axis: taken without a search, or not for missing too much / for a coarser lattice fitting
-		size_t hints_tried{}, hints_taken{}, hints_missed{}, hints_finer{};
 	} stats;
 
 	e_mode mode() const {
@@ -95,7 +88,6 @@ struct orz_state {
 		seed = {};
 		lzma = {};
 
-		model = {};
 		setup = {};
 		header_rate = 0.f;
 		play_rate = 1.f;
