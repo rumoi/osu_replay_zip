@@ -4,12 +4,8 @@
 // at speed 2 is one mapped to a desktop twice as wide, a driver with half the output range doubles every speed. What
 // they share is where a tablet count lands in the window, so the setup is stated in those terms.
 
-#include <algorithm>
-#include <array>
 #include <cmath>
-#include <limits>
 #include <numeric>
-#include <vector>
 
 #include "device_space.h"
 
@@ -80,120 +76,6 @@ namespace setup {
 			return 1.f;
 
 		return (float)(0.01 * std::round(rx * 100.));
-	}
-
-	// What whole displays span along an axis, and how unlikely each is: nothing, a common display's side (the commoner
-	// the display the likelier, PM_RES's order, and its own way up before turned), or two of them together.
-	struct _display_span {
-		i64 pixels;
-		int cost;
-	};
-
-	static const auto DISPLAY_SPANS = [] {
-
-		constexpr int TURNED{ 8 }, SECOND{ 4 };
-
-		std::array<std::vector<_display_span>, 2> spans;
-
-		for (int a{}; a < 2; ++a) {
-
-			std::vector<_display_span> one;
-
-			for (int i{}; i < (int)std::size(dspace::PM_RES); ++i) {
-
-				one.push_back({ dspace::PM_RES[i][a], 1 + i });
-				one.push_back({ dspace::PM_RES[i][1 - a], 1 + i + TURNED });
-
-			}
-
-			auto& all{ spans[a] };
-
-			all = one;
-			all.push_back({ 0, 0 });
-
-			for (const auto& x : one)
-				for (const auto& y : one)
-					all.push_back({ x.pixels + y.pixels, x.cost + y.cost + SECOND });
-
-			// the likeliest way to span each
-			std::sort(all.begin(), all.end(), [](const _display_span& x, const _display_span& y) {
-
-				return x.pixels != y.pixels ? x.pixels < y.pixels : x.cost < y.cost;
-			});
-
-			all.erase(std::unique(all.begin(), all.end(), [](const _display_span& x, const _display_span& y) {
-
-				return x.pixels == y.pixels;
-			}), all.end());
-
-		}
-
-		return spans;
-	}();
-
-	// Where a tablet's window likely is on an axis. The replay gives its position up to a period (window_period), and
-	// windows are not just anywhere: the game fills a display, which starts the desktop or has whole displays either
-	// side of it (the fewest and commonest that fit), or it is letterboxed in the middle of one.
-	inline void place_window(dspace::_setup& s, int a) {
-
-		using placing = dspace::_setup::placing;
-
-		// more than a common display either side, one of them turned, is no likelier than anywhere
-		constexpr int COST_MAX{ 24 };
-
-		s.window_likely[a] = s.window_at[a];
-		s.window_placed[a] = placing::coded;
-
-		// the pixels of the desktop the window leaves free, and the first position from its start
-		const i64 free{ (i64)s.desktop[a] - (i64)s.window[a] }, period{ s.window_period[a] };
-
-		if (s.to_window[a] || !s.window[a] || free < 0 || period < 1)
-			return;
-
-		const i64 first{ (((i64)s.window_at[a] % period) + period) % period };
-
-		const auto put = [&](i64 at, placing how) {
-
-			s.window_likely[a] = (i32)at;
-			s.window_placed[a] = how;
-
-		};
-
-		if (first == 0)
-			return put(0, placing::start);
-
-		if (first > free)
-			return;
-
-		if (first + period > free)
-			return put(first, placing::only);
-
-		const auto& spans{ DISPLAY_SPANS[a] };
-
-		int least{ COST_MAX + 1 };
-
-		for (const auto& before : spans) {
-
-			if (before.pixels < first || before.pixels > free || (before.pixels - first) % period != 0 || before.cost >= least)
-				continue;
-
-			const auto after{ std::lower_bound(spans.begin(), spans.end(), free - before.pixels, [](const _display_span& x, i64 pixels) {
-
-				return x.pixels < pixels;
-			}) };
-
-			if (after != spans.end() && after->pixels == free - before.pixels && before.cost + after->cost < least) {
-
-				least = before.cost + after->cost;
-				put(before.pixels, placing::edge);
-
-			}
-
-		}
-
-		if (least > COST_MAX && free % 2 == 0 && free / 2 >= first && (free / 2 - first) % period == 0)
-			put(free / 2, placing::centred);
-
 	}
 
 	// a setup as a prior for an encode: its display, driver and client as each axis's device, its tablet lattice as the
@@ -325,7 +207,6 @@ namespace setup {
 
 			_tablet_line line[2];
 			double step[2]{}; // coded integers per tablet count
-			double other[2]{}; // the area on the complementary lattice
 
 			// per axis: the pixels the coded integers' range covers, where the window starts in them, the speed coded
 			double reach[2]{}, at[2]{}, window[2]{};
@@ -451,100 +332,6 @@ namespace setup {
 				// give the replay back
 				s.window_at[a] = (i32)std::llround(at[a]);
 
-				if (step[a] > 0. && s.window[a]) {
-
-					// counts over the window = window pixels / pixels per count
-					const double counts{ (double)s.window[a] / (step[a] * line[a].quantum) };
-
-					// whole under the driver's own arithmetic: (range or range + 1) counts over what the integers cover
-					double exact{ counts };
-					bool over_desktop{};
-
-					for (const double r : DRIVER_RANGES) {
-
-						const double over_range{ r / step[a] };
-
-						if (whole(over_range)) {
-
-							// integers on a lattice of N steps over the range are also on one of range - N steps (each is
-							// its own count plus the other's): the tablet's is the coarser of the two, or the one below
-							const double n{ std::round(over_range) }, to_window{ (double)s.window[a] / (line[a].quantum * 65536.) };
-
-							exact = std::min(n, r - n) * to_window;
-							other[a] = std::max(n, r - n) * to_window;
-							over_desktop = true;
-
-							break;
-						}
-
-					}
-
-					// An area mapped to one monitor of several is whole over that monitor only. The driver spreads the desktop
-					// over its range and the game over 65536, so the game's window holds 65536 / range of the driver's: the
-					// area is that much less than the counts across it.
-					for (const double r : DRIVER_RANGES) {
-
-						if (over_desktop || !whole(counts * r / 65536.))
-							continue;
-
-						exact = counts * r / 65536.;
-
-						break;
-					}
-
-					s.area[a] = whole(exact) ? std::round(exact) : std::round(exact * 10.) / 10.;
-
-				}
-
-			}
-
-			// Which of two complementary lattices is the tablet's shows in the area's shape. Most areas are the window's
-			// shape (mapped to keep proportions) or the tablet's own (the whole of it: 16:10, 3:2 or 4:3): the combination
-			// within a fiftieth of one of those stands, the nearest. Where none is, the one nearest the window's.
-			if (s.area[0] > 0. && s.area[1] > 0. && s.window[0] && s.window[1]) {
-
-				const double shapes[]{ (double)s.window[0] / s.window[1], 16. / 10., 3. / 2., 4. / 3. };
-
-				// how far x by y is from the nearest of the first n shapes
-				const auto off_shape = [&shapes](double x, double y, size_t n) {
-
-					double least{ std::numeric_limits<double>::max() };
-
-					for (size_t k{}; k < n; ++k)
-						least = std::min(least, std::abs(x / y / shapes[k] - 1.));
-
-					return least;
-				};
-
-				const double first[2]{ s.area[0], s.area[1] };
-
-				const bool likely{ [&] {
-
-					for (int k{}; k < 4; ++k)
-						if (const double x{ k & 1 ? other[0] : first[0] }, y{ k & 2 ? other[1] : first[1] }; x > 0. && y > 0. && off_shape(x, y, std::size(shapes)) < 0.02)
-							return true;
-
-					return false;
-				}() };
-
-				const size_t n{ likely ? std::size(shapes) : 1 };
-
-				double best{ off_shape(first[0], first[1], n) };
-
-				for (int k{ 1 }; k < 4; ++k) {
-
-					const double x{ k & 1 ? other[0] : first[0] }, y{ k & 2 ? other[1] : first[1] };
-
-					if (x > 0. && y > 0. && off_shape(x, y, n) < best) {
-
-						best = off_shape(x, y, n);
-						s.area[0] = whole(x) ? std::round(x) : std::round(x * 10.) / 10.;
-						s.area[1] = whole(y) ? std::round(y) : std::round(y * 10.) / 10.;
-
-					}
-
-				}
-
 			}
 
 			// the axes are fit apart and can settle on different windows: a window 4/3 the size on a desktop 4/3 the size
@@ -571,16 +358,6 @@ namespace setup {
 					s.window_at[1] = (i32)std::lround(s.window_at[1] / to_y);
 
 				}
-
-			}
-
-			for (int a{}; a < 2; ++a) {
-
-				// shifting every coded integer moves the window by whole pixels only every desktop / gcd(desktop, range) of
-				// them, so its position is known up to that period, of the reconciled desktop
-				s.window_period[a] = (u32)std::max<i64>(1, (i64)s.desktop[a] / (i64)std::gcd((u64)std::max<u32>(1, s.desktop[a]), (u64)(halved_integers ? 32768 : 65536)));
-
-				place_window(s, a);
 
 			}
 
@@ -628,12 +405,10 @@ namespace setup {
 
 	struct _ticks {
 		float rate; // audio time against real time, 0: too few clean ticks to say
-		float spread; // how far a tick's spacing is from the period on average, in audio ms
 	};
 
 	// The 60 Hz ticks: the game records a frame on the first update after each 60th of a second of real time, so ticks
-	// are 16.67 ms of audio apart at normal speed, 25 with double time, 12.5 with half time. A tick waits for its frame,
-	// anywhere up to one frame time, so its spacing spreads around the period by a third of a frame time on average.
+	// are 16.67 ms of audio apart at normal speed, 25 with double time, 12.5 with half time.
 	inline _ticks ticks_of(const _osr& r) {
 
 		constexpr int LO{ 8 }, HI{ 45 }; // audio ms a tick can be apart
@@ -663,7 +438,7 @@ namespace setup {
 
 		const auto clean = [&](size_t i) { return whole(i - 1) && whole(i) && whole(i + 1); };
 
-		double sum{}, off{};
+		double sum{};
 		size_t count{};
 
 		for (size_t i{ 1 }; i + 1 < n; ++i) {
@@ -678,414 +453,26 @@ namespace setup {
 		if (count < 50)
 			return {};
 
-		const double period{ sum / (double)count };
-
-		for (size_t i{ 1 }; i + 1 < n; ++i)
-			if (clean(i))
-				off += std::abs((double)r[i].delta - period);
-
-		return { (float)(period / (1000. / 60.)), (float)(off / (double)count) };
+		return { (float)(sum / (double)count / (1000. / 60.)) };
 	}
 
-	// the longest gap between frames, in audio ms, that the readings below tabulate. A replay's own clock rate sets how
-	// long a gap they look at, and a replay can claim any rate: the tables hold this many whatever it says.
-	constexpr int BURST_MAX{ 32 };
+	// How fast audio time ran against real time, 0 where the replay does not show it. play_rate is the rate the replay's
+	// mods state (0: unknown); grid_ms is the period of the grid the times are coded on, 0 for none.
+	inline float clock_rate(const _osr& r, float play_rate, double grid_ms) {
 
-	// The game's frame time, in audio ms, from frames recorded singly (on a key or a combo change, between ticks). They
-	// land on the game's own frames, so no gap between two frames is shorter than a frame time, and every longer gap
-	// is as common as any other. 0: too few short gaps to say. The answer is a whole millisecond: 1 is 1 or less.
-	inline double single_frame_ms(const _osr& r, int burst_max) {
-
-		burst_max = std::clamp(burst_max, 1, BURST_MAX);
-
-		size_t gaps[BURST_MAX + 1]{}, count{};
-
-		for (const auto& f : r)
-			if (f.delta >= 1 && f.delta <= burst_max) {
-
-				++gaps[f.delta];
-				++count;
-			}
-
-		if (count < 300)
-			return 0.;
-
-		// how common a gap is once frames can fall on it: the mean over the longer half
-		const int from{ burst_max / 2 + 1 };
-
-		double level{};
-
-		for (int d{ from }; d <= burst_max; ++d)
-			level += (double)gaps[d];
-
-		level /= (double)(burst_max - from + 1);
-
-		for (int d{ 1 }; d <= burst_max; ++d)
-			if ((double)gaps[d] >= 0.5 * level)
-				return (double)d;
-
-		return 0.;
-	}
-
-	struct _period {
-		double ms; // audio time, 0: the replay does not show it
-		bool bound; // the period is at most this
-	};
-
-	// The cursor device's period from frames recorded singly. Across a gap shorter than the period the cursor moves
-	// only if a report fell inside it, so over many gaps of g ms it moved across g / period of them: the period is the
-	// gaps' total length over the times it moved. Only gaps the cursor was travelling through count (it covered
-	// ground between the frames either side), and only gaps short of the period, where the share has not reached 1.
-	inline _period single_report_ms(const _osr& r, float rate, int burst_max) {
-
-		burst_max = std::clamp(burst_max, 1, BURST_MAX);
-
-		// the cursor at each time the replay has: frames can share a millisecond, and a report shows on any of them
-		struct _point {
-			i64 at;
-			float x, y;
-		};
-
-		std::vector<_point> p;
-
-		p.reserve(r.size());
-
-		{
-			i64 at{};
-
-			for (const auto& f : r) {
-
-				at += std::max(0, f.delta);
-
-				if (p.empty() || p.back().at != at)
-					p.push_back({ at, f.x, f.y });
-				else
-					p.back() = { at, f.x, f.y };
-
-			}
-
-		}
-
-		const size_t n{ p.size() };
-
-		size_t gaps[BURST_MAX + 1]{}, moved[BURST_MAX + 1]{};
-
-		// Travelling: at least 0.4 field units per ms of real time between two times that stand clear of the gap, 12 ms
-		// of real time or more on either side. Times any closer would mostly show movement when a report fell in the
-		// gap itself, which is the thing being counted.
-		const i64 clear{ (i64)(12.f * rate) };
-
-		size_t before{}, after{};
-
-		for (size_t i{ 2 }; i + 1 < n; ++i) {
-
-			const i64 gap{ p[i].at - p[i - 1].at };
-
-			while (before + 1 < i - 1 && p[i - 1].at - p[before + 1].at >= clear)
-				++before;
-
-			after = std::max(after, i);
-
-			while (after + 1 < n && p[after].at - p[i].at < clear)
-				++after;
-
-			if (gap > burst_max || p[i - 1].at - p[before].at < clear || p[after].at - p[i].at < clear)
-				continue;
-
-			const double span{ (double)(p[after].at - p[before].at) / (double)rate };
-
-			if (span > 80. || std::hypot(p[after].x - p[before].x, p[after].y - p[before].y) < 0.4 * span)
-				continue;
-
-			++gaps[gap];
-			moved[gap] += p[i].x != p[i - 1].x || p[i].y != p[i - 1].y;
-		}
-
-		// the longest gaps that are still short of the period they give
-		_period out{};
-
-		for (int cap{ burst_max }; cap >= 1; --cap) {
-
-			size_t count{}, moves{}, length{};
-
-			for (int g{ 1 }; g <= cap; ++g) {
-
-				count += gaps[g];
-				moves += moved[g];
-				length += (size_t)g * gaps[g];
-			}
-
-			if (count < 150 || moves < 40)
-				break;
-
-			const double period{ (double)length / (double)moves };
-
-			if (period >= 1.5 * (double)cap)
-				return { period, false };
-
-			// every gap this long was moved across: the period is no longer than the gap
-			out = { (double)cap, true };
-		}
-
-		return out;
-	}
-
-	// What the frames' timing shows of the setup, read into s. play_rate is 0 when the caller has none; grid_ms is the
-	// period of the grid the times are coded on, 0 for none.
-	//
-	// Besides the 60 Hz ticks, the game records every frame while some states last (a slider held with relax). So a
-	// replay can have stretches recorded frame by frame: there the deltas are the game's own frame times, and a device
-	// that reports less often than the game draws shows its period in when the cursor moves. A key change is recorded
-	// on the frame that saw it, so the tapping device's reports show in the times between key changes.
-	// Frame times are audio time: real time is that over the rate the ticks give.
-	inline void timing(const _osr& r, float play_rate, double grid_ms, dspace::_setup& s) {
-
-		using tapping = dspace::_setup::tapping;
-
-		const size_t n{ r.size() };
-
-		if (n < 16)
-			return;
-
-		// the ticks say how fast audio time ran; a known play rate they agree with is exact
-		const _ticks ticks{ ticks_of(r) };
-
-		float rate{ ticks.rate };
+		float rate{ ticks_of(r).rate };
 
 		// the ticks' mean spacing reads up to a few percent short where other frames fall between them: the grid the
 		// times are coded on is their exact period where the two agree
 		if (const double on_grid{ grid_ms / (1000. / 60.) }; rate >= 0.92 * on_grid && rate <= 1.015 * on_grid)
 			rate = (float)on_grid;
 
+		// a known play rate the ticks agree with is exact
 		for (const float known : { play_rate, 1.f, 1.5f, 0.75f })
-			if (known > 0.f && std::abs(rate / known - 1.f) < 0.015f) {
+			if (known > 0.f && std::abs(rate / known - 1.f) < 0.015f)
+				return known;
 
-				rate = known;
-
-				break;
-			}
-
-		s.clock_rate = rate;
-
-		if (!(rate > 0.f))
-			rate = play_rate > 0.f ? play_rate : 1.f;
-
-		// frames this close together (10 ms of real time) were not waiting for a tick
-		const int burst_max{ (int)std::clamp(10.f * rate, 1.f, (float)BURST_MAX) };
-
-		const auto close = [&](size_t i) { return r[i].delta >= 0 && r[i].delta <= burst_max; };
-
-		// a frame inside a stretch recorded frame by frame: its delta is one frame time. Frames a combo change or a
-		// key adds between ticks come close together too, but not this many in a row
-		constexpr size_t RUN_MIN{ 16 };
-
-		std::vector<u8> run(n);
-
-		for (size_t i{}; i < n;) {
-
-			size_t end{ i };
-
-			while (end < n && close(end))
-				++end;
-
-			if (end - i >= RUN_MIN)
-				std::fill(run.begin() + (ptrdiff_t)i + 1, run.begin() + (ptrdiff_t)end - 1, (u8)1);
-
-			i = end + 1;
-		}
-
-		double frame_ms{}; // audio time
-
-		{
-			size_t frames{}, by_delta[32]{};
-			i64 span{};
-
-			for (size_t i{}; i < n; ++i) {
-
-				if (!run[i])
-					continue;
-
-				++frames;
-				span += r[i].delta;
-				++by_delta[std::min(r[i].delta, 31)];
-			}
-
-			if (frames >= 300 && span > 0) {
-
-				frame_ms = (double)span / (double)frames;
-
-				s.frame_hz = (float)(1000. * rate / frame_ms);
-
-				// a limiter holds every frame to the two whole milliseconds around its period; above 500 frames a
-				// second any game does, the times being whole milliseconds
-				const size_t lo{ (size_t)frame_ms };
-
-				s.frame_steady = s.frame_hz < 520.f && lo + 1 < std::size(by_delta) && (double)(by_delta[lo] + by_delta[lo + 1]) >= 0.95 * (double)frames;
-			}
-
-		}
-
-		// without such stretches, frames recorded singly still land on the game's frames
-		const bool stretches{ frame_ms > 0. };
-
-		if (!stretches)
-			if (const double single{ single_frame_ms(r, burst_max) }; single > 0.) {
-
-				s.frame_hz = (float)(1000. * rate / single);
-				s.frame_rough = true;
-				s.frame_bound = single <= 1.;
-			}
-
-		// the times between cursor movements, inside those stretches
-		if (frame_ms > 0.) {
-
-			size_t gaps[64]{}, moves{};
-			i64 t{}, moved_at{ -1 };
-			float x{ r[0].x }, y{ r[0].y };
-
-			for (size_t i{ 1 }; i < n; ++i) {
-
-				if (r[i].delta > 0)
-					t += r[i].delta;
-
-				if (!run[i])
-					moved_at = -1;
-
-				if (r[i].x == x && r[i].y == y)
-					continue;
-
-				if (run[i]) {
-
-					if (moved_at >= 0 && t - moved_at < 64) {
-
-						++gaps[t - moved_at];
-						++moves;
-					}
-
-					moved_at = t;
-				}
-
-				x = r[i].x;
-				y = r[i].y;
-			}
-
-			if (moves >= 300) {
-
-				size_t mode{ 1 };
-
-				for (size_t g{ 2 }; g < 64; ++g)
-					mode = gaps[g] > gaps[mode] ? g : mode;
-
-				// The period is the mean gap, over the gaps of one report: those short of one and a half periods, the
-				// rest being reports the cursor sat still for. A driver can deliver a steady device's reports unevenly
-				// (gaps of 3 to 10 ms from a 133 Hz tablet), and only the mean of them all is the device's period.
-				// The limit follows the mean until it settles.
-				double period{ (double)mode };
-
-				for (int pass{}; pass < 8; ++pass) {
-
-					const size_t lo{ 1 }, hi{ std::min<size_t>(63, (size_t)(1.45 * period)) };
-
-					double sum{}, count{};
-
-					for (size_t g{ lo }; g <= hi; ++g) {
-
-						sum += (double)(g * gaps[g]);
-						count += (double)gaps[g];
-					}
-
-					if (!(count > 0.) || sum / count == period)
-						break;
-
-					period = sum / count;
-				}
-
-				// the finest step the replay can show: a frame, and no less than a millisecond
-				const double finest{ std::max(frame_ms, 1.) };
-
-				if (gaps[0] > gaps[mode] || period <= 1.6 * finest) {
-
-					s.report_hz = (float)(1000. * rate / finest);
-					s.report_bound = true;
-
-				} else
-					s.report_hz = (float)(1000. * rate / period);
-
-			}
-
-		}
-
-		if (!(s.report_hz > 0.f))
-			if (const _period single{ single_report_ms(r, rate, burst_max) }; single.ms > 0.) {
-
-				s.report_hz = (float)(1000. * rate / single.ms);
-				s.report_rough = true;
-				s.report_bound = single.bound;
-			}
-
-		// taps: which buttons go down, and the times between changes
-		{
-			size_t presses[2]{}; // keys, buttons
-			size_t gaps{}, on8{}, on4{};
-			i64 t{}, changed_at{ -1 };
-			u32 keys{};
-
-			// 8 and 4 ms of real time, whole in audio time at every play rate
-			const i64 p8{ std::lround(8.f * rate) }, p4{ std::lround(4.f * rate) };
-			const i64 gap_max{ (i64)(400.f * rate) };
-
-			for (size_t i{}; i < n; ++i) {
-
-				if (r[i].delta > 0)
-					t += r[i].delta;
-
-				const u32 now{ r[i].keys & 15 };
-
-				if (now == keys)
-					continue;
-
-				// a key sets its own bit and its button's
-				if (const u32 down{ now & ~keys }; down & 12)
-					++presses[0];
-				else if (down & 3)
-					++presses[1];
-
-				if (const i64 gap{ t - changed_at }; changed_at >= 0 && gap > 0 && gap <= gap_max) {
-
-					++gaps;
-					on8 += gap % p8 == 0;
-					on4 += gap % p4 == 0;
-				}
-
-				changed_at = t;
-				keys = now;
-			}
-
-			if (const size_t all{ presses[0] + presses[1] }; all >= 20)
-				s.taps = presses[0] * 20 >= all * 19 ? tapping::keys : presses[1] * 20 >= all * 19 ? tapping::buttons : tapping::both;
-
-			// A device's steps show when the game's frames are at most half as long. The frame rate says so where the
-			// replay has it; failing that the ticks' spread, which is no finer than a frame time, can only rule a test out
-			const float frame{ s.frame_hz > 0.f ? 1000.f / s.frame_hz : 3.f * ticks.spread / rate };
-			const bool known{ stretches };
-
-			if (gaps >= 100 && (known || ticks.rate > 0.f)) {
-
-				if (frame <= 4.f && on8 * 5 >= gaps * 2)
-					s.tap_hz = 125.f;
-				else if (frame <= 2.f && on4 * 5 >= gaps * 3)
-					s.tap_hz = 250.f;
-				else if (known && frame <= 4.f) {
-
-					// no steps seen: it reports at least twice as often as the coarsest step tested
-					s.tap_hz = frame <= 2.f ? 500.f : 250.f;
-					s.tap_bound = true;
-				}
-
-			}
-
-		}
-
+		return rate;
 	}
 
 }

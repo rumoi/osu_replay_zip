@@ -1734,7 +1734,7 @@ namespace standard {
 		for (int a{}; a < 2; ++a)
 			state.model.missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
 		state.setup = setup::of(state.model, best.fitted);
-		setup::timing(r, state.header_rate, (double)shared.period().num / (double)shared.period().den, state.setup);
+		state.setup.clock_rate = setup::clock_rate(r, state.header_rate, (double)shared.period().num / (double)shared.period().den);
 
 		write_orz(r, best, shared, state);
 

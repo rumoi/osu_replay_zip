@@ -233,24 +233,7 @@ namespace dspace {
 		u32 range{}; // the driver's output range: 65535, or 32767 (which the system doubles)
 		u32 desktop[2]{}; // pixels that range covers: one monitor, or the virtual desktop
 		i32 window_at[2]{}; // the window's position within them, as coded
-		u32 window_period[2]{}; // positions this far apart give the same replay (the coded integers shift by a whole number)
-
-		// Where the window likely is among those positions: at the desktop's start, the one position there is, on a
-		// display's edge further along (whole displays either side of the window), or centred (a letterboxed game).
-		// Else as coded.
-		enum class placing : u8 {
-			coded,
-			start,
-			only,
-			edge,
-			centred,
-		};
-
-		i32 window_likely[2]{};
-		placing window_placed[2]{};
-
 		bool to_window[2]{}; // the range is mapped onto the window itself (the game's option), not through the desktop
-		double area[2]{}; // tablet counts across the window (whole when the driver's arithmetic is known), 0: no lattice
 		double grid_step[2]{}; // the tablet's lattice as coded: coded integers per tablet count, 0: none
 
 		// the game's float arithmetic as each axis was coded (one game has one, but an axis that fits either way keeps
@@ -260,29 +243,9 @@ namespace dspace {
 
 		float missed[2]{}; // the share of each axis's positions the model did not give
 
-		// read from the frames' timing (setup::timing), 0 where the replay does not show it. A rate with its bound set is
-		// a floor: the device reported at least that often, and the replay's times are no finer
-		enum class tapping : u8 {
-			unknown,
-			keys,    // the keyboard
-			buttons, // mouse buttons, or the pen's tip
-			both,
-		};
-
-		// audio time against real time, from the 60 Hz ticks: the play rate (1, 1.5 with double time, 0.75 with half
-		// time) where the game's clock ran true. The rates below are in real time by it
+		// audio time against real time, from the 60 Hz ticks (setup::clock_rate): the play rate (1, 1.5 with double time,
+		// 0.75 with half time) where the game's clock ran true, 0 where the replay does not show it
 		float clock_rate{};
-		// Two sources, the second marked rough. With stretches recorded frame by frame (the game records them with
-		// relax): the mean frame rate, and the device's rate to a few percent. Without: the fastest frames, in whole
-		// milliseconds (so 1000 is a floor), and the device's rate to about a fifth.
-		float frame_hz{}; // the game's frame rate
-		bool frame_rough{}, frame_bound{};
-		bool frame_steady{}; // that rate held: a frame limiter was on
-		float report_hz{}; // how often the cursor's device reported while it moved
-		bool report_rough{}, report_bound{};
-		tapping taps{}; // what the player tapped with
-		float tap_hz{}; // how often that reported: 125 or 250 when its changes keep to those steps, else a floor
-		bool tap_bound{};
 
 		bool operator==(const _setup&) const = default;
 	};
