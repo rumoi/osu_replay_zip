@@ -501,7 +501,10 @@ namespace autopilot {
 
 				const double mid{ (lo + hi) / 2 };
 
-				(in_out_cubic(mid, 0, 1, 1) < f ? lo : hi) = mid;
+				if (in_out_cubic(mid, 0, 1, 1) < f)
+					lo = mid;
+				else
+					hi = mid;
 
 			}
 

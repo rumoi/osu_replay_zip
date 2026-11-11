@@ -1447,7 +1447,10 @@ namespace dspace {
 			p.game.fp = in.read_bits<1>() ? float_unit::x87 : float_unit::sse;
 			p.game.unrounded_sub = in.read_bits<1>() != 0;
 
-			(p.device.absolute.mapping == tablet_mapping::window ? p.game.product_rounded : p.game.origin_unrounded) = in.read_bits<1>() != 0;
+			if (p.device.absolute.mapping == tablet_mapping::window)
+				p.game.product_rounded = in.read_bits<1>() != 0;
+			else
+				p.game.origin_unrounded = in.read_bits<1>() != 0;
 
 			p.device.absolute.span = (float)read_u(in);
 			p.game.origin = (float)rc::unzz(read_u(in));
