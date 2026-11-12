@@ -81,6 +81,18 @@ namespace setup {
 			return q;
 		}
 
+		if (s.kind == input::lattice) {
+
+			if (s.lattice[a].D > 0 && s.lattice[a].a > 0) {
+
+				q.device.kind = dspace::axis_mode::rational;
+				q.device.rational = s.lattice[a];
+
+			}
+
+			return q;
+		}
+
 		if (!s.window[0] || !s.window[1])
 			return q;
 
