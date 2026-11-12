@@ -22,7 +22,8 @@ struct orz_state {
 
 	u32 options{}; // ORZ_OPTION
 
-	// osu!standard: the setups of the player's earlier replays, as hints for the next encodes, the likeliest first (not
+	// osu!standard: the setups of the player's earlier replays, as hints for the next encodes, the likeliest first; one
+	// with force set is the setup this replay was recorded with, and is coded as given (not
 	// reset by reset_volatile)
 	std::vector<dspace::_setup> hints;
 

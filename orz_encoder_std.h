@@ -1653,7 +1653,33 @@ namespace standard {
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
-			const bool has_model{ (state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
+			// a forced hint's device on both axes is the model, with no search
+			bool forced{};
+
+			for (const auto& h : state.hints) {
+
+				if (!h.force)
+					continue;
+
+				dspace::axis_params q[2]{ setup::device(h, 0), setup::device(h, 1) };
+
+				if (q[0].device.kind == dspace::axis_mode::none || q[1].device.kind == dspace::axis_mode::none)
+					continue;
+
+				for (int a{}; a < 2; ++a) {
+
+					q[a].game.rate = state.play_rate;
+					info.axis[a] = dspace::axis_model{ q[a] };
+
+				}
+
+				best = position_streams(info, vals, dt, shared, state);
+				forced = true;
+
+				break;
+			}
+
+			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
@@ -1661,7 +1687,7 @@ namespace standard {
 				return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
 			};
 
-			if (!has_model || misses(0) || misses(1)) {
+			if (!has_model || (!forced && (misses(0) || misses(1)))) {
 
 				auto text{ position_streams(all_text(), vals, dt, shared, state) };
 

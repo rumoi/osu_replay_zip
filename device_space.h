@@ -204,9 +204,9 @@ namespace dspace {
 	};
 
 	// The hardware and software configuration behind a coding model (orz_setup.h): what an encode says of the player's
-	// setup, and what a caller hands back as a hint for the player's next replays. Nothing in a hint is trusted: the
-	// device it stands for is a candidate for the search, and has to fit the replay as any other does. Unknown parts
-	// are 0.
+	// setup, and what a caller hands back as a hint for the player's next replays. A hint is not trusted unless it is
+	// forced: the device it stands for is a candidate for the search, and has to fit the replay as any other does.
+	// Unknown parts are 0.
 	struct _setup {
 
 		enum class input : u8 {
@@ -214,6 +214,7 @@ namespace dspace {
 			pixels, // whole window pixels: the system cursor, or a raw mouse at sensitivity 1
 			mouse,  // raw relative movement
 			tablet, // raw absolute positions
+			lattice, // any other input, by the positions it can give (lattice): a game that is not stable says its own
 		};
 
 		input kind{};
@@ -235,9 +236,17 @@ namespace dspace {
 		// the window mapping's product rounded
 		bool x87[2]{}, unrounded_sub[2]{}, origin_unrounded[2]{}, product_rounded[2]{};
 
+		// lattice: an axis's positions are (a * k + b) / D for whole k, as float((a * k + b) / (double)D)
+		rational_params lattice[2]{};
+
 		// the share of each axis's positions the model did not give: as a hint, the setup is taken again while it fits
 		// about as well
 		float missed[2]{};
+
+		// as a hint: the replay was recorded with this very setup, as the game that recorded it says. It is coded with
+		// the setup's device without a search, and a position that device does not give is escaped: a wrong setup costs
+		// size, never the replay.
+		bool force{};
 
 		bool operator==(const _setup&) const = default;
 	};
