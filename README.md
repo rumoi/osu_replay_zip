@@ -54,36 +54,20 @@ for (const auto& packed : replays)
 
 The decoder resets the adaptive model state for each replay. Both examples omit error handling.
 
-Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view
+## Dataset compression
 
-The figures below are historical measurements of an older encoder revision on that replay set; they do not
-measure the current SIZE default.
+[Replay dataset](https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view): 6,555 replays.
 
-Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.
+Measured on Windows on 2026-11-12 using the default **SIZE** priority, built-in priors and device detection.
+Inputs are the bare LZMA replay payloads; output sizes include the complete `.orz` envelope. All sizes below
+are totals in bytes, and percentages are output bytes divided by input bytes. The dataset overlaps prior training.
 
-# osu!
-27.300% of the original size (4,163 replays)
+| Mode | Replays | Input bytes | ORZ bytes (SIZE) | % of original |
+|---|---:|---:|---:|---:|
+| osu! | 4,163 | 226,602,499 | 61,893,067 | 27.313% |
+| taiko | 457 | 2,794,463 | 1,258,302 | 45.028% |
+| mania | 1,562 | 14,573,760 | 6,744,120 | 46.276% |
+| catch | 373 | 10,419,674 | 4,665,215 | 44.773% |
+| **Total** | **6,555** | **254,390,396** | **74,560,704** | **29.310%** |
 
-226,602,499 -> 61,863,334
-
-![box_whisk](./graph.png)
-
-# taiko
-44.865% of the original size (457 replays)
-
-2,794,463 -> 1,253,735
-
-# mania
-46.118% of the original size (1,562 replays)
-
-14,573,760 -> 6,721,119
-
-# fruit
-44.717% of the original size (373 replays)
-
-10,419,674 -> 4,659,337
-
-# Total
-29.285% of the original size (6,555 replays)
-
-254,390,396 -> 74,497,525
+All 6,555 outputs passed replay-text equality and default CRC verification.
