@@ -161,7 +161,10 @@ namespace {
 
 			frames::_models models{};
 
-			frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames };
+			if (flags & ORZ_ENCODE_INFO::fast_frames)
+				frames::_fast_reader reader{ models, head.rest, r.fd, r.side, r.frames };
+			else
+				frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames };
 
 		}
 

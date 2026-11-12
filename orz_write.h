@@ -66,7 +66,7 @@ inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 
 	_orz_file& file{ state.file };
 
-	file.version = ORZ_VERSION;
+	file.version = (file.encode_info & ORZ_ENCODE_INFO::fast_frames) ? 1 : 0;
 	file.seeded = state.seed.present;
 	file.seed = state.seed.value;
 	file.frame_count = frame_count;
@@ -83,13 +83,13 @@ inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 
 }
 
-// state.file as the LZMA replay data as it is: no frames, no seed, no text flags
+// state.file as the LZMA replay data as it is: no frames, no seed, no text or fast-frame flags
 inline void write_verbatim(orz_state& state) {
 
 	state.seed = {};
 
 	state.file.container.clear();
-	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest);
+	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest | ORZ_ENCODE_INFO::fast_frames);
 	state.file.encode_info |= ORZ_ENCODE_INFO::replay_verbatim;
 
 	finish_orz_file(0, frames_crc(state.input, {}), state);
@@ -261,6 +261,9 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 
 // LZMA replay data into state.output, with the e_mode of state.file (and the .osr parts in state, when it has them)
 static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
+
+	if (state.options & ENCODE_FAST_FRAME_DECODE)
+		state.file.encode_info |= ORZ_ENCODE_INFO::fast_frames;
 
 	// the span is the caller's, it does not outlive this encode
 	state.lzma = lzma;

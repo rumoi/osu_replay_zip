@@ -5,6 +5,30 @@
 **The format is specified, but V0 is not pinned quite yet.**\
 **The priors are still being trained, once they are finished the format is ready.**
 
+To trade some compression for faster frame decoding, set `ENCODE_FAST_FRAME_DECODE` on the encoder state:
+
+```cpp
+orz::orz_state encoder;
+encoder.options |= orz::ENCODE_FAST_FRAME_DECODE;
+orz::osr_to_orz(input, packed, encoder);
+```
+
+`replay_data_to_orz` accepts the same state option. The encoder stores the profile in the `.orz` header;
+`orz_decode_frames` selects it automatically. Fast streams use version 1 and require a reader that supports it.
+Normal streams and verbatim fallbacks use version 0. The fast profile skips adaptive probability refinement
+while retaining all contexts, counters and mixer weights.
+
+For repeated frame decoding, retain the table storage across calls to avoid repeated allocations:
+
+```cpp
+orz::_table_memory tables;
+orz::_decoded_orz decoded;
+for (const auto& packed : replays)
+    orz::orz_decode_frames(packed, decoded, tables);
+```
+
+The decoder resets the adaptive model state for each replay. Both examples omit error handling.
+
 Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view
 
 Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.

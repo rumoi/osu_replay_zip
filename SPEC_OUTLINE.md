@@ -64,7 +64,7 @@ then       the containers' data, back to back, in the order the header lists the
 
 | Field | Coding | Notes |
 |---|---|---|
-| version | `bucket(4, 8)` | 0. A reader rejects a larger version as "made by a newer version", before reading on. |
+| version | `bucket(4, 8)` | 0 for normal frames or verbatim data, 1 for `fast_frames`. A reader rejects a version it does not support before reading on. |
 | crc | 32 bits | §3.4 |
 | encode info | `bucket(8)` | §3.3 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
@@ -118,6 +118,13 @@ standard tags it does not know.
 | 5 | `trailing_comma` | the replay text ended with `,` |
 | 6 | `replay_verbatim` | the replay data is stored as-is (§10) |
 | 7 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
+| 8 | `fast_frames` | selects the fast frame decoder; version 1 only |
+
+The encode info retains its `bucket(8)` coding: values above its first bucket use the overflow form (§2).
+Version 0 requires `fast_frames` to be clear. Version 1 requires it to be set and `replay_verbatim` to be clear.
+Bits 9 and above are unassigned and rejected. These checks apply even when a caller disables CRC verification.
+An encoder's request for fast frame decoding may fall back to verbatim data; that file has version 0 and clears
+`fast_frames`.
 
 | Mode | Replay | Frames stream |
 |---|---|---|
@@ -309,6 +316,11 @@ After coding `y`, in this order:
    ```
 
 APM entries start at $`A[33c + k] = 16 \cdot \mathrm{squash}(128\,(k - 16))`$ for $`k = 0 \ldots 32`$.
+
+With `fast_frames`, the mixer and counter updates are the same, but APM refinement and updates are omitted.
+The coded probability is $`p = \mathrm{clamp}(16\,p_m,\ 32,\ 65504)`$. Contexts, table sizes, counter priors and
+mixer priors are unchanged; APM priors are unused. The header selects this probability rule for the whole frame
+stream, including escape values, in every mode. Fixed-probability decisions keep their usual probabilities.
 
 ### 5.5 Table sizes
 

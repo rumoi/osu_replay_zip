@@ -1121,13 +1121,14 @@ namespace frames {
 	}
 
 	// the frames, then each axis's escape values in order
+	template<typename Encoder = cm::bit_encoder>
 	inline std::vector<u8> encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
 		bool exact_text) {
 
 		M.init(frames, side.mode);
 		seed_priors(M, side);
 
-		cm::bit_encoder e{};
+		Encoder e{};
 
 		frame_loop(e, M, fd, side, frames, true);
 
@@ -1144,13 +1145,14 @@ namespace frames {
 	}
 
 	// decodes the frames on construction, then hands out the escape values as decode_axis asks for them
-	struct _reader {
+	template<typename Decoder>
+	struct _basic_reader {
 
 		_models& M;
-		cm::bit_decoder d;
+		Decoder d;
 		int prev_len[2]{};
 
-		_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
+		_basic_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
 
 			M.init(frames, side.mode);
 			seed_priors(M, side);
@@ -1167,6 +1169,9 @@ namespace frames {
 		}
 
 	};
+
+	using _reader = _basic_reader<cm::bit_decoder>;
+	using _fast_reader = _basic_reader<cm::fast_bit_decoder>;
 
 }
 

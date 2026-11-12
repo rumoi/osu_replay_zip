@@ -1213,7 +1213,10 @@ namespace standard {
 
 			const frames::_side side{ m.axis, shared.table, shared.time_grid(), state.mode(), ap, shared.std_default_time };
 
-			add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+			if (state.file.encode_info & ORZ_ENCODE_INFO::fast_frames)
+				add_to_u8(head.data, frames::encode<cm::fast_bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+			else
+				add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
 
 			return head.data;
 		};
@@ -1746,7 +1749,8 @@ namespace standard {
 		return true;
 	}
 
-	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+	template<typename Reader>
+	inline bool decode_profile(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_frames_head head{};
 
@@ -1766,7 +1770,7 @@ namespace standard {
 		side.std_default_time = head.std_default_time;
 
 		frames::_frame_data fd{};
-		frames::_reader reader{ tables.standard, head.rest, fd, side, R.size() };
+		Reader reader{ tables.standard, head.rest, fd, side, R.size() };
 
 		const auto sample{ repeat::sample_of(fd.repeated) };
 
@@ -1818,6 +1822,12 @@ namespace standard {
 		}
 
 		return true;
+	}
+
+	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+		return (encode_info & ORZ_ENCODE_INFO::fast_frames) ?
+			decode_profile<frames::_fast_reader>(encode_info, data, R, tables) :
+			decode_profile<frames::_reader>(encode_info, data, R, tables);
 	}
 
 }

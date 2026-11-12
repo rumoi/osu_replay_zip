@@ -86,7 +86,7 @@ inline void no_FMA_check() {
 
 }
 
-constexpr u32 ORZ_VERSION{ 0 };
+constexpr u32 ORZ_VERSION{ 1 }; // highest supported version; normal frame streams are still written as version 0
 
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
@@ -115,9 +115,11 @@ enum ORZ_ENCODE_INFO : u32 {
 
 	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
+	fast_frames = 1 << 8, // version 1 frame probability model; never combined with replay_verbatim
+
 };
 
-constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 };
+constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 }; // first bucket width, with overflow for higher flags
 
 FORCEINLINE e_mode get_e_mode(u32 encode_info) {
 	return (e_mode)(encode_info & ORZ_ENCODE_INFO::e_mode_bits);
@@ -144,6 +146,8 @@ FORCEINLINE bool uses_modes_coder(e_mode m) {
 enum ORZ_OPTION : u32 {
 
 	ENCODE_CHECK_ROUND_TRIP = 1 << 0,
+
+	ENCODE_FAST_FRAME_DECODE = 1 << 1, // request fast_frames; verbatim fallback remains version 0
 
 	DECODE_SKIP_CRC = 1 << 2,
 
@@ -719,7 +723,14 @@ struct _orz_file {
 		CRC = bs.read_bits<32>();
 
 		encode_info = bs.read_bucket<ORZ_ENCODE_INFO_BITS>();
-		
+
+		constexpr u32 known_info{ e_mode_bits | has_osr_header | trailing_comma | replay_verbatim | text_shortest | fast_frames };
+		const bool fast{ (encode_info & fast_frames) != 0 };
+
+		if ((encode_info & ~known_info) || get_e_mode(encode_info) >= e_mode::e_mode_max ||
+			(version == 1) != fast || (fast && (encode_info & replay_verbatim)))
+			return 0;
+
 		if (seeded = bs.read_bits<1>())
 			seed = bs.read_length_bucket<3, ORZ_SEED_LENGTH>();
 

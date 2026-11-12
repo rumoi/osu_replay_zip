@@ -71,6 +71,21 @@ namespace cm {
 		return t;
 	}() };
 
+	struct _mix_prediction {
+		u16 probability, stretched;
+	};
+
+	// The APM uses the inverse of the quantized mixer probability, not the original dot product.
+	constexpr auto MIX_PREDICTION{ [] {
+
+		std::array<_mix_prediction, 4097> t{};
+
+		for (size_t i{}; i < t.size(); ++i)
+			t[i] = { (u16)SQUASH[i], (u16)(STRETCH[SQUASH[i]] + 2048) };
+
+		return t;
+	}() };
+
 	FORCEINLINE int squash(int d) {
 		return SQUASH[std::clamp(d, -2048, 2048) + 2048];
 	}
@@ -187,7 +202,10 @@ namespace cm {
 		// 12-bit in, 16-bit out
 		FORCEINLINE int refine(int pr, size_t context) {
 
-			const int s{ stretch(pr) + 2048 };
+			return refine_stretched(stretch(pr) + 2048, context);
+		}
+
+		FORCEINLINE int refine_stretched(int s, size_t context) {
 
 			lo = context * 33 + (s >> 7);
 			wt = s & 127;
@@ -296,6 +314,16 @@ namespace cm {
 		}
 	};
 
+	// The fast frame profile keeps the counters and mixer, but omits APM refinement.
+	struct fast_bit_encoder : bit_encoder {
+		static constexpr bool use_apm{ false };
+	};
+
+	struct fast_bit_decoder : bit_decoder {
+		using bit_decoder::bit_decoder;
+		static constexpr bool use_apm{ false };
+	};
+
 	// no output: runs the models only (prior training). A trainer with observe(table, counter index, bit) also sees
 	// every counter update.
 	struct bit_trainer {
@@ -396,10 +424,28 @@ namespace cm {
 
 			}
 
-			const int p{ squash((int)std::clamp<i64>(dot >> 16, -2047, 2047)) };
-			const int pa{ refine.refine(p, apm_context) };
+			constexpr bool use_apm{ [] {
+				if constexpr (requires { Coder::use_apm; }) return Coder::use_apm;
+				else return true;
+			}() };
 
-			y = c.code(y, std::clamp((p * 16 + 3 * pa) >> 2, 32, 65504));
+			const int mixed{ (int)std::clamp<i64>(dot >> 16, -2047, 2047) };
+			int p;
+
+			if constexpr (use_apm) {
+
+				const auto prediction{ MIX_PREDICTION[mixed + 2048] };
+				p = prediction.probability;
+				const int pa{ refine.refine_stretched(prediction.stretched, apm_context) };
+
+				y = c.code(y, std::clamp((p * 16 + 3 * pa) >> 2, 32, 65504));
+
+			} else {
+
+				p = squash(mixed);
+				y = c.code(y, std::clamp(p * 16, 32, 65504));
+
+			}
 
 			const int err{ ((y << 12) - p) * MIX_RATE };
 
@@ -413,7 +459,8 @@ namespace cm {
 
 			}
 
-			refine.update(y);
+			if constexpr (use_apm)
+				refine.update(y);
 
 			return y;
 		}

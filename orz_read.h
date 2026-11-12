@@ -40,7 +40,9 @@ static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _dec
 
 	const bool verbatim{ (info & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
 
-	std::vector<_osr_frame> R(file.frame_count);
+	std::vector<_osr_frame> R;
+	R.reserve((size_t)file.frame_count + (file.seeded ? 1 : 0));
+	R.resize(file.frame_count);
 
 	if (!verbatim) {
 

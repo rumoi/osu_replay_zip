@@ -512,7 +512,8 @@ namespace modes {
 	}
 
 	// osu!taiko, osu!catch or osu!mania, as the gamemode says
-	void encode(const _osr& r, orz_state& state) {
+	template<typename Encoder>
+	void encode_profile(const _osr& r, orz_state& state) {
 
 		const kind mode{ mode_of(state.mode()) };
 
@@ -539,7 +540,7 @@ namespace modes {
 		M.init(R.size(), mode);
 		M.seed(mode);
 
-		cm::bit_encoder e{};
+		Encoder e{};
 
 		code_escapes(e, R, esc, true);
 
@@ -559,7 +560,15 @@ namespace modes {
 
 	}
 
-	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+	void encode(const _osr& r, orz_state& state) {
+		if (state.file.encode_info & ORZ_ENCODE_INFO::fast_frames)
+			encode_profile<cm::fast_bit_encoder>(r, state);
+		else
+			encode_profile<cm::bit_encoder>(r, state);
+	}
+
+	template<typename Decoder>
+	bool decode_profile(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_bit_view head{ data };
 
@@ -569,7 +578,7 @@ namespace modes {
 			return false;
 		side.exact_text = (encode_info & ORZ_ENCODE_INFO::text_shortest) != 0;
 
-		cm::bit_decoder d{ head.get_tail() };
+		Decoder d{ head.get_tail() };
 
 		std::vector<u8> esc(R.size());
 		std::vector<std::pair<u32, float>> speeds;
@@ -594,6 +603,12 @@ namespace modes {
 		frame_loop(d, M, R, esc, speeds, side, false);
 
 		return true;
+	}
+
+	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+		return (encode_info & ORZ_ENCODE_INFO::fast_frames) ?
+			decode_profile<cm::fast_bit_decoder>(encode_info, data, R, tables) :
+			decode_profile<cm::bit_decoder>(encode_info, data, R, tables);
 	}
 
 }
