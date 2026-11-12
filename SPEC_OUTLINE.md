@@ -425,6 +425,8 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
    - an autopilot event, for mode 7 (§6.6);
    - then **each axis**, in the order the move predictor expects to move more first:
      1. the move residual: the coded integer's step minus the predicted step;
+        on the second axis, the first axis's residual contributes twice its magnitude's bit length, capped at 19, to
+        the scale/order/regime context; its sign does not partition that context;
      2. an escape decision, if the axis has escapes;
      3. for a mouse axis that moved and was not escaped, the slack index (§6.3).
 

@@ -943,7 +943,7 @@ namespace frames {
 					history[a].fill(mf, dt);
 
 					mf.order = q;
-					mf.first_res = q ? bit_length(first_res) * 2 + (first_res < 0) : 0;
+					mf.first_res = q ? bit_length(first_res) * 2 : 0;
 					mf.accel = mp.n >= 2 ? signed_length(mp.hist[a][0] - mp.hist[a][1]) : 0;
 					mf.vel_gap = mp.n >= 1 ? signed_length(dspace::move_predictor::round_div(mp.hist[a][0] * dspace::move_predictor::ms(pdt),
 						dspace::move_predictor::ms(mp.hist_dt[0])) - pr) : 0;
