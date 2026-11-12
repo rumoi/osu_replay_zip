@@ -17,6 +17,8 @@
 //   Coarser scores can change which counters are retained. Use the default exhaustive search for final priors.
 //   Quick trials are saved separately as setN.quick.trials;
 //   --reuse --quick reads those, while --reuse reads only exhaustive trials.
+//   A fresh fit replaces the shared replay cache and discards both previous trial families.
+//   Use separate cache directories to retain both searches' trials.
 //
 // Per set, over its replays:
 //   1. train shared models on every replay; counters used in many replays are candidates, starting from their pooled
@@ -865,6 +867,22 @@ int main(int argc, char** argv) {
 
 	// encoded once, in parallel a chunk at a time, and kept in their sets' cache files in list order
 	if (!reuse) {
+
+		// Both searches share the replay cache. Invalidate both trial families before replacing any of it.
+		for (u32 s{}; s < SETS; ++s)
+			for (bool quick_trials : { false, true }) {
+
+				const auto path{ trials_file(cache, s, quick_trials) };
+				std::filesystem::remove(path, error);
+
+				if (error) {
+
+					fprintf(stderr, "can not remove %s\n", path.string().c_str());
+					return 1;
+
+				}
+
+			}
 
 		size_t replays{};
 		FILE* files[SETS]{};
