@@ -234,12 +234,15 @@ Each kind of decision has a model:
 
 - **a table of counters in lines**: `2^bits` lines of `width` counters each, where a line is found by
   `hash & (2^bits − 1)`, with no collision check;
-- **a set of mixer weights** per selector, each starting at 19661 (0.3 in 16.16 fixed point);
+- **a set of mixer weights** per selector, one per input: each context's starts at 19661 (0.3 in 16.16 fixed point)
+  and the fallback's, the last, at 0;
 - **an APM table** of 33 entries per context.
 
-Binding a decision's `N` contexts (`N` ≤ 8) gives one line per input: input `i`'s line is
-`hash(salt · 8 + i, context_i)`. The decision then uses the counter at its slot in each bound line. `hash(a, b)` works
-on `u64`:
+Binding a decision's `N` contexts (`N` ≤ 7) gives `N + 1` inputs, each with a line. Input `i`'s line is
+`hash(salt · 8 + i, context_i)` for `i < N`. The last input is the **fallback**: its line is `hash(salt · 8 + 7, 0)`
+whatever the contexts are. The decision then uses the counter at its slot in each bound line, so every decision at a
+slot updates the fallback's counter there, and a decision in contexts not seen before still has that counter to go by.
+`hash(a, b)` works on `u64`:
 
 ```
 h = (a + 1) · 0x9E3779B97F4A7C15 ^ b · 0xD6E8FEB86659FD93
@@ -312,7 +315,7 @@ APM entries start at $`A[33c + k] = 16 \cdot \mathrm{squash}(128\,(k - 16))`$ fo
 A model's table size depends on the header's frame count, up to 16,384 frames (`b = bit_width(min(frame count,
 16384))`), so a decoder must size every table exactly as the encoder did. The sizes are part of the format:
 
-| Model | Inputs | Table bits | Width | Mixer sets | APM contexts |
+| Model | Contexts | Table bits | Width | Mixer sets | APM contexts |
 |---|---|---|---|---|---|
 | keys changed | 5 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
 | key bits | 4 | clamp(b+2, 14, 20) | 1 | 64 | 64 |
@@ -332,8 +335,9 @@ A model's table size depends on the header's frame count, up to 16,384 frames (`
 | catcher residual bits | 2 | clamp(b+1, 10, 18) | 1 | 8 | 8 |
 
 The first four serve every mode. The next eight are osu!standard only, and the last four osu!catch only. The time
-model's two extra inputs (the older deltas, and the last three frames' repeat flags, or for osu!taiko whether the keys
-stayed) are its last two, so its first four contexts are the same for every mode.
+model's two extra contexts (the older deltas, and the last three frames' repeat flags, or for osu!taiko whether the
+keys stayed) are its last two, so its first four contexts are the same for every mode. Every model mixes one input
+more than its contexts, the fallback (§5.3).
 Its clock-phase context groups frames by phase and whether keys change on this frame or changed on the previous one;
 the delta-history contexts model earlier deltas separately.
 

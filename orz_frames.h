@@ -388,7 +388,7 @@ namespace frames {
 				const size_t step{ (size_t)node * 3 };
 				const int y{ depth ? branch[--depth] : 0 };
 
-				node = TIME_TREE[node][m.code_n<N>(c, y, node, (step + regime) * 3 + key_change, step + key_change)];
+				node = TIME_TREE[node][m.code_n<N + 1>(c, y, node, (step + regime) * 3 + key_change, step + key_change)];
 
 			}
 

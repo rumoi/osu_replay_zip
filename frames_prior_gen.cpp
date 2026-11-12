@@ -632,7 +632,7 @@ namespace {
 					if (!md || md->table.t.empty())
 						continue;
 
-					const size_t n{ (size_t)md->inputs }, sets{ md->weights.size() / n }, contexts{ md->refine.t.size() / 33 };
+					const size_t n{ (size_t)md->mixed() }, sets{ md->weights.size() / n }, contexts{ md->refine.t.size() / 33 };
 
 					if (weights[m].empty()) {
 
@@ -649,7 +649,12 @@ namespace {
 
 						const auto w{ md->weights.begin() + s * n };
 
-						if (std::all_of(w, w + n, [](int v) { return v == cm::MIX_WEIGHT; }))
+						bool moved{};
+
+						for (size_t i{}; i < n; ++i)
+							moved |= w[i] != cm::start_weight(i, n);
+
+						if (!moved)
 							continue;
 
 						++weights_n[m][s];
@@ -692,7 +697,7 @@ namespace {
 
 					const u32 n{ weights_n[m][i / inputs[m]] };
 
-					out.weights.push_back(n ? (i32)std::lround(weights[m][i] / n) : cm::MIX_WEIGHT);
+					out.weights.push_back(n ? (i32)std::lround(weights[m][i] / n) : cm::start_weight(i % inputs[m], inputs[m]));
 
 				}
 

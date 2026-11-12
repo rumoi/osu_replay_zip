@@ -153,8 +153,18 @@ namespace cm {
 
 	constexpr int MAX_INPUTS{ 8 };
 
-	// a weight starts at 0.3 and moves about 0.01 * error * input per bit, which keeps up within a single replay
-	constexpr int MIX_WEIGHT{ 19661 }, MIX_RATE{ 40 };
+	// the index of the fallback input: one line for all of a model's contexts, so each slot has a counter that every
+	// decision at it updates. A decision in a context not seen before still has that counter to go by.
+	constexpr int FALLBACK_INPUT{ MAX_INPUTS - 1 };
+
+	// a weight starts at 0.3 and moves about 0.01 * error * input per bit, which keeps up within a single replay.
+	// The fallback's starts at 0, so it counts once it has predicted bits the contexts' counters did not.
+	constexpr int MIX_WEIGHT{ 19661 }, FALLBACK_WEIGHT{ 0 }, MIX_RATE{ 40 };
+
+	// the weight the i-th of a model's mixed inputs starts at; the fallback is the last
+	constexpr int start_weight(size_t i, size_t mixed) {
+		return i + 1 < mixed ? MIX_WEIGHT : FALLBACK_WEIGHT;
+	}
 
 	// refines a probability given a small context, interpolating 33 buckets over the stretched domain
 	struct apm {
@@ -297,22 +307,31 @@ namespace cm {
 
 	};
 
-	// one kind of binary decision: per input a counter from its context's line, mixed, then refined.
-	// bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
+	// one kind of binary decision: per input a counter from its context's line, and the fallback's, mixed, then
+	// refined. bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
 	struct model {
 
 		line_table table;
 		std::vector<int> weights; // mixer weights in 16.16 (inputs are stretched probabilities), a set per selector
 		apm refine;
-		int inputs{};
+		int inputs{}; // contexts, fewer than MAX_INPUTS: the fallback is mixed as one more
 		counter* lines[MAX_INPUTS]{};
+
+		// the counters a decision mixes
+		int mixed() const {
+			return inputs + 1;
+		}
 
 		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false) {
 
 			inputs = inputs_;
 
 			table.init(table_bits, width, record_keys);
-			weights.assign(mix_sets * inputs, MIX_WEIGHT);
+			weights.resize(mix_sets * mixed());
+
+			for (size_t i{}; i < weights.size(); ++i)
+				weights[i] = start_weight(i % mixed(), mixed());
+
 			refine.init(apm_contexts);
 
 		}
@@ -323,13 +342,19 @@ namespace cm {
 			for (int i{}; i < inputs; ++i)
 				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
 
+			lines[inputs] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
 		}
 
 		template<int N>
 		FORCEINLINE void bind_n(const u64* ctx, u64 salt = 0) {
 
+			static_assert(N > 0 && N < MAX_INPUTS);
+
 			for (int i{}; i < N; ++i)
 				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+
+			lines[N] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
 
 		}
 
@@ -376,8 +401,7 @@ namespace cm {
 		template<typename Coder>
 		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
 
-			switch (inputs) {
-			case 1: return code_n<1>(c, y, slot, set, apm_context);
+			switch (mixed()) {
 			case 2: return code_n<2>(c, y, slot, set, apm_context);
 			case 3: return code_n<3>(c, y, slot, set, apm_context);
 			case 4: return code_n<4>(c, y, slot, set, apm_context);
@@ -405,6 +429,8 @@ namespace cm {
 	template<int N>
 	struct fixed_model : model {
 
+		static_assert(N > 0 && N < MAX_INPUTS);
+
 		void init(int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false) {
 			model::init(N, table_bits, width, mix_sets, apm_contexts, record_keys);
 		}
@@ -415,7 +441,7 @@ namespace cm {
 
 		template<typename Coder>
 		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
-			return code_n<N>(c, y, slot, set, apm_context);
+			return code_n<N + 1>(c, y, slot, set, apm_context);
 		}
 
 		template<typename Coder>

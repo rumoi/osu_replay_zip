@@ -3,6 +3,7 @@
 
 #include "orz_shared.h"
 #include "cm.h"
+#include <tuple>
 
 using namespace orz;
 
@@ -34,10 +35,10 @@ void equal(const cm::model& a, const cm::model& b) {
 
 struct trainer : cm::bit_trainer {
 
-	std::vector<std::pair<size_t, int>> seen;
+	std::vector<std::tuple<size_t, u64, u16, u16, int>> seen;
 
-	void observe(const cm::line_table&, size_t at, int bit) {
-		seen.emplace_back(at, bit);
+	void observe(const cm::line_table& table, size_t at, int bit) {
+		seen.emplace_back(at, table.keys[at / table.width], table.t[at].p, table.t[at].n, bit);
 	}
 
 };
@@ -61,14 +62,29 @@ void run(Model& m, Coder& coder) {
 		const int bit{ (int)(rng >> 63) };
 		int got;
 
+		// force the first context onto the fallback's line, including with nonzero salts. Binding must stamp the
+		// fallback's key last, and training must observe both updates to this shared counter in order.
+		if (i % 8 < 2) {
+
+			const u64 salt{ i % 2 ? i % 3 : 0 };
+			const u64 fallback{ cm::hash(salt * cm::MAX_INPUTS + cm::FALLBACK_INPUT, 0) };
+
+			while ((cm::hash(salt * cm::MAX_INPUTS, ctx[0]) & m.table.mask) != (fallback & m.table.mask))
+				++ctx[0];
+
+		}
+
 		if (i % 2) {
 
 			m.bind(ctx, i % 3);
-			got = m.code(coder, bit, (u32)(i % 8), i % 5, i % 3);
+			got = m.code(coder, bit, (u32)(i % m.table.width), i % 5, i % 3);
 
 		} else
 			got = m.code(coder, bit, ctx, i % 5, i % 3);
 
+		const u64 salt{ i % 2 ? i % 3 : 0 };
+		const u64 fallback{ cm::hash(salt * 8 + 7, 0) };
+		require(m.table.keys[fallback & m.table.mask] == fallback);
 		require(got == bit);
 
 	}
@@ -76,7 +92,7 @@ void run(Model& m, Coder& coder) {
 }
 
 template<int N>
-void check() {
+void check(bool seeded, u32 width) {
 
 	cm::model dynamic;
 	cm::fixed_model<N> fixed;
@@ -84,10 +100,23 @@ void check() {
 	const auto init = [&] {
 
 		// a small table deliberately collides, including between inputs bound to the same line.
-		dynamic.init(N, 4, 8, 5, 3, true);
-		fixed.init(4, 8, 5, 3, true);
-		seed(dynamic);
-		seed(fixed);
+		dynamic.init(N, 4, width, 5, 3, true);
+		fixed.init(4, width, 5, 3, true);
+		require(dynamic.weights.size() == 5 * (N + 1) && fixed.weights.size() == dynamic.weights.size());
+
+		for (size_t i{}; i < dynamic.weights.size(); ++i) {
+
+			const int initial{ i % (N + 1) == N ? 0 : 19661 };
+			require(dynamic.weights[i] == initial && fixed.weights[i] == initial);
+
+		}
+
+		if (seeded) {
+
+			seed(dynamic);
+			seed(fixed);
+
+		}
 
 	};
 
@@ -98,8 +127,9 @@ void check() {
 	require(expected.finish() == actual.finish());
 	equal(dynamic, fixed);
 
-	fixed.init(4, 8, 5, 3, true);
-	seed(fixed);
+	fixed.init(4, width, 5, 3, true);
+	if (seeded)
+		seed(fixed);
 	cm::bit_decoder decoder{ expected.out };
 	run(fixed, decoder);
 	decoder.check_end();
@@ -115,5 +145,9 @@ void check() {
 }
 
 int main() {
-	check<1>(); check<2>(); check<3>(); check<4>(); check<5>(); check<6>(); check<7>(); check<8>();
+	for (bool seeded : { false, true })
+		for (u32 width : { 1u, 8u, 32u, 64u }) {
+			check<1>(seeded, width); check<2>(seeded, width); check<3>(seeded, width); check<4>(seeded, width);
+			check<5>(seeded, width); check<6>(seeded, width); check<7>(seeded, width);
+		}
 }
