@@ -46,9 +46,9 @@ struct probe : std::conditional_t<Training, cm::fallback_counter_trainer, cm::fa
 template<int N, typename Model>
 void init(Model& m, u32 width, bool record_keys, bool fallback_only) {
 	if constexpr (std::is_same_v<Model, cm::model>)
-		m.init(N, 8, width, 3, 5, record_keys, fallback_only);
+		m.init(N, 8, width, 3, record_keys, fallback_only);
 	else
-		m.init(8, width, 3, 5, record_keys, fallback_only);
+		m.init(8, width, 3, record_keys, fallback_only);
 }
 
 template<int N, typename Model, bool Training>
@@ -58,7 +58,7 @@ void check(u32 width, bool seeded, bool record_keys) {
 	init<N>(m, width, record_keys, true);
 	require(m.inputs == N && m.mixed() == N + 1);
 	require(m.table.width == width && m.table.t.size() == 2 * width);
-	require(m.weights.empty() && m.refine.t.empty());
+	require(m.weights.empty());
 	require(m.table.keys.size() == (record_keys ? 2u : 0u));
 
 	// Include probability clamp edges and confidence saturation, in both salts and all decision slots.
@@ -91,13 +91,13 @@ void check(u32 width, bool seeded, bool record_keys) {
 		int got;
 
 		if (single)
-			got = m.code(c, wanted, ctx, step % 3, step % 5);
+			got = m.code(c, wanted, ctx, step % 3);
 		else {
 			if constexpr (std::is_same_v<Model, cm::model> && N == 4)
 				m.template bind_n<N, probe<Training>>(ctx, salt);
 			else
 				m.template bind<probe<Training>>(ctx, salt);
-			got = m.code(c, wanted, slot, step % 3, step % 5);
+			got = m.code(c, wanted, slot, step % 3);
 		}
 
 		require(got == actual && c.calls == (Training ? 0 : 1));
@@ -109,7 +109,7 @@ void check(u32 width, bool seeded, bool record_keys) {
 		expected[at].update(actual);
 		for (size_t i{}; i < expected.size(); ++i)
 			require(m.table.t[i].p == expected[i].p && m.table.t[i].n == expected[i].n);
-		require(m.weights.empty() && m.refine.t.empty());
+		require(m.weights.empty());
 
 	}
 
@@ -118,10 +118,9 @@ void check(u32 width, bool seeded, bool record_keys) {
 		require(m.table.keys[1] == cm::hash(15, 0));
 	}
 
-	// Reusing a model for the normal profile restores its full shape and initial mixer/APM state.
+	// Reusing a model for SIZE restores its full shape and initial mixer state.
 	init<N>(m, width, record_keys, false);
 	require(m.table.t.size() == size_t(width) * 256 && m.weights.size() == 3 * (N + 1));
-	require(m.refine.t.size() == 5 * 33);
 	for (const auto& value : m.table.t)
 		require(value.p == 32768 && value.n == 0);
 	for (size_t i{}; i < m.weights.size(); ++i)
@@ -143,16 +142,16 @@ void check_inputs() {
 
 void recording_transition() {
 	cm::fixed_model<6> m;
-	m.init(8, 4, 3, 5, true, true);
+	m.init(8, 4, 3, true, true);
 	const u64 ctx[6]{ 11, 22, 33, 44, 55, 66 };
 	m.bind<cm::fallback_counter_trainer>(ctx, 1);
 	require(m.table.keys.size() == 2 && m.table.keys[1] == cm::hash(15, 0));
-	m.init(8, 4, 3, 5, false, false);
+	m.init(8, 4, 3, false, false);
 	require(m.table.keys.empty());
 	m.bind(ctx, 1);
-	cm::fast_bit_encoder encoder;
-	require(m.code(encoder, 1, 3u, 0, 0) == 1);
-	m.init(8, 4, 3, 5, false, true);
+	cm::bit_encoder encoder;
+	require(m.code(encoder, 1, 3u, 0) == 1);
+	m.init(8, 4, 3, false, true);
 	require(m.table.keys.empty() && m.table.t.size() == 8);
 }
 

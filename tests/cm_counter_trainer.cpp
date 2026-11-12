@@ -37,7 +37,7 @@ int main() {
 		for (int bits : { 0, 4 }) {
 
 			cm::model full;
-			full.init(inputs, bits, 4, 3, 5, true);
+			full.init(inputs, bits, 4, 3, true);
 
 			for (size_t i{}; i < full.table.t.size(); ++i)
 				full.table.t[i] = { (u16)(1024 + i * 487 % 63488), (u16)(i % 256) };
@@ -47,7 +47,6 @@ int main() {
 
 			cm::model counters{ full };
 			const auto weights{ counters.weights };
-			const auto apm{ counters.refine.t };
 			observer<cm::bit_trainer> reference;
 			observer<cm::counter_trainer> candidate;
 			u64 rng{ 127 };
@@ -66,8 +65,8 @@ int main() {
 				counters.bind(ctx, i % 3);
 
 				const int y{ (int)(rng & 1) };
-				require(full.code(reference, y, i % 4, i % 3, i % 5) == y);
-				require(counters.code(candidate, y, i % 4, i % 3, i % 5) == y);
+				require(full.code(reference, y, i % 4, i % 3) == y);
+				require(counters.code(candidate, y, i % 4, i % 3) == y);
 
 			}
 
@@ -77,8 +76,7 @@ int main() {
 			for (size_t i{}; i < full.table.t.size(); ++i)
 				require(full.table.t[i].p == counters.table.t[i].p && full.table.t[i].n == counters.table.t[i].n);
 
-			require(counters.weights == weights && counters.refine.t == apm);
-			require(counters.refine.lo == 0 && counters.refine.wt == 0);
+			require(counters.weights == weights);
 
 		}
 	}

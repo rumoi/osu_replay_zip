@@ -1,8 +1,7 @@
 #pragma once
 
 // binary context mixing (lpaq style), integer only so every platform makes the same predictions:
-// counters in a hashed table -> a gated linear mixer in the logistic domain -> an interpolating refinement (apm)
-// -> a 32-bit binary arithmetic coder. Mixer probabilities are 12 bits, coded probabilities 16 bits (P(1) * 65536).
+// counters in a hashed table -> a gated linear mixer in the logistic domain -> a 32-bit binary arithmetic coder. Mixer probabilities are 12 bits, coded probabilities 16 bits (P(1) * 65536).
 
 #include <algorithm>
 #include <array>
@@ -67,21 +66,6 @@ namespace cm {
 
 		for (int j{ pi }; j < 4096; ++j)
 			t[j] = 2047;
-
-		return t;
-	}() };
-
-	struct _mix_prediction {
-		u16 probability, stretched;
-	};
-
-	// The APM uses the inverse of the quantized mixer probability, not the original dot product.
-	constexpr auto MIX_PREDICTION{ [] {
-
-		std::array<_mix_prediction, 4097> t{};
-
-		for (size_t i{}; i < t.size(); ++i)
-			t[i] = { (u16)SQUASH[i], (u16)(STRETCH[SQUASH[i]] + 2048) };
 
 		return t;
 	}() };
@@ -184,48 +168,6 @@ namespace cm {
 		return i + 1 < mixed ? MIX_WEIGHT : FALLBACK_WEIGHT;
 	}
 
-	// refines a probability given a small context, interpolating 33 buckets over the stretched domain
-	struct apm {
-
-		std::vector<u16> t;
-		size_t lo{};
-		int wt{};
-
-		void init(size_t contexts) {
-
-			t.resize(contexts * 33);
-
-			for (size_t c{}; c < contexts; ++c)
-				for (int j{}; j < 33; ++j)
-					t[c * 33 + j] = (u16)(squash((j - 16) * 128) * 16);
-
-		}
-
-		// 12-bit in, 16-bit out
-		FORCEINLINE int refine(int pr, size_t context) {
-
-			return refine_stretched(stretch(pr) + 2048, context);
-		}
-
-		FORCEINLINE int refine_stretched(int s, size_t context) {
-
-			lo = context * 33 + (s >> 7);
-			wt = s & 127;
-
-			return (t[lo] * (128 - wt) + t[lo + 1] * wt) >> 7;
-		}
-
-		FORCEINLINE void update(int y) {
-
-			const int target{ y ? 65535 : 0 };
-
-			t[lo] = (u16)(t[lo] + ((((target - t[lo]) * (128 - wt)) >> 7) * 5 >> 8));
-			t[lo + 1] = (u16)(t[lo + 1] + ((((target - t[lo + 1]) * wt) >> 7) * 5 >> 8));
-
-		}
-
-	};
-
 	struct bit_encoder {
 
 		u32 x1{}, x2{ 0xFFFFFFFFu };
@@ -316,22 +258,27 @@ namespace cm {
 		}
 	};
 
-	// The fast frame profile keeps the counters and mixer, but omits APM refinement.
-	struct fast_bit_encoder : bit_encoder {
-		static constexpr bool use_apm{ false };
+	struct balanced_bit_encoder : bit_encoder {
+		static constexpr bool balanced_prediction{ true };
 	};
 
-	struct fast_bit_decoder : bit_decoder {
+	struct balanced_bit_decoder : bit_decoder {
 		using bit_decoder::bit_decoder;
-		static constexpr bool use_apm{ false };
+		static constexpr bool balanced_prediction{ true };
 	};
 
-	struct fastest_bit_encoder : fast_bit_encoder {
+	template<typename Coder>
+	constexpr bool uses_balanced_prediction{ [] {
+		if constexpr (requires { Coder::balanced_prediction; }) return Coder::balanced_prediction;
+		else return false;
+	}() };
+
+	struct fastest_bit_encoder : bit_encoder {
 		static constexpr bool fallback_only{ true };
 	};
 
-	struct fastest_bit_decoder : fast_bit_decoder {
-		using fast_bit_decoder::fast_bit_decoder;
+	struct fastest_bit_decoder : bit_decoder {
+		using bit_decoder::bit_decoder;
 		static constexpr bool fallback_only{ true };
 	};
 
@@ -353,20 +300,23 @@ namespace cm {
 
 	};
 
-	// prior counter statistics do not use the mixed probability, weights or APM state.
+	// prior counter statistics do not use the mixed probability or weights.
 	struct counter_trainer : bit_trainer {};
+
+	struct balanced_counter_trainer : counter_trainer {
+		static constexpr bool balanced_prediction{ true };
+	};
 
 	struct fallback_counter_trainer : counter_trainer {
 		static constexpr bool fallback_only{ true };
 	};
 
-	// one kind of binary decision: per input a counter from its context's line, and the fallback's, mixed, then
-	// refined. bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
+	// one kind of binary decision: per input a counter from its context's line, and the fallback's, mixed.
+	// bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
 	struct model {
 
 		line_table table;
 		std::vector<int> weights; // mixer weights in 16.16 (inputs are stretched probabilities), a set per selector
-		apm refine;
 		int inputs{}; // contexts, fewer than MAX_INPUTS: the fallback is mixed as one more
 		counter* lines[MAX_INPUTS]{};
 
@@ -375,7 +325,7 @@ namespace cm {
 			return inputs + 1;
 		}
 
-		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false,
+		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, bool record_keys = false,
 			bool fallback_only = false) {
 
 			inputs = inputs_;
@@ -385,7 +335,6 @@ namespace cm {
 			if (fallback_only) {
 
 				weights.clear();
-				refine.t.clear();
 				return;
 
 			}
@@ -393,8 +342,6 @@ namespace cm {
 
 			for (size_t i{}; i < weights.size(); ++i)
 				weights[i] = start_weight(i % mixed(), mixed());
-
-			refine.init(apm_contexts);
 
 		}
 
@@ -404,7 +351,12 @@ namespace cm {
 
 			if constexpr (uses_fallback_only<Coder>)
 				bind_fallback(salt);
-			else {
+			else if constexpr (uses_balanced_prediction<Coder>) {
+
+				lines[0] = table.line(hash(salt * MAX_INPUTS, ctx[0]));
+				lines[1] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
+			} else {
 
 				for (int i{}; i < inputs; ++i)
 					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
@@ -432,7 +384,12 @@ namespace cm {
 
 			if constexpr (uses_fallback_only<Coder>)
 				bind_fallback(salt);
-			else {
+			else if constexpr (uses_balanced_prediction<Coder>) {
+
+				lines[0] = table.line(hash(salt * MAX_INPUTS, ctx[0]));
+				lines[1] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
+			} else {
 
 				for (int i{}; i < N; ++i)
 					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
@@ -445,7 +402,7 @@ namespace cm {
 
 		// the input count known at compile time, so the loops unroll
 		template<int N, typename Coder>
-		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set) {
 
 			if constexpr (uses_fallback_only<Coder>) {
 
@@ -460,6 +417,28 @@ namespace cm {
 				update(k, y);
 				return y;
 
+			}
+
+			if constexpr (uses_balanced_prediction<Coder>) {
+
+				const counter& prediction{ lines[0][slot].n >= 8 ? lines[0][slot] : lines[1][slot] };
+
+				if constexpr (!std::is_base_of_v<counter_trainer, Coder>)
+					y = c.code(y, std::clamp((int)prediction.p, 32, 65504));
+
+				// Keep both updates, including when the context and fallback alias the same counter.
+				for (int i{}; i < 2; ++i) {
+
+					counter& k{ lines[i][slot] };
+
+					if constexpr (requires { c.observe(table, size_t{}, y); })
+						c.observe(table, (size_t)(&k - table.t.data()), y);
+
+					update(k, y);
+
+				}
+
+				return y;
 			}
 
 			if constexpr (std::is_base_of_v<counter_trainer, Coder>) {
@@ -492,28 +471,9 @@ namespace cm {
 
 			}
 
-			constexpr bool use_apm{ [] {
-				if constexpr (requires { Coder::use_apm; }) return Coder::use_apm;
-				else return true;
-			}() };
-
 			const int mixed{ (int)std::clamp<i64>(dot >> 16, -2047, 2047) };
-			int p;
-
-			if constexpr (use_apm) {
-
-				const auto prediction{ MIX_PREDICTION[mixed + 2048] };
-				p = prediction.probability;
-				const int pa{ refine.refine_stretched(prediction.stretched, apm_context) };
-
-				y = c.code(y, std::clamp((p * 16 + 3 * pa) >> 2, 32, 65504));
-
-			} else {
-
-				p = squash(mixed);
-				y = c.code(y, std::clamp(p * 16, 32, 65504));
-
-			}
+			const int p{ squash(mixed) };
+			y = c.code(y, std::clamp(p * 16, 32, 65504));
 
 			const int err{ ((y << 12) - p) * MIX_RATE };
 
@@ -527,34 +487,31 @@ namespace cm {
 
 			}
 
-			if constexpr (use_apm)
-				refine.update(y);
-
 			return y;
 		}
 
 		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set) {
 
 			switch (mixed()) {
-			case 2: return code_n<2>(c, y, slot, set, apm_context);
-			case 3: return code_n<3>(c, y, slot, set, apm_context);
-			case 4: return code_n<4>(c, y, slot, set, apm_context);
-			case 5: return code_n<5>(c, y, slot, set, apm_context);
-			case 6: return code_n<6>(c, y, slot, set, apm_context);
-			case 7: return code_n<7>(c, y, slot, set, apm_context);
-			default: return code_n<8>(c, y, slot, set, apm_context);
+			case 2: return code_n<2>(c, y, slot, set);
+			case 3: return code_n<3>(c, y, slot, set);
+			case 4: return code_n<4>(c, y, slot, set);
+			case 5: return code_n<5>(c, y, slot, set);
+			case 6: return code_n<6>(c, y, slot, set);
+			case 7: return code_n<7>(c, y, slot, set);
+			default: return code_n<8>(c, y, slot, set);
 			}
 
 		}
 
 		// a single decision on its own contexts
 		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
+		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set) {
 
 			bind<Coder>(ctx);
 
-			return code(c, y, 0u, set, apm_context);
+			return code(c, y, 0u, set);
 		}
 
 	};
@@ -566,9 +523,9 @@ namespace cm {
 
 		static_assert(N > 0 && N < MAX_INPUTS);
 
-		void init(int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false,
+		void init(int table_bits, u32 width, size_t mix_sets, bool record_keys = false,
 			bool fallback_only = false) {
-			model::init(N, table_bits, width, mix_sets, apm_contexts, record_keys, fallback_only);
+			model::init(N, table_bits, width, mix_sets, record_keys, fallback_only);
 		}
 
 		template<typename Coder = bit_encoder>
@@ -577,16 +534,16 @@ namespace cm {
 		}
 
 		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
-			return code_n<N + 1>(c, y, slot, set, apm_context);
+		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set) {
+			return code_n<N + 1>(c, y, slot, set);
 		}
 
 		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
+		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set) {
 
 			bind<Coder>(ctx);
 
-			return code(c, y, 0u, set, apm_context);
+			return code(c, y, 0u, set);
 		}
 
 	};

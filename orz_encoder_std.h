@@ -1213,12 +1213,12 @@ namespace standard {
 
 			const frames::_side side{ m.axis, shared.table, shared.time_grid(), state.mode(), ap, shared.std_default_time };
 
-			if (state.file.encode_info & ORZ_ENCODE_INFO::fastest_frames)
+			if (state.file.frame_profile() == _frame_profile::speed)
 				add_to_u8(head.data, frames::encode<cm::fastest_bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
-			else if (state.file.encode_info & ORZ_ENCODE_INFO::fast_frames)
-				add_to_u8(head.data, frames::encode<cm::fast_bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+			else if (state.file.frame_profile() == _frame_profile::balanced)
+				add_to_u8(head.data, frames::encode<cm::balanced_bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
 			else
-				add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+				add_to_u8(head.data, frames::encode<cm::bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
 
 			return head.data;
 		};
@@ -1653,7 +1653,7 @@ namespace standard {
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
-			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
+			const bool has_model{ (state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
@@ -1826,13 +1826,14 @@ namespace standard {
 		return true;
 	}
 
-	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
-		if (encode_info & ORZ_ENCODE_INFO::fastest_frames)
-			return decode_profile<frames::_fastest_reader>(encode_info, data, R, tables);
+	inline bool decode(const _orz_file& file, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
-		return (encode_info & ORZ_ENCODE_INFO::fast_frames) ?
-			decode_profile<frames::_fast_reader>(encode_info, data, R, tables) :
-			decode_profile<frames::_reader>(encode_info, data, R, tables);
+		switch (file.frame_profile()) {
+		case _frame_profile::speed: return decode_profile<frames::_fastest_reader>(file.encode_info, data, R, tables);
+		case _frame_profile::balanced: return decode_profile<frames::_balanced_reader>(file.encode_info, data, R, tables);
+		default: return decode_profile<frames::_reader>(file.encode_info, data, R, tables);
+		}
+
 	}
 
 }

@@ -8,10 +8,17 @@
 //   (an e_mode, relax included, or 255 for an .osr), its size in 4 bytes, then its bytes. entries caps the counters
 //   of each set, those saving the most bits first; with --pooled it caps all sets' counters together, so the counters
 //   go to whichever sets they save the most bits in.
-//   --fallback fits the fastest frame profile: exhaustive counter starts only, without mixer/APM rounds.
-//   It encodes normal-profile representations first, then fits conditional on those fixed decisions.
-//   Its kept/reused caches live in a fallback subdirectory, separate from normal and quick trials.
-//   Compile with the same bootstrap headers when reusing encoded caches. --quick is not supported with --fallback.
+//   --balanced and --fallback fit the counters of the balanced and the fastest frame profiles: the same exhaustive
+//   counter starts, without mixer rounds, into frames_balanced_prior.h and frames_fallback_prior.h. --balanced
+//   follows each model's first context and its fallback, --fallback the fallback alone in its two lines, where a
+//   value's high byte is the counter's place in them (line * width + slot) and no key is stored.
+//   Both encode with the default SIZE profile first, then fit conditional on those fixed decisions, and score a
+//   counter by its own coding cost at every decision: a balanced decision is coded from the context's counter only
+//   when its confidence is at least 8 (including seeded confidence), which the score does not follow.
+//   Their kept/reused caches live in a balanced or fallback subdirectory, separate from normal and quick trials.
+//   Compile with the same bootstrap headers when reusing encoded caches. --quick is not supported with either.
+//   The current BALANCED format shares frames_prior.h. --balanced emits a research candidate bank, not a header
+//   consumed by the runtime; adopting different counter values changes the format and requires matching encoders and decoders.
 //   Sets are fit in parallel (default 4 at once). The encoded replays wait in the cache directory, a file per set
 //   (default a temporary directory), and are read back for every pass, so memory does not grow with the replays.
 //   --keep leaves them there (the directory must be given), with each set's candidate counters and the bits each
@@ -29,7 +36,7 @@
 //      probability or from their trained state
 //   2. run every replay again, following each candidate counter per replay from flat and from each start at each
 //      confidence; the pair saving the most bits over starting flat is the counter's prior
-//   3. code every replay from fresh models seeded with those counters, then average the mixer weights and apm tables
+//   3. code every replay from fresh models seeded with those counters, then average the mixer weights
 //      over the replays where they are not at their flat start. Each round starts from the last one's averages.
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -85,6 +92,14 @@ namespace {
 	constexpr int STARTS{ 2 };
 
 	constexpr int MIX_ROUNDS{ 4 };
+
+	// the counters a fit collects: every input's (the size profile), the first context's and the fallback's
+	// (--balanced), or the fallback's alone in its two lines (--fallback)
+	enum class _fit { normal, balanced, fallback };
+
+	template<_fit Fit>
+	using _collector = std::conditional_t<Fit == _fit::fallback, cm::fallback_counter_trainer,
+		std::conditional_t<Fit == _fit::balanced, cm::balanced_counter_trainer, cm::counter_trainer>>;
 
 	// the mode byte of a replay from stdin that is an .osr
 	constexpr u8 OSR_RECORD{ 255 };
@@ -165,12 +180,11 @@ namespace {
 
 			frames::_models models{};
 
-			if (flags & ORZ_ENCODE_INFO::fastest_frames)
-				frames::_fastest_reader reader{ models, head.rest, r.fd, r.side, r.frames };
-			else if (flags & ORZ_ENCODE_INFO::fast_frames)
-				frames::_fast_reader reader{ models, head.rest, r.fd, r.side, r.frames };
-			else
-				frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames };
+			switch (file.frame_profile()) {
+			case _frame_profile::speed: { frames::_fastest_reader reader{ models, head.rest, r.fd, r.side, r.frames }; } break;
+			case _frame_profile::balanced: { frames::_balanced_reader reader{ models, head.rest, r.fd, r.side, r.frames }; } break;
+			default: { frames::_reader reader{ models, head.rest, r.fd, r.side, r.frames }; }
+			}
 
 		}
 
@@ -253,8 +267,8 @@ namespace {
 	}
 
 	// pass 1: per counter the bits seen, per line the replays that used it
-	template<bool Fallback>
-	struct _counting : std::conditional_t<Fallback, cm::fallback_counter_trainer, cm::counter_trainer> {
+	template<_fit Fit>
+	struct _counting : _collector<Fit> {
 
 		struct _table {
 			std::vector<u64> ones, seen; // per counter
@@ -316,8 +330,8 @@ namespace {
 	}() };
 
 	// pass 2: follows the candidates through each replay from both starts, each searched confidence and flat
-	template<bool Quick, bool Fallback>
-	struct _trials : std::conditional_t<Fallback, cm::fallback_counter_trainer, cm::counter_trainer> {
+	template<bool Quick, _fit Fit>
+	struct _trials : _collector<Fit> {
 
 		using candidate = _candidate<Quick>;
 		static constexpr int CONFIDENCES{ candidate::CONFIDENCES }, TRIALS{ candidate::TRIALS };
@@ -374,10 +388,9 @@ namespace {
 	};
 
 	struct _set_prior {
-		std::vector<u32> start, weight_start, apm_start;
+		std::vector<u32> start, weight_start;
 		std::vector<u32> keys, values;
 		std::vector<i32> weights;
-		std::vector<u16> apm;
 	};
 
 	// a candidate counter's best start: the bits it saves over starting flat, and its frames_prior.h entry
@@ -392,16 +405,11 @@ namespace {
 		std::vector<_pick> picks;
 	};
 
-	// an apm entry before any update
-	u16 flat_apm(size_t j) {
-		return (u16)(cm::squash(((int)j - 16) * 128) * 16);
-	}
-
 	frames::_prior view(const _set_prior& p) {
-		return { p.start.data(), p.keys.data(), p.values.data(), p.weight_start.data(), p.weights.data(), p.apm_start.data(), p.apm.data() };
+		return { p.start.data(), p.keys.data(), p.values.data(), p.weight_start.data(), p.weights.data() };
 	}
 
-	template<bool Quick, bool Fallback = false>
+	template<bool Quick, _fit Fit = _fit::normal>
 	_set_trials trials_of(const std::filesystem::path& cache, u32 set) {
 
 		using candidate = _candidate<Quick>;
@@ -414,9 +422,9 @@ namespace {
 
 		{
 			_set_models M{};
-			_counting<Fallback> counting{};
+			_counting<Fit> counting{};
 
-			M.init(set, size_t(1) << 20, true, Fallback);
+			M.init(set, size_t(1) << 20, true, Fit == _fit::fallback);
 			counting.models = M.all(set);
 
 			for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
@@ -505,12 +513,12 @@ namespace {
 		}
 
 		// 2. each candidate per replay, from flat and from each start and searched confidence
-		_trials<Quick, Fallback> trials{};
+		_trials<Quick, Fit> trials{};
 
 		{
 			_set_models M{};
 
-			M.init(set, size_t(1) << 20, true, Fallback);
+			M.init(set, size_t(1) << 20, true, Fit == _fit::fallback);
 			trials.models = M.all(set);
 			trials.candidates = std::move(candidates);
 
@@ -523,7 +531,7 @@ namespace {
 				const auto& c{ trials.candidates[i] };
 				const auto& table{ trials.models[c.model]->table };
 				// Compact fallback lines are stored by salt, rather than by the masked hash.
-				const size_t line{ Fallback ? (c.key == cm::hash(cm::FALLBACK_INPUT, 0) ? 0u : 1u) : c.key & table.mask };
+				const size_t line{ Fit == _fit::fallback ? (c.key == cm::hash(cm::FALLBACK_INPUT, 0) ? 0u : 1u) : c.key & table.mask };
 				i32& r{ trials.row[c.model][line] };
 
 				if (r < 0) {
@@ -610,7 +618,7 @@ namespace {
 	}
 
 	// 3. a set's prior from the picks it keeps (indices into t.picks, most bits saved first)
-	_set_prior mix(const std::filesystem::path& cache, u32 set, const _set_trials& t, const std::vector<u32>& kept, bool fallback = false) {
+	_set_prior mix(const std::filesystem::path& cache, u32 set, const _set_trials& t, const std::vector<u32>& kept, _fit fit = _fit::normal) {
 
 		_set_prior out{};
 
@@ -636,18 +644,51 @@ namespace {
 		}
 
 		out.weight_start.assign(FRAMES_PRIOR_MODELS + 1, 0);
-		out.apm_start.assign(FRAMES_PRIOR_MODELS + 1, 0);
 
-		if (fallback) {
-			fprintf(stderr, "set %u: %zu replays, %zu fallback counters\n", set, t.replays, out.keys.size());
+		// the balanced and fallback profiles have no mixer
+		if (fit != _fit::normal) {
+
+			if (fit == _fit::fallback) {
+
+				// a value's high byte becomes the counter's place in its model's two lines, which stands for its key
+				_set_models M{};
+
+				M.init(set, 1, false, true);
+
+				const auto models{ M.all(set) };
+				const u32 first_line{ (u32)cm::hash(cm::FALLBACK_INPUT, 0) };
+
+				for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
+
+					for (u32 j{ out.start[m] }; j < out.start[m + 1]; ++j) {
+
+						const u32 at{ (out.keys[j] == first_line ? 0u : models[m]->table.width) + (out.values[j] >> 24) };
+
+						if (at >= models[m]->table.t.size() || at > 255) {
+
+							fprintf(stderr, "set %u: a fallback counter of model %u is outside its lines\n", set, m);
+							std::exit(1);
+
+						}
+
+						out.values[j] = (out.values[j] & 0xFFFFFF) | at << 24;
+
+					}
+
+				}
+
+			}
+
+			fprintf(stderr, "set %u: %zu replays, %zu %s counters\n", set, t.replays, out.keys.size(), fit == _fit::fallback ? "fallback" : "balanced");
+
 			return out;
 		}
 
-		// 3. mixer weights and apm tables, averaged over the replays where they are not at their flat start
+		// 3. mixer weights, averaged over the replays where they are not at their flat start
 		for (int round{}; round < MIX_ROUNDS; ++round) {
 
-			std::vector<double> weights[FRAMES_PRIOR_MODELS], apm[FRAMES_PRIOR_MODELS];
-			std::vector<u32> weights_n[FRAMES_PRIOR_MODELS], apm_n[FRAMES_PRIOR_MODELS];
+			std::vector<double> weights[FRAMES_PRIOR_MODELS];
+			std::vector<u32> weights_n[FRAMES_PRIOR_MODELS];
 			size_t inputs[FRAMES_PRIOR_MODELS]{};
 
 			each_replay(cache, set, [&](_replay& r) {
@@ -669,7 +710,7 @@ namespace {
 					if (!md || md->table.t.empty())
 						continue;
 
-					const size_t n{ (size_t)md->mixed() }, sets{ md->weights.size() / n }, contexts{ md->refine.t.size() / 33 };
+					const size_t n{ (size_t)md->mixed() }, sets{ md->weights.size() / n };
 
 					if (weights[m].empty()) {
 
@@ -677,8 +718,6 @@ namespace {
 
 						weights[m].assign(md->weights.size(), 0);
 						weights_n[m].assign(sets, 0);
-						apm[m].assign(md->refine.t.size(), 0);
-						apm_n[m].assign(contexts, 0);
 
 					}
 
@@ -701,34 +740,15 @@ namespace {
 
 					}
 
-					for (size_t x{}; x < contexts; ++x) {
-
-						bool moved{};
-
-						for (int j{}; j < 33; ++j)
-							moved |= md->refine.t[x * 33 + j] != flat_apm(j);
-
-						if (!moved)
-							continue;
-
-						++apm_n[m][x];
-
-						for (int j{}; j < 33; ++j)
-							apm[m][x * 33 + j] += md->refine.t[x * 33 + j];
-
-					}
-
 				}
 
 			});
 
 			out.weights.clear();
-			out.apm.clear();
 
 			for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
 
 				out.weight_start[m] = (u32)out.weights.size();
-				out.apm_start[m] = (u32)out.apm.size();
 
 				for (size_t i{}; i < weights[m].size(); ++i) {
 
@@ -738,18 +758,9 @@ namespace {
 
 				}
 
-				for (size_t i{}; i < apm[m].size(); ++i) {
-
-					const u32 n{ apm_n[m][i / 33] };
-
-					out.apm.push_back(n ? (u16)std::lround(apm[m][i] / n) : flat_apm(i % 33));
-
-				}
-
 			}
 
 			out.weight_start[FRAMES_PRIOR_MODELS] = (u32)out.weights.size();
-			out.apm_start[FRAMES_PRIOR_MODELS] = (u32)out.apm.size();
 
 		}
 
@@ -813,14 +824,16 @@ namespace {
 
 int main(int argc, char** argv) {
 
-	bool keep{}, reuse{}, pooled{}, quick{}, fallback{};
+	bool keep{}, reuse{}, pooled{}, quick{}, balanced{}, fallback{};
 	std::vector<const char*> args;
 
 	for (int i{ 1 }; i < argc; ++i) {
 
 		const std::string_view arg{ argv[i] };
 
-		if (arg == "--fallback")
+		if (arg == "--balanced")
+			balanced = true;
+		else if (arg == "--fallback")
 			fallback = true;
 		else if (arg == "--quick")
 			quick = true;
@@ -835,11 +848,12 @@ int main(int argc, char** argv) {
 
 	}
 
-	if (args.empty() || (keep && (reuse || args.size() < 4)) || (fallback && quick)) {
+	if (args.empty() || (keep && (reuse || args.size() < 4)) || ((balanced || fallback) && quick) || (balanced && fallback)) {
 
 		fprintf(stderr, "usage: frames_prior_gen [--quick] [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h\n"
 			"       frames_prior_gen --reuse [--quick] [--pooled] cache_directory [entries] [sets at once] > frames_prior.h\n"
-			"       add --fallback (without --quick) to generate frames_fallback_prior.h; caches use cache_directory/fallback\n");
+			"       add --balanced or --fallback (without --quick) to generate frames_balanced_prior.h or frames_fallback_prior.h;\n"
+			"       their caches use cache_directory/balanced and cache_directory/fallback\n");
 
 		return 1;
 	}
@@ -852,7 +866,8 @@ int main(int argc, char** argv) {
 
 	const std::filesystem::path cache_base{ reuse ? args[0] : !temporary ? args[3] : std::filesystem::temp_directory_path() /
 		("frames_prior_gen-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())) };
-	const std::filesystem::path cache{ fallback ? cache_base / "fallback" : cache_base };
+	const _fit fit{ balanced ? _fit::balanced : fallback ? _fit::fallback : _fit::normal };
+	const std::filesystem::path cache{ balanced ? cache_base / "balanced" : fallback ? cache_base / "fallback" : cache_base };
 
 	std::error_code error;
 
@@ -1022,7 +1037,7 @@ int main(int argc, char** argv) {
 	each_set([&](u32 s) {
 
 		if (!reuse)
-			trials[s] = fallback ? trials_of<false, true>(cache, s) :
+			trials[s] = balanced ? trials_of<false, _fit::balanced>(cache, s) : fallback ? trials_of<false, _fit::fallback>(cache, s) :
 				quick ? trials_of<true>(cache, s) : trials_of<false>(cache, s);
 
 		if (reuse ? !load_trials(cache, s, trials[s], quick) : keep && !save_trials(cache, s, trials[s], quick)) {
@@ -1075,7 +1090,7 @@ int main(int argc, char** argv) {
 	_set_prior sets[SETS];
 
 	each_set([&](u32 s) {
-		sets[s] = mix(cache, s, trials[s], kept[s], fallback);
+		sets[s] = mix(cache, s, trials[s], kept[s], fit);
 	});
 
 	if (!keep && !reuse)
@@ -1084,59 +1099,65 @@ int main(int argc, char** argv) {
 
 	if (temporary) {
 		std::filesystem::remove(cache, error);
-		if (fallback)
+		if (fit != _fit::normal)
 			std::filesystem::remove(cache_base, error);
 	}
 
 	std::vector<u32> keys, values;
 	std::vector<i32> weights;
-	std::vector<u16> apm;
-	size_t key_base[SETS]{}, weight_base[SETS]{}, apm_base[SETS]{};
+	size_t key_base[SETS]{}, weight_base[SETS]{};
 
 	for (u32 s{}; s < SETS; ++s) {
 
 		key_base[s] = keys.size();
 		weight_base[s] = weights.size();
-		apm_base[s] = apm.size();
 
 		keys.insert(keys.end(), sets[s].keys.begin(), sets[s].keys.end());
 		values.insert(values.end(), sets[s].values.begin(), sets[s].values.end());
 		weights.insert(weights.end(), sets[s].weights.begin(), sets[s].weights.end());
-		apm.insert(apm.end(), sets[s].apm.begin(), sets[s].apm.end());
 
 	}
 
 	printf("#pragma once\n\n#include <cstdint>\n\n");
 
+	if (balanced) {
+		printf("// Generated by frames_prior_gen --balanced: exhaustive pooled/trained counter starts, nine confidences plus flat.\n");
+		printf("// The first context's counters and the fallback's, conditional on the cached representations;\n");
+		printf("// no mixer state. Key = low 32 bits of the context hash; value = p | confidence << 16 | slot << 24.\n\n");
+		printf("constexpr uint32_t BALANCED_PRIOR_SETS{ %u };\n", SETS);
+		printf("constexpr uint32_t BALANCED_PRIOR_MODELS{ %u };\n\n", FRAMES_PRIOR_MODELS);
+		print_starts("BALANCED_PRIOR_START", sets, &_set_prior::start, key_base, "BALANCED_PRIOR");
+		print_array("uint32_t", "BALANCED_PRIOR_KEYS", keys, 8);
+		print_array("uint32_t", "BALANCED_PRIOR_VALUES", values, 8);
+		return 0;
+	}
+
 	if (fallback) {
 		printf("// Generated by frames_prior_gen --fallback: exhaustive pooled/trained counter starts, nine confidences plus flat.\n");
-		printf("// Conditional on the cached normal-profile representations; no mixer or APM state.\n");
-		printf("// Key = low 32 bits of fallback hash; value = p | confidence << 16 | slot << 24.\n\n");
+		printf("// Conditional on the cached representations; no mixer state.\n");
+		printf("// Value = p | confidence << 16 | (line * width + slot) << 24: the counter's place in its model's two lines.\n\n");
 		printf("constexpr uint32_t FALLBACK_PRIOR_SETS{ %u };\n", SETS);
 		printf("constexpr uint32_t FALLBACK_PRIOR_MODELS{ %u };\n\n", FRAMES_PRIOR_MODELS);
 		print_starts("FALLBACK_PRIOR_START", sets, &_set_prior::start, key_base, "FALLBACK_PRIOR");
-		print_array("uint32_t", "FALLBACK_PRIOR_KEYS", keys, 8);
 		print_array("uint32_t", "FALLBACK_PRIOR_VALUES", values, 8);
 		return 0;
 	}
 
 	if (quick)
-		printf("// quick screening output: confidences 1/16/255, %d mixer/APM rounds; use an exhaustive fit for final priors\n\n", MIX_ROUNDS);
+		printf("// quick screening output: confidences 1/16/255, %d mixer rounds; use an exhaustive fit for final priors\n\n", MIX_ROUNDS);
 
 	printf("// generated by frames_prior_gen.cpp: the starting state of the context mixing models per prior set (frames::prior_set)\n");
 	printf("// and model (frames::_models::all, modes::_models::all). Counters are keyed by the low 32 bits of their context hash,\n");
-	printf("// value = p | confidence << 16 | slot << 24; then each model's mixer weights and apm table\n\n");
+	printf("// value = p | confidence << 16 | slot << 24; then each model's mixer weights\n\n");
 	printf("constexpr uint32_t FRAMES_PRIOR_SETS{ %u };\n", SETS);
 	printf("constexpr uint32_t FRAMES_PRIOR_MODELS{ %u };\n\n", FRAMES_PRIOR_MODELS);
 
 	print_starts("FRAMES_PRIOR_START", sets, &_set_prior::start, key_base);
 	print_starts("FRAMES_PRIOR_WEIGHT_START", sets, &_set_prior::weight_start, weight_base);
-	print_starts("FRAMES_PRIOR_APM_START", sets, &_set_prior::apm_start, apm_base);
 
 	print_array("uint32_t", "FRAMES_PRIOR_KEYS", keys, 8);
 	print_array("uint32_t", "FRAMES_PRIOR_VALUES", values, 8);
 	print_array("int32_t", "FRAMES_PRIOR_WEIGHTS", weights, 16);
-	print_array("uint16_t", "FRAMES_PRIOR_APM", apm, 33);
 
 	return 0;
 }

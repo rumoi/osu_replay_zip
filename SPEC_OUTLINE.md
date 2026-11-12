@@ -64,7 +64,7 @@ then       the containers' data, back to back, in the order the header lists the
 
 | Field | Coding | Notes |
 |---|---|---|
-| version | `bucket(4, 8)` | 0 for normal frames or verbatim data, 1 for `fast_frames`. A reader rejects a version it does not support before reading on. |
+| version | `bucket(4, 8)` | 0 for the current unreleased format. A reader rejects a version it does not support before reading on. |
 | crc | 32 bits | §3.4 |
 | encode info | `bucket(8)` | §3.3 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
@@ -118,15 +118,12 @@ standard tags it does not know.
 | 5 | `trailing_comma` | the replay text ended with `,` |
 | 6 | `replay_verbatim` | the replay data is stored as-is (§10) |
 | 7 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
-| 8 | `fast_frames` | selects the fast frame decoder; version 1 only |
-| 9 | `fastest_frames` | selects the direct shared-counter frame decoder; requires `fast_frames` |
+| 8–9 | `compression_priority` | 0 = SIZE, 1 = BALANCED, 2 = SPEED; 3 is reserved |
 
-The encode info retains its `bucket(8)` coding: values above its first bucket use the overflow form (§2).
-Version 0 requires both profile flags to be clear. Version 1 requires `fast_frames` to be set and `replay_verbatim`
-to be clear; `fastest_frames` additionally selects the fastest profile. A reader rejects `fastest_frames` without
-`fast_frames`, as well as any profile it does not support. Bits 10 and above are unassigned and rejected. These
-checks apply even when a caller disables CRC verification. An encoder's request for either profile may fall back
-to verbatim data; that file has version 0 and clears both profile flags.
+Only version 0 is supported. Priority 3 and bits 10 and above are reserved and rejected. Verbatim data requires
+priority 0. These checks apply even when CRC verification is skipped. SIZE (0) is the default; decoder options
+cannot override the stored priority. Earlier experimental V0 layouts and probability models are not supported.
+
 
 | Mode | Replay | Frames stream |
 |---|---|---|
@@ -239,13 +236,12 @@ A counter holds a 16-bit probability `p` (starting at 32768) and a count `n` (st
 
 ### 5.3 Models
 
-Each kind of decision has a model:
+Each kind of SIZE decision has a model:
 
 - **a table of counters in lines**: `2^bits` lines of `width` counters each, where a line is found by
   `hash & (2^bits − 1)`, with no collision check;
 - **a set of mixer weights** per selector, one per input: each context's starts at 19661 (0.3 in 16.16 fixed point)
-  and the fallback's, the last, at 0;
-- **an APM table** of 33 entries per context.
+  and the fallback's, the last, at 0.
 
 Binding a decision's `N` contexts (`N` ≤ 7) gives `N + 1` inputs, each with a line. Input `i`'s line is
 `hash(salt · 8 + i, context_i)` for `i < N`. The last input is the **fallback**: its line is `hash(salt · 8 + 7, 0)`
@@ -281,7 +277,7 @@ T = {1, 2, 3, 6, 10, 16, 27, 45, 73, 120, 194, 310, 488, 747, 1101, 1546, 2047, 
 
 `stretch(p)` is the smallest `d` in −2047…2047 with `squash(d) ≥ p` (2047 if none).
 
-For one decision with counters $`p_i`$ (one per input), weight set $`w`$ and APM table $`A`$ at context `a`:
+For one SIZE decision with counters $`p_i`$ (one per input) and weight set $`w`$:
 
 1. **Mix** the stretched counters (`dot` in 64-bit):
 
@@ -289,81 +285,67 @@ For one decision with counters $`p_i`$ (one per input), weight set $`w`$ and APM
    x_i = \mathrm{stretch}\!\left(\left\lfloor \frac{p_i}{16} \right\rfloor\right), \qquad
    p_m = \mathrm{squash}\!\left(\mathrm{clamp}\!\left(\left\lfloor \frac{\sum_i x_i w_i}{2^{16}} \right\rfloor,\ -2047,\ 2047\right)\right)
    ```
-2. **Refine** with the APM, interpolating between two of its entries:
+2. **Code** the bit with the mixer's probability scaled to 16 bits:
 
    ```math
-   s = \mathrm{stretch}(p_m) + 2048, \quad
-   j = 33a + \left\lfloor \frac{s}{128} \right\rfloor, \quad
-   t = s \bmod 128, \qquad
-   p_a = \left\lfloor \frac{A[j]\,(128 - t) + A[j+1]\,t}{128} \right\rfloor
-   ```
-3. **Code** the bit with a quarter of the mixer and three quarters of the APM:
-
-   ```math
-   p = \mathrm{clamp}\!\left(\left\lfloor \frac{16\,p_m + 3\,p_a}{4} \right\rfloor,\ 32,\ 65504\right)
+   p = \mathrm{clamp}(16\,p_m,\ 32,\ 65504)
    ```
 
-After coding `y`, in this order:
+After coding `y`, for each input, update its counter (§5.2), then its weight:
 
-1. for each input, update its counter (§5.2), then its weight:
+```math
+w_i \leftarrow w_i + \left\lfloor \frac{40\, x_i\, (4096\,y - p_m) + 2^{15}}{2^{16}} \right\rfloor
+```
 
-   ```math
-   w_i \leftarrow w_i + \left\lfloor \frac{40\, x_i\, (4096\,y - p_m) + 2^{15}}{2^{16}} \right\rfloor
-   ```
-2. move both APM entries toward the bit, scaled to 16 bits as `τ = 65535 · y`:
+The header selects this rule for the whole SIZE frame stream, including escape values, in every mode.
+Fixed-probability decisions keep their usual probabilities.
 
-   ```math
-   A[j] \leftarrow A[j] + \left\lfloor \frac{5 \left\lfloor (\tau - A[j])\,(128 - t) / 128 \right\rfloor}{256} \right\rfloor, \qquad
-   A[j+1] \leftarrow A[j+1] + \left\lfloor \frac{5 \left\lfloor (\tau - A[j+1])\, t / 128 \right\rfloor}{256} \right\rfloor
-   ```
+With BALANCED, bind only the first context in each model and its fallback, preserving their original hashes,
+salts and table sizes. Use the contextual counter's full 16-bit probability when its confidence `n >= 8`, and the
+fallback's probability otherwise, clamped to `[32, 65504]`. Update the contextual counter first, then the fallback,
+using §5.2; if they alias the same physical counter, update it twice. There is no mixer. Counters start flat,
+then take the same counter priors as SIZE from `frames_prior.h`, with the set/model order and packed key/value
+representation from §5.6. Seed all entries in their stored order, including collisions; entries fitted for other
+contexts can still affect retained counters through aliasing. Mixer priors are unused.
 
-APM entries start at $`A[33c + k] = 16 \cdot \mathrm{squash}(128\,(k - 16))`$ for $`k = 0 \ldots 32`$.
+With SPEED, each model uses only its fallback counter at the current slot. Its coded probability is
+$`p = \mathrm{clamp}(p_i,\ 32,\ 65504)`$, retaining the counter's full 16-bit value. After each decision, update that
+counter exactly once using §5.2. There are no contextual inputs, mixer weights or probability transformations. Fixed-probability decisions keep their usual probabilities in all three priorities.
 
-With `fast_frames`, the mixer and counter updates are the same, but APM refinement and updates are omitted.
-The coded probability is $`p = \mathrm{clamp}(16\,p_m,\ 32,\ 65504)`$. Contexts, table sizes, counter priors and
-mixer priors are unchanged; APM priors are unused. The header selects this probability rule for the whole frame
-stream, including escape values, in every mode. Fixed-probability decisions keep their usual probabilities.
-
-With `fastest_frames` as well as `fast_frames`, each model instead uses only its fallback counter at the current
-slot. Its coded probability is $`p = \mathrm{clamp}(p_i,\ 32,\ 65504)`$, retaining the counter's full 16-bit value.
-After each decision, update that counter exactly once using §5.2. There are no contextual inputs, mixer weights,
-APM tables or probability transformations. Fixed-probability decisions keep their usual probabilities.
-
-This profile stores two counter lines per model, for salts 0 and 1, with the same line widths as §5.5. Only the
-long move-residual lengths use salt 1. These lines are indexed directly by salt, without hashing or collisions,
-and their size does not depend on the frame count. Counters start at `p = 32768, n = 0`, then take their separate
-priors from `frames_fallback_prior.h`, using the same set and model order as §5.6. Each prior's key identifies
-`hash(7, 0)` or `hash(15, 0)` (low 32 bits), selecting salt 0 or 1; its value packs the probability, confidence and
-slot as in §5.6. No other prior keys are valid for this profile.
+SPEED stores two counter lines per model, for salts 0 and 1, with the same line widths as §5.5. Only the long
+move-residual lengths use salt 1. These lines are indexed directly by salt, without hashing or collisions, and
+their size does not depend on the frame count. Counters start at `p = 32768, n = 0`, then take their separate priors
+from `frames_fallback_prior.h`, using the same set and model order as §5.6. Each value packs `p` in bits 0–15,
+confidence in bits 16–23, and the physical counter index `salt * width + slot` in bits 24–31. No key array is needed.
 
 ### 5.5 Table sizes
 
-Except for `fastest_frames`, a model's table size depends on the header's frame count, up to 16,384 frames (`b = bit_width(min(frame count,
+Except for SPEED, a model's table size depends on the header's frame count, up to 16,384 frames (`b = bit_width(min(frame count,
 16384))`), so a decoder must size every table exactly as the encoder did. The sizes are part of the format:
 
-| Model | Contexts | Table bits | Width | Mixer sets | APM contexts |
-|---|---|---|---|---|---|
-| keys changed | 5 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
-| key bits | 4 | clamp(b+2, 14, 20) | 1 | 64 | 64 |
-| high key bits | 1 | 8 | 1 | 1 | 1 |
-| time | 4; 6 for relax (modes 4 and 6) and osu!taiko (modes 1 and 5) | clamp(b, 12, 14) | 64 | 576 | 192 |
-| repeat | 4 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
-| move | 6 | clamp(b+3, 12, 16) | 32 | 384 | 1536 |
-| move bits | 2 | clamp(b+2, 12, 20) | 1 | 32 | 256 |
-| slack | 1 | clamp(b−2, 10, 16) | 16 | 64 | 64 |
-| escape | 5 | clamp(b+2, 12, 20) | 1 | 48 | 48 |
-| escape value | 2 | 10 | 64 | 1 | 1 |
-| autopilot event | 5 | clamp(b, 10, 16) | 1 | 8 | 8 |
-| autopilot value | 2 | 12 | 64 | 1 | 1 |
-| catcher moved | 6 | clamp(b+3, 12, 20) | 1 | 64 | 64 |
-| catcher direction | 4 | clamp(b+1, 10, 18) | 1 | 16 | 16 |
-| catcher residual | 5 | clamp(b, 10, 14) | 64 | 64 | 64 |
-| catcher residual bits | 2 | clamp(b+1, 10, 18) | 1 | 8 | 8 |
+| Model | Contexts | Table bits | Width | Mixer sets |
+|---|---|---|---|---|
+| keys changed | 5 | clamp(b+4, 16, 22) | 1 | 64 |
+| key bits | 4 | clamp(b+2, 14, 20) | 1 | 64 |
+| high key bits | 1 | 8 | 1 | 1 |
+| time | 4; 6 for relax (modes 4 and 6) and osu!taiko (modes 1 and 5) | clamp(b, 12, 14) | 64 | 576 |
+| repeat | 4 | clamp(b+4, 16, 22) | 1 | 64 |
+| move | 6 | clamp(b+3, 12, 16) | 32 | 384 |
+| move bits | 2 | clamp(b+2, 12, 20) | 1 | 32 |
+| slack | 1 | clamp(b−2, 10, 16) | 16 | 64 |
+| escape | 5 | clamp(b+2, 12, 20) | 1 | 48 |
+| escape value | 2 | 10 | 64 | 1 |
+| autopilot event | 5 | clamp(b, 10, 16) | 1 | 8 |
+| autopilot value | 2 | 12 | 64 | 1 |
+| catcher moved | 6 | clamp(b+3, 12, 20) | 1 | 64 |
+| catcher direction | 4 | clamp(b+1, 10, 18) | 1 | 16 |
+| catcher residual | 5 | clamp(b, 10, 14) | 64 | 64 |
+| catcher residual bits | 2 | clamp(b+1, 10, 18) | 1 | 8 |
 
 The first four serve every mode. The next eight are osu!standard only, and the last four osu!catch only. The time
 model's two extra contexts (the older deltas, and the last three frames' repeat flags, or for osu!taiko whether the
-keys stayed) are its last two, so its first four contexts are the same for every mode. Every model mixes one input
-more than its contexts, the fallback (§5.3).
+keys stayed) are its last two, so its first four contexts are the same for every mode. SIZE mixes one input
+more than its contexts, the fallback (§5.3). BALANCED retains only the first listed context and fallback.
 Its clock-phase context groups frames by phase and whether keys change on this frame or changed on the previous one;
 the delta-history contexts model earlier deltas separately.
 
@@ -383,18 +365,20 @@ by the replay's mode:
 The device is the higher `axis mode` value (§6.3) of the two axes' first segments. A text axis therefore counts as "no
 device model".
 
-A prior holds three things per model:
+The prior in `frames_prior.h` holds two things per model:
 
 - **counters**, each given by the low 32 bits of its context hash, a slot, a probability and a confidence (the
   starting `n`);
-- **the mixer weights**;
-- **the APM table**.
+- **the mixer weights**.
 
 Counters are written into the line their key selects under the replay's table size, and a later entry replaces an
-earlier one that lands on the same counter. Weights and APM tables are copied whole.
+earlier one that lands on the same counter. Counter values pack probability in bits 0–15, confidence in bits
+16–23, and the slot in bits 24–31. Weights are copied whole. SIZE shares the counters and weights;
+BALANCED shares the same counter bank, and SPEED has the directly indexed bank described in §5.4.
 
-The prior tables are normative data. Encoder and decoder need bit-identical copies, and changing them is a format
-change.
+The prior tables are normative data. Encoder and decoder need bit-identical copies. SIZE and BALANCED use the
+same counter values from `frames_prior.h`; only SIZE uses its mixer weights. SPEED uses `frames_fallback_prior.h`.
+Changing a retained prior value changes the format.
 
 ## 6. The frames stream: osu!standard form
 

@@ -5,23 +5,43 @@
 **The format is specified, but V0 is not pinned quite yet.**\
 **The priors are still being trained, once they are finished the format is ready.**
 
-To trade some compression for faster frame decoding, set `ENCODE_FAST_FRAME_DECODE` on the encoder state:
+Choose the compression priority with the two-bit field in `orz_state::options`:
+
+| Value | Encoder option | Frame prediction |
+|---|---|---|
+| 0 (default) | `ENCODE_COMPRESSION_PRIORITY_SIZE` | All contexts and mixer; no adaptive probability refinement |
+| 1 | `ENCODE_COMPRESSION_PRIORITY_BALANCED` | First context when confident, otherwise fallback; direct probability |
+| 2 | `ENCODE_COMPRESSION_PRIORITY_SPEED` | Fallback counter only; direct probability |
 
 ```cpp
 orz::orz_state encoder;
-encoder.options |= orz::ENCODE_FAST_FRAME_DECODE;
+encoder.options = (encoder.options & ~orz::ENCODE_COMPRESSION_PRIORITY_MASK)
+    | orz::ENCODE_COMPRESSION_PRIORITY_BALANCED;
 orz::osr_to_orz(input, packed, encoder);
 ```
 
-`replay_data_to_orz` accepts the same state option. The encoder stores the profile in the `.orz` header;
-`orz_decode_frames` selects it automatically. Fast streams use version 1 and require a reader that supports their profile.
-Normal streams and verbatim fallbacks use version 0. The fast profile skips adaptive probability refinement
-while retaining all contexts, counters and mixer weights.
+`replay_data_to_orz` accepts the same options. Value 3 is reserved: encoding returns false with an empty output.
+These are alternative field values, so clear the mask before changing priority. The encoder writes the priority
+into bits 8–9 of the `.orz` decode flags (`encode_info`); `orz_decode_frames` and `orz_to_osr` select it automatically.
+All three priorities use the current unreleased V0 format. Verbatim fallbacks clear the priority field.
+Compatibility with earlier experimental builds is not supported.
 
-For greater decode speed at a larger size cost, use `ENCODE_FASTEST_FRAME_DECODE` instead. This profile codes
-each model's decisions directly from shared adaptive counters, without context mixing or probability refinement.
-It takes precedence if both encoder options are set. Readers that support only the fast profile reject fastest
-streams; readers supporting fastest also decode normal and fast streams. Verbatim fallbacks clear both profile flags.
+SIZE and BALANCED share one counter-prior bank; BALANCED adds no prior data. SIZE also uses the existing mixer
+weights. SPEED uses a separate 5,420-byte array payload. There is no APM decoder or APM prior bank.
+The offline generator's `--balanced` mode produces a candidate counter bank for experiments; the current
+BALANCED format continues to use the shared bank.
+
+The prior banks are part of the format. Encoder and decoder must use identical prior values.
+
+To skip cursor device-model detection during encoding, also set `ENCODE_NO_DEVICE`:
+
+```cpp
+encoder.options |= orz::ENCODE_NO_DEVICE;
+```
+
+This skips device hints and device-model search; cursor positions can use the text representation instead.
+Autopilot detection still runs. The option can reduce encode time at a compression cost and does not need a decode
+flag: the file already describes the chosen position representation.
 
 For repeated frame decoding, retain the table storage across calls to avoid repeated allocations:
 
@@ -35,6 +55,9 @@ for (const auto& packed : replays)
 The decoder resets the adaptive model state for each replay. Both examples omit error handling.
 
 Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view
+
+The figures below are historical measurements of an older encoder revision on that replay set; they do not
+measure the current SIZE default.
 
 Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.
 

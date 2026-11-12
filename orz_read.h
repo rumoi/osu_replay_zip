@@ -48,7 +48,7 @@ static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _dec
 
 		const auto frames_data{ container_data(file, orz_tag::frames) };
 
-		if (!(uses_modes_coder(mode) ? modes::decode(info, frames_data, R, tables) : standard::decode(info, frames_data, R, tables)))
+		if (!(uses_modes_coder(mode) ? modes::decode(file, frames_data, R, tables) : standard::decode(file, frames_data, R, tables)))
 			return false;
 
 	}

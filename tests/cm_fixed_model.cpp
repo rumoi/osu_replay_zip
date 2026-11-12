@@ -29,7 +29,7 @@ void equal(const cm::model& a, const cm::model& b) {
 	for (size_t i{}; i < a.table.t.size(); ++i)
 		require(a.table.t[i].p == b.table.t[i].p && a.table.t[i].n == b.table.t[i].n);
 
-	require(a.table.keys == b.table.keys && a.weights == b.weights && a.refine.t == b.refine.t);
+	require(a.table.keys == b.table.keys && a.weights == b.weights);
 
 }
 
@@ -77,10 +77,10 @@ void run(Model& m, Coder& coder) {
 		if (i % 2) {
 
 			m.bind(ctx, i % 3);
-			got = m.code(coder, bit, (u32)(i % m.table.width), i % 5, i % 3);
+			got = m.code(coder, bit, (u32)(i % m.table.width), i % 5);
 
 		} else
-			got = m.code(coder, bit, ctx, i % 5, i % 3);
+			got = m.code(coder, bit, ctx, i % 5);
 
 		const u64 salt{ i % 2 ? i % 3 : 0 };
 		const u64 fallback{ cm::hash(salt * 8 + 7, 0) };
@@ -100,8 +100,8 @@ void check(bool seeded, u32 width) {
 	const auto init = [&] {
 
 		// a small table deliberately collides, including between inputs bound to the same line.
-		dynamic.init(N, 4, width, 5, 3, true);
-		fixed.init(4, width, 5, 3, true);
+		dynamic.init(N, 4, width, 5, true);
+		fixed.init(4, width, 5, true);
 		require(dynamic.weights.size() == 5 * (N + 1) && fixed.weights.size() == dynamic.weights.size());
 
 		for (size_t i{}; i < dynamic.weights.size(); ++i) {
@@ -127,7 +127,7 @@ void check(bool seeded, u32 width) {
 	require(expected.finish() == actual.finish());
 	equal(dynamic, fixed);
 
-	fixed.init(4, width, 5, 3, true);
+	fixed.init(4, width, 5, true);
 	if (seeded)
 		seed(fixed);
 	cm::bit_decoder decoder{ expected.out };
