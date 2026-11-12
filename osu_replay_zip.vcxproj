@@ -175,7 +175,6 @@
     <ClInclude Include="orz_modes.h" />
     <ClInclude Include="orz_parts.h" />
     <ClInclude Include="orz_read.h" />
-    <ClInclude Include="orz_lazer.h" />
     <ClInclude Include="orz_setup.h" />
     <ClInclude Include="orz_shared.h" />
     <ClInclude Include="orz_state.h" />

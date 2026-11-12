@@ -83,7 +83,7 @@ namespace setup {
 
 		if (s.kind == input::lattice) {
 
-			if ((s.lattice[a].D > 0 && s.lattice[a].a > 0) || (s.lattice[a].chain.A != 0.f && s.lattice[a].chain.B != 0.f)) {
+			if (s.lattice[a].D > 0 && s.lattice[a].a > 0) {
 
 				q.device.kind = dspace::axis_mode::rational;
 				q.device.rational = s.lattice[a];
@@ -244,16 +244,6 @@ namespace setup {
 			// a sensitivity of 1 moves by whole pixels
 			if (s.sens == 1.f)
 				s.kind = input::pixels;
-
-			return s;
-		}
-
-		// a chain is handed back as it is
-		if (kind(0) == axis_mode::rational && kind(1) == axis_mode::rational && p[0]->device.rational.chain.B != 0.f && p[1]->device.rational.chain.B != 0.f) {
-
-			s.kind = input::lattice;
-			s.lattice[0] = p[0]->device.rational;
-			s.lattice[1] = p[1]->device.rational;
 
 			return s;
 		}
