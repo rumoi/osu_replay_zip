@@ -40,8 +40,8 @@ encoder.options |= orz::ENCODE_NO_DEVICE;
 ```
 
 This skips device hints and device-model search; cursor positions can use the text representation instead.
-Autopilot detection still runs. The option can reduce encode time at a compression cost and does not need a decode
-flag: the file already describes the chosen position representation.
+Autopilot detection still runs. Skipping device search does not guarantee faster encoding: the chosen position
+representation also affects encoding cost. No decode flag is needed because the file already describes that representation.
 
 For repeated frame decoding, retain the table storage across calls to avoid repeated allocations:
 
