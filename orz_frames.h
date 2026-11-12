@@ -372,32 +372,58 @@ namespace frames {
 
 			m.bind_n<N, Coder>(ctx);
 
-			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };
-			const u32 index{ (u32)(std::find(table.begin(), table.end(), want) - table.begin()) };
+			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };			
 
-			// the branches to the leaf, from the leaf up
+			using coder_type = std::remove_cvref_t<Coder>;
+			constexpr bool ENCODING = std::is_base_of_v<cm::bit_decoder, coder_type> == 0;
+
+			u32 index{};
 			u8 branch[64];
 			int depth{};
 
-			for (u32 e{ 64 + (index < listed ? index : LISTED) }; e != 0; e = TIME_TREE_UP[e][0])
-				branch[depth++] = TIME_TREE_UP[e][1];
+			if constexpr (ENCODING) {
+
+				index = (u32)(std::find(table.begin(), table.end(), want) - table.begin());
+
+				for (u32 e{ 64 + (index < listed ? index : LISTED) }; e != 0; e = TIME_TREE_UP[e][0]){
+
+					branch[depth++] = TIME_TREE_UP[e][1];
+
+				}
+
+			}
 
 			u32 node{};
 
 			while (node < 64) {
 
 				const size_t step{ (size_t)node * 3 };
-				const int y{ depth ? branch[--depth] : 0 };
 
-				node = TIME_TREE[node][m.code_n<N + 1>(c, y, node, (step + regime) * 3 + key_change)];
+				int y{};
+
+				if constexpr (ENCODING)
+					y = depth ? branch[--depth] : 0;
+
+				node = TIME_TREE[node][
+					m.code_n<N + 1>(
+						c, y, node,
+						(step + regime) * 3 + key_change
+					)
+				];
 
 			}
 
 			// a leaf past the table (a damaged file) reads as the escape
 			u32 at{ std::min(node - 64, listed) };
 
-			if (at == listed && listed < n)
-				at = listed + (u32)(gamma(c, index - listed + 1) - 1);
+			if (at == listed && listed < n) {
+
+				if constexpr (ENCODING)
+					at = listed + (u32)(gamma(c, index - listed + 1) - 1);
+				else
+					at = listed + (u32)(gamma(c, 1) - 1);
+
+			}
 
 			const int d{ n ? table[std::min(at, n - 1)] : 0 };
 
