@@ -90,7 +90,12 @@ namespace frames {
 
 	struct _models {
 
-		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape, escape_value, ap_event, ap_value;
+		cm::fixed_model<5> keys_changed, escape, ap_event;
+		cm::fixed_model<4> keys_bits, repeat;
+		cm::fixed_model<1> keys_high, slack;
+		cm::fixed_model<6> move;
+		cm::fixed_model<2> move_bits, escape_value, ap_value;
+		cm::model time;
 
 		// in frames_prior.h order
 		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
@@ -105,9 +110,9 @@ namespace frames {
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
 			// single decision models: a counter per line; time / move / slack: a line of counters per context
-			keys_changed.init(5, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			keys_bits.init(4, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
-			keys_high.init(1, 8, 1, 1, 1, record_keys);
+			keys_changed.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			keys_bits.init(std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
+			keys_high.init(8, 1, 1, 1, record_keys);
 			time.init(time_history ? 6 : 4, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
 
 		}
@@ -118,14 +123,14 @@ namespace frames {
 
 			init_keys_time(frames, is_relax(mode), record_keys);
 
-			repeat.init(4, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			move.init(6, std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
-			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
-			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
-			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
-			escape_value.init(2, 10 + extra, 64, 1, 1, record_keys);
-			ap_event.init(5, std::clamp(b, 10, 16 + extra), 1, 8, 8, record_keys);
-			ap_value.init(2, 12 + extra, 64, 1, 1, record_keys);
+			repeat.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
+			move.init(std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
+			move_bits.init(std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
+			slack.init(std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
+			escape.init(std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
+			escape_value.init(10 + extra, 64, 1, 1, record_keys);
+			ap_event.init(std::clamp(b, 10, 16 + extra), 1, 8, 8, record_keys);
+			ap_value.init(12 + extra, 64, 1, 1, record_keys);
 
 		}
 
@@ -334,6 +339,13 @@ namespace frames {
 		template<typename Coder>
 		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 repeats) {
 
+			return m.inputs == 4 ? code_n<4>(c, m, past, want, phase, kc, kc1, repeats) :
+				code_n<6>(c, m, past, want, phase, kc, kc1, repeats);
+		}
+
+		template<int N, typename Coder>
+		int code_n(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 repeats) {
+
 			const size_t f{ past.size() };
 			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 };
 
@@ -345,7 +357,7 @@ namespace frames {
 			};
 
 			// relax
-			if (m.inputs > 4) {
+			if constexpr (N > 4) {
 
 				const u64 d3{ f >= 3 ? delta_bucket(past[f - 3]) : 50 }, d4{ f >= 4 ? delta_bucket(past[f - 4]) : 50 };
 
@@ -357,7 +369,7 @@ namespace frames {
 			// mixer weights and apm also by whether the keys change on this frame or did on the last
 			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u }, key_change{ kc ? 2u : kc1 ? 1u : 0u };
 
-			m.bind(ctx);
+			m.bind_n<N>(ctx);
 
 			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };
 			const u32 index{ (u32)(std::find(table.begin(), table.end(), want) - table.begin()) };
@@ -376,7 +388,7 @@ namespace frames {
 				const size_t step{ (size_t)node * 3 };
 				const int y{ depth ? branch[--depth] : 0 };
 
-				node = TIME_TREE[node][m.code(c, y, node, (step + regime) * 3 + key_change, step + key_change)];
+				node = TIME_TREE[node][m.code_n<N>(c, y, node, (step + regime) * 3 + key_change, step + key_change)];
 
 			}
 
@@ -544,7 +556,7 @@ namespace frames {
 
 	// mouse slack: the candidate index (<= 2 * MOUSE_SLACK_RANGE), unary
 	template<typename Coder>
-	int slack_value(Coder& c, cm::model& m, int k, int axis, i64 d) {
+	int slack_value(Coder& c, cm::fixed_model<1>& m, int k, int axis, i64 d) {
 
 		const u64 ctx[1]{ (u64)axis * 64 + (u64)bit_length(d) };
 
@@ -569,7 +581,7 @@ namespace frames {
 	// an autopilot move's field: zero, sign, bit length (unary), then the bits under the leading one, the first two modelled.
 	// Valid fields are far below MAX_MOVE.
 	template<typename Coder>
-	i64 ap_number(Coder& c, cm::model& m, i64 v, u64 field, u64 ctx) {
+	i64 ap_number(Coder& c, cm::fixed_model<2>& m, i64 v, u64 field, u64 ctx) {
 
 		const u64 cx[2]{ field * 4096 + ctx, field };
 
@@ -604,7 +616,7 @@ namespace frames {
 	// an escaped position's value against decode_axis's prediction: the distance in 7 digit mantissas (in ulps for
 	// shortest round-trip text) when near, else the raw float. prev_len: per axis, the last distance's bit length.
 	template<typename Coder>
-	float escape_value(Coder& c, cm::model& m, const _escape& e, int a, bool exact_text, int& prev_len, bool encoding) {
+	float escape_value(Coder& c, cm::fixed_model<2>& m, const _escape& e, int a, bool exact_text, int& prev_len, bool encoding) {
 
 		const float x{ e.x }, pred{ e.pred };
 
