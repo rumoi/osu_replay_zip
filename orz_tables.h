@@ -30,7 +30,7 @@ namespace modes {
 
 			moved.init(std::clamp(b + 3, 12, 20 + extra), 1, 64, 64, record_keys);
 			dir.init(std::clamp(b + 1, 10, 18 + extra), 1, 16, 16, record_keys);
-			res.init(std::clamp(b, 10, 18 + extra), RES_STEPS, RES_STEPS, RES_STEPS, record_keys);
+			res.init(std::clamp(b, 10, record_keys ? 18 + extra : 14), RES_STEPS, RES_STEPS, RES_STEPS, record_keys);
 			res_bits.init(std::clamp(b + 1, 10, 18 + extra), 1, 8, 8, record_keys);
 
 		}

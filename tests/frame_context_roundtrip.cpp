@@ -32,7 +32,45 @@ void check(e_mode mode, const std::string& text, bool verbatim = false) {
 
 }
 
+void check_table_sizes() {
+
+	// Runtime masks and widths are format data; prior training has its own table geometry.
+	struct _case { size_t frames; int runtime[3], training[3]; };
+	constexpr _case cases[]{
+		{ 8191, { 13, 16, 13 }, { 13, 16, 13 } },
+		{ 8192, { 14, 16, 14 }, { 14, 17, 14 } },
+		{ 16383, { 14, 16, 14 }, { 14, 17, 14 } },
+		{ 16384, { 14, 16, 14 }, { 15, 18, 15 } },
+		{ 1 << 20, { 14, 16, 14 }, { 15, 18, 15 } },
+	};
+
+	for (const auto& c : cases)
+		for (bool training : { false, true }) {
+
+			frames::_models standard;
+			modes::_models catcher;
+			standard.init(c.frames, e_mode::osu, training);
+			catcher.init(c.frames, modes::fruits, training);
+
+			const cm::line_table* tables[]{ &standard.time.table, &standard.move.table, &catcher.res.table };
+			const u32 widths[]{ 64, 32, 64 };
+			const int* bits{ training ? c.training : c.runtime };
+
+			for (size_t i{}; i < std::size(tables); ++i) {
+
+				const size_t lines{ size_t(1) << bits[i] };
+				require(tables[i]->mask == lines - 1 && tables[i]->width == widths[i]);
+				require(tables[i]->t.size() == lines * widths[i]);
+
+			}
+
+		}
+
+}
+
 int main() {
+
+	check_table_sizes();
 
 	std::string movement;
 

@@ -113,7 +113,7 @@ namespace frames {
 			keys_changed.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
 			keys_bits.init(std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
 			keys_high.init(8, 1, 1, 1, record_keys);
-			time.init(time_history ? 6 : 4, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
+			time.init(time_history ? 6 : 4, std::clamp(b, 12, record_keys ? 16 + extra : 14), 64, 64 * 3 * 3, 64 * 3, record_keys);
 
 		}
 
@@ -124,7 +124,7 @@ namespace frames {
 			init_keys_time(frames, is_relax(mode), record_keys);
 
 			repeat.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			move.init(std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
+			move.init(std::clamp(b + 3, 12, record_keys ? 17 + extra : 16), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
 			move_bits.init(std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
 			slack.init(std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
 			escape.init(std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);

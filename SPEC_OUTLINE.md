@@ -320,9 +320,9 @@ A model's table size depends on the header's frame count, up to 16,384 frames (`
 | keys changed | 5 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
 | key bits | 4 | clamp(b+2, 14, 20) | 1 | 64 | 64 |
 | high key bits | 1 | 8 | 1 | 1 | 1 |
-| time | 4; 6 for relax (modes 4 and 6) and osu!taiko (modes 1 and 5) | clamp(b, 12, 16) | 64 | 576 | 192 |
+| time | 4; 6 for relax (modes 4 and 6) and osu!taiko (modes 1 and 5) | clamp(b, 12, 14) | 64 | 576 | 192 |
 | repeat | 4 | clamp(b+4, 16, 22) | 1 | 64 | 64 |
-| move | 6 | clamp(b+3, 12, 17) | 32 | 384 | 1536 |
+| move | 6 | clamp(b+3, 12, 16) | 32 | 384 | 1536 |
 | move bits | 2 | clamp(b+2, 12, 20) | 1 | 32 | 256 |
 | slack | 1 | clamp(b−2, 10, 16) | 16 | 64 | 64 |
 | escape | 5 | clamp(b+2, 12, 20) | 1 | 48 | 48 |
@@ -331,7 +331,7 @@ A model's table size depends on the header's frame count, up to 16,384 frames (`
 | autopilot value | 2 | 12 | 64 | 1 | 1 |
 | catcher moved | 6 | clamp(b+3, 12, 20) | 1 | 64 | 64 |
 | catcher direction | 4 | clamp(b+1, 10, 18) | 1 | 16 | 16 |
-| catcher residual | 5 | clamp(b, 10, 18) | 64 | 64 | 64 |
+| catcher residual | 5 | clamp(b, 10, 14) | 64 | 64 | 64 |
 | catcher residual bits | 2 | clamp(b+1, 10, 18) | 1 | 8 | 8 |
 
 The first four serve every mode. The next eight are osu!standard only, and the last four osu!catch only. The time
