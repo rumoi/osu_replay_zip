@@ -116,6 +116,7 @@ enum ORZ_ENCODE_INFO : u32 {
 	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
 	fast_frames = 1 << 8, // version 1 frame probability model; never combined with replay_verbatim
+	fastest_frames = 1 << 9, // direct shared-counter profile; requires fast_frames
 
 };
 
@@ -150,6 +151,8 @@ enum ORZ_OPTION : u32 {
 	ENCODE_FAST_FRAME_DECODE = 1 << 1, // request fast_frames; verbatim fallback remains version 0
 
 	DECODE_SKIP_CRC = 1 << 2,
+
+	ENCODE_FASTEST_FRAME_DECODE = 1 << 3, // request fast_frames | fastest_frames; takes precedence over the fast request
 
 };
 
@@ -724,11 +727,11 @@ struct _orz_file {
 
 		encode_info = bs.read_bucket<ORZ_ENCODE_INFO_BITS>();
 
-		constexpr u32 known_info{ e_mode_bits | has_osr_header | trailing_comma | replay_verbatim | text_shortest | fast_frames };
+		constexpr u32 known_info{ e_mode_bits | has_osr_header | trailing_comma | replay_verbatim | text_shortest | fast_frames | fastest_frames };
 		const bool fast{ (encode_info & fast_frames) != 0 };
 
 		if ((encode_info & ~known_info) || get_e_mode(encode_info) >= e_mode::e_mode_max ||
-			(version == 1) != fast || (fast && (encode_info & replay_verbatim)))
+			(version == 1) != fast || ((encode_info & fastest_frames) && !fast) || (fast && (encode_info & replay_verbatim)))
 			return 0;
 
 		if (seeded = bs.read_bits<1>())

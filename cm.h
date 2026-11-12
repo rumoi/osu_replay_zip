@@ -152,6 +152,8 @@ namespace cm {
 
 			if (record_keys)
 				keys.assign(size_t(1) << bits, 0);
+			else
+				keys.clear();
 
 		}
 
@@ -324,6 +326,21 @@ namespace cm {
 		static constexpr bool use_apm{ false };
 	};
 
+	struct fastest_bit_encoder : fast_bit_encoder {
+		static constexpr bool fallback_only{ true };
+	};
+
+	struct fastest_bit_decoder : fast_bit_decoder {
+		using fast_bit_decoder::fast_bit_decoder;
+		static constexpr bool fallback_only{ true };
+	};
+
+	template<typename Coder>
+	constexpr bool uses_fallback_only{ [] {
+		if constexpr (requires { Coder::fallback_only; }) return Coder::fallback_only;
+		else return false;
+	}() };
+
 	// no output: runs the models only (prior training). A trainer with observe(table, counter index, bit) also sees
 	// every counter update.
 	struct bit_trainer {
@@ -338,6 +355,10 @@ namespace cm {
 
 	// prior counter statistics do not use the mixed probability, weights or APM state.
 	struct counter_trainer : bit_trainer {};
+
+	struct fallback_counter_trainer : counter_trainer {
+		static constexpr bool fallback_only{ true };
+	};
 
 	// one kind of binary decision: per input a counter from its context's line, and the fallback's, mixed, then
 	// refined. bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
@@ -354,11 +375,20 @@ namespace cm {
 			return inputs + 1;
 		}
 
-		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false) {
+		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false,
+			bool fallback_only = false) {
 
 			inputs = inputs_;
 
-			table.init(table_bits, width, record_keys);
+			table.init(fallback_only ? 1 : table_bits, width, record_keys);
+
+			if (fallback_only) {
+
+				weights.clear();
+				refine.t.clear();
+				return;
+
+			}
 			weights.resize(mix_sets * mixed());
 
 			for (size_t i{}; i < weights.size(); ++i)
@@ -369,30 +399,68 @@ namespace cm {
 		}
 
 		// salt gives a second set of lines for the same contexts
+		template<typename Coder = bit_encoder>
 		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
 
-			for (int i{}; i < inputs; ++i)
-				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+			if constexpr (uses_fallback_only<Coder>)
+				bind_fallback(salt);
+			else {
 
-			lines[inputs] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+				for (int i{}; i < inputs; ++i)
+					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+
+				lines[inputs] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
+			}
 
 		}
 
-		template<int N>
+		// frame coding uses salts 0 and 1; the fallback profile stores their lines directly.
+		FORCEINLINE void bind_fallback(u64 salt) {
+
+			if (!table.keys.empty())
+				table.keys[(size_t)salt] = hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0);
+
+			lines[0] = table.t.data() + (size_t)salt * table.width;
+
+		}
+
+		template<int N, typename Coder = bit_encoder>
 		FORCEINLINE void bind_n(const u64* ctx, u64 salt = 0) {
 
 			static_assert(N > 0 && N < MAX_INPUTS);
 
-			for (int i{}; i < N; ++i)
-				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+			if constexpr (uses_fallback_only<Coder>)
+				bind_fallback(salt);
+			else {
 
-			lines[N] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+				for (int i{}; i < N; ++i)
+					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+
+				lines[N] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
+			}
 
 		}
 
 		// the input count known at compile time, so the loops unroll
 		template<int N, typename Coder>
 		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+
+			if constexpr (uses_fallback_only<Coder>) {
+
+				counter& k{ lines[0][slot] };
+
+				if constexpr (!std::is_base_of_v<counter_trainer, Coder>)
+					y = c.code(y, std::clamp((int)k.p, 32, 65504));
+
+				if constexpr (requires { c.observe(table, size_t{}, y); })
+					c.observe(table, (size_t)(&k - table.t.data()), y);
+
+				update(k, y);
+				return y;
+
+			}
 
 			if constexpr (std::is_base_of_v<counter_trainer, Coder>) {
 
@@ -484,7 +552,7 @@ namespace cm {
 		template<typename Coder>
 		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
 
-			bind(ctx);
+			bind<Coder>(ctx);
 
 			return code(c, y, 0u, set, apm_context);
 		}
@@ -498,12 +566,14 @@ namespace cm {
 
 		static_assert(N > 0 && N < MAX_INPUTS);
 
-		void init(int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false) {
-			model::init(N, table_bits, width, mix_sets, apm_contexts, record_keys);
+		void init(int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false,
+			bool fallback_only = false) {
+			model::init(N, table_bits, width, mix_sets, apm_contexts, record_keys, fallback_only);
 		}
 
+		template<typename Coder = bit_encoder>
 		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
-			bind_n<N>(ctx, salt);
+			bind_n<N, Coder>(ctx, salt);
 		}
 
 		template<typename Coder>
@@ -514,7 +584,7 @@ namespace cm {
 		template<typename Coder>
 		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
 
-			bind(ctx);
+			bind<Coder>(ctx);
 
 			return code(c, y, 0u, set, apm_context);
 		}

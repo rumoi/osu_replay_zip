@@ -230,7 +230,7 @@ namespace modes {
 		template<typename Coder>
 		i64 residual(Coder& c, _models& M, i64 r, const u64 (&ctx)[5], int scale) {
 
-			M.res.bind(ctx);
+			M.res.bind<Coder>(ctx);
 
 			const auto decide = [&](int y, u32 step) {
 				return M.res.code(c, y, step, step, step);
@@ -537,8 +537,8 @@ namespace modes {
 
 		_models& M{ state.tables.modes };
 
-		M.init(R.size(), mode);
-		M.seed(mode);
+		M.init(R.size(), mode, false, cm::uses_fallback_only<Encoder>);
+		M.seed(mode, cm::uses_fallback_only<Encoder>);
 
 		Encoder e{};
 
@@ -561,7 +561,9 @@ namespace modes {
 	}
 
 	void encode(const _osr& r, orz_state& state) {
-		if (state.file.encode_info & ORZ_ENCODE_INFO::fast_frames)
+		if (state.file.encode_info & ORZ_ENCODE_INFO::fastest_frames)
+			encode_profile<cm::fastest_bit_encoder>(r, state);
+		else if (state.file.encode_info & ORZ_ENCODE_INFO::fast_frames)
 			encode_profile<cm::fast_bit_encoder>(r, state);
 		else
 			encode_profile<cm::bit_encoder>(r, state);
@@ -597,8 +599,8 @@ namespace modes {
 
 		_models& M{ tables.modes };
 
-		M.init(R.size(), side.mode);
-		M.seed(side.mode);
+		M.init(R.size(), side.mode, false, cm::uses_fallback_only<Decoder>);
+		M.seed(side.mode, cm::uses_fallback_only<Decoder>);
 
 		frame_loop(d, M, R, esc, speeds, side, false);
 
@@ -606,6 +608,9 @@ namespace modes {
 	}
 
 	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+		if (encode_info & ORZ_ENCODE_INFO::fastest_frames)
+			return decode_profile<cm::fastest_bit_decoder>(encode_info, data, R, tables);
+
 		return (encode_info & ORZ_ENCODE_INFO::fast_frames) ?
 			decode_profile<cm::fast_bit_decoder>(encode_info, data, R, tables) :
 			decode_profile<cm::bit_decoder>(encode_info, data, R, tables);

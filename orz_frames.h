@@ -15,6 +15,7 @@
 #include "orz_time.h"
 #include "cm.h"
 #include "frames_prior.h"
+#include "frames_fallback_prior.h"
 #include "orz_autopilot.h"
 
 namespace orz {
@@ -105,32 +106,32 @@ namespace frames {
 		// tables follow the replay's length up to TABLE_FRAMES (the frame count of a file to decode is untrusted), and are
 		// larger when training priors. The keys and time models, which every mode uses:
 		// time_history: the time model also takes the older deltas and the mode's flags (relax, osu!taiko)
-		void init_keys_time(size_t frames, bool time_history, bool record_keys = false) {
+		void init_keys_time(size_t frames, bool time_history, bool record_keys = false, bool fallback_only = false) {
 
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
 			// single decision models: a counter per line; time / move / slack: a line of counters per context
-			keys_changed.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			keys_bits.init(std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
-			keys_high.init(8, 1, 1, 1, record_keys);
-			time.init(time_history ? 6 : 4, std::clamp(b, 12, record_keys ? 16 + extra : 14), 64, 64 * 3 * 3, 64 * 3, record_keys);
+			keys_changed.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys, fallback_only);
+			keys_bits.init(std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys, fallback_only);
+			keys_high.init(8, 1, 1, 1, record_keys, fallback_only);
+			time.init(time_history ? 6 : 4, std::clamp(b, 12, record_keys ? 16 + extra : 14), 64, 64 * 3 * 3, 64 * 3, record_keys, fallback_only);
 
 		}
 
-		void init(size_t frames, e_mode mode, bool record_keys = false) {
+		void init(size_t frames, e_mode mode, bool record_keys = false, bool fallback_only = false) {
 
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
-			init_keys_time(frames, is_relax(mode), record_keys);
+			init_keys_time(frames, is_relax(mode), record_keys, fallback_only);
 
-			repeat.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			move.init(std::clamp(b + 3, 12, record_keys ? 17 + extra : 16), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
-			move_bits.init(std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
-			slack.init(std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
-			escape.init(std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
-			escape_value.init(10 + extra, 64, 1, 1, record_keys);
-			ap_event.init(std::clamp(b, 10, 16 + extra), 1, 8, 8, record_keys);
-			ap_value.init(12 + extra, 64, 1, 1, record_keys);
+			repeat.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys, fallback_only);
+			move.init(std::clamp(b + 3, 12, record_keys ? 17 + extra : 16), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys, fallback_only);
+			move_bits.init(std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys, fallback_only);
+			slack.init(std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys, fallback_only);
+			escape.init(std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys, fallback_only);
+			escape_value.init(10 + extra, 64, 1, 1, record_keys, fallback_only);
+			ap_event.init(std::clamp(b, 10, 16 + extra), 1, 8, 8, record_keys, fallback_only);
+			ap_value.init(12 + extra, 64, 1, 1, record_keys, fallback_only);
 
 		}
 
@@ -369,7 +370,7 @@ namespace frames {
 			// mixer weights and apm also by whether the keys change on this frame or did on the last
 			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u }, key_change{ kc ? 2u : kc1 ? 1u : 0u };
 
-			m.bind_n<N>(ctx);
+			m.bind_n<N, Coder>(ctx);
 
 			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };
 			const u32 index{ (u32)(std::find(table.begin(), table.end(), want) - table.begin()) };
@@ -484,7 +485,7 @@ namespace frames {
 		const size_t apc{ (size_t)std::min(f.scale, 31) };
 
 		// steps as MOVE_STEPS, the long lengths in a second line
-		M.move.bind(ctx);
+		M.move.bind<Coder>(ctx);
 
 		const auto decide = [&](int y, u32 step) {
 
@@ -524,7 +525,7 @@ namespace frames {
 
 		if (n == 12) {
 
-			M.move.bind(ctx, 1);
+			M.move.bind<Coder>(ctx, 1);
 
 			while (n < 62 && decide(len > n, 32 + (u32)std::min(n - 12, 15)))
 				++n;
@@ -560,7 +561,7 @@ namespace frames {
 
 		const u64 ctx[1]{ (u64)axis * 64 + (u64)bit_length(d) };
 
-		m.bind(ctx);
+		m.bind<Coder>(ctx);
 
 		u64 v{};
 
@@ -585,7 +586,7 @@ namespace frames {
 
 		const u64 cx[2]{ field * 4096 + ctx, field };
 
-		m.bind(cx);
+		m.bind<Coder>(cx);
 
 		if (m.code(c, v == 0, 0u, 0, 0))
 			return 0;
@@ -626,7 +627,7 @@ namespace frames {
 		const u64 kind{ (u64)a * 2 + exact_text };
 		const u64 ctx[2]{ kind, kind * 64 + (u64)prev_len };
 
-		m.bind(ctx);
+		m.bind<Coder>(ctx);
 
 		if (!std::isnan(e.near[0])) {
 
@@ -1116,8 +1117,36 @@ namespace frames {
 
 	}
 
-	inline void seed_priors(_models& M, const _side& side) {
-		seed(M.all(), builtin_prior(prior_set(side)));
+	inline void seed_fallback(const std::array<cm::model*, FRAMES_PRIOR_MODELS>& models, u32 set) {
+
+		static_assert(FALLBACK_PRIOR_SETS == FRAMES_PRIOR_SETS && FALLBACK_PRIOR_MODELS == FRAMES_PRIOR_MODELS);
+
+		const u32 first_key{ (u32)cm::hash(cm::FALLBACK_INPUT, 0) };
+
+		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
+
+			cm::model* md{ models[m] };
+
+			if (!md)
+				continue;
+
+			for (u32 j{ FALLBACK_PRIOR_START[set][m] }; j < FALLBACK_PRIOR_START[set][m + 1]; ++j) {
+
+				const u32 value{ FALLBACK_PRIOR_VALUES[j] };
+				const size_t salt{ FALLBACK_PRIOR_KEYS[j] == first_key ? 0u : 1u };
+				md->table.t[salt * md->table.width + (value >> 24)] = { (u16)value, (u16)((value >> 16) & 0xFF) };
+
+			}
+
+		}
+
+	}
+
+	inline void seed_priors(_models& M, const _side& side, bool fallback_only = false) {
+		if (fallback_only)
+			seed_fallback(M.all(), prior_set(side));
+		else
+			seed(M.all(), builtin_prior(prior_set(side)));
 	}
 
 	// the frames, then each axis's escape values in order
@@ -1125,8 +1154,8 @@ namespace frames {
 	inline std::vector<u8> encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
 		bool exact_text) {
 
-		M.init(frames, side.mode);
-		seed_priors(M, side);
+		M.init(frames, side.mode, false, cm::uses_fallback_only<Encoder>);
+		seed_priors(M, side, cm::uses_fallback_only<Encoder>);
 
 		Encoder e{};
 
@@ -1154,8 +1183,8 @@ namespace frames {
 
 		_basic_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
 
-			M.init(frames, side.mode);
-			seed_priors(M, side);
+			M.init(frames, side.mode, false, cm::uses_fallback_only<Decoder>);
+			seed_priors(M, side, cm::uses_fallback_only<Decoder>);
 
 			frame_loop(d, M, fd, side, frames, false);
 
@@ -1172,6 +1201,7 @@ namespace frames {
 
 	using _reader = _basic_reader<cm::bit_decoder>;
 	using _fast_reader = _basic_reader<cm::fast_bit_decoder>;
+	using _fastest_reader = _basic_reader<cm::fastest_bit_decoder>;
 
 }
 

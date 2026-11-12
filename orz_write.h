@@ -89,7 +89,8 @@ inline void write_verbatim(orz_state& state) {
 	state.seed = {};
 
 	state.file.container.clear();
-	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest | ORZ_ENCODE_INFO::fast_frames);
+	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest |
+		ORZ_ENCODE_INFO::fast_frames | ORZ_ENCODE_INFO::fastest_frames);
 	state.file.encode_info |= ORZ_ENCODE_INFO::replay_verbatim;
 
 	finish_orz_file(0, frames_crc(state.input, {}), state);
@@ -262,7 +263,9 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 // LZMA replay data into state.output, with the e_mode of state.file (and the .osr parts in state, when it has them)
 static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 
-	if (state.options & ENCODE_FAST_FRAME_DECODE)
+	if (state.options & ENCODE_FASTEST_FRAME_DECODE)
+		state.file.encode_info |= ORZ_ENCODE_INFO::fast_frames | ORZ_ENCODE_INFO::fastest_frames;
+	else if (state.options & ENCODE_FAST_FRAME_DECODE)
 		state.file.encode_info |= ORZ_ENCODE_INFO::fast_frames;
 
 	// the span is the caller's, it does not outlive this encode

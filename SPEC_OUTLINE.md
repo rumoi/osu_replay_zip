@@ -119,12 +119,14 @@ standard tags it does not know.
 | 6 | `replay_verbatim` | the replay data is stored as-is (§10) |
 | 7 | `text_shortest` | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
 | 8 | `fast_frames` | selects the fast frame decoder; version 1 only |
+| 9 | `fastest_frames` | selects the direct shared-counter frame decoder; requires `fast_frames` |
 
 The encode info retains its `bucket(8)` coding: values above its first bucket use the overflow form (§2).
-Version 0 requires `fast_frames` to be clear. Version 1 requires it to be set and `replay_verbatim` to be clear.
-Bits 9 and above are unassigned and rejected. These checks apply even when a caller disables CRC verification.
-An encoder's request for fast frame decoding may fall back to verbatim data; that file has version 0 and clears
-`fast_frames`.
+Version 0 requires both profile flags to be clear. Version 1 requires `fast_frames` to be set and `replay_verbatim`
+to be clear; `fastest_frames` additionally selects the fastest profile. A reader rejects `fastest_frames` without
+`fast_frames`, as well as any profile it does not support. Bits 10 and above are unassigned and rejected. These
+checks apply even when a caller disables CRC verification. An encoder's request for either profile may fall back
+to verbatim data; that file has version 0 and clears both profile flags.
 
 | Mode | Replay | Frames stream |
 |---|---|---|
@@ -322,9 +324,21 @@ The coded probability is $`p = \mathrm{clamp}(16\,p_m,\ 32,\ 65504)`$. Contexts,
 mixer priors are unchanged; APM priors are unused. The header selects this probability rule for the whole frame
 stream, including escape values, in every mode. Fixed-probability decisions keep their usual probabilities.
 
+With `fastest_frames` as well as `fast_frames`, each model instead uses only its fallback counter at the current
+slot. Its coded probability is $`p = \mathrm{clamp}(p_i,\ 32,\ 65504)`$, retaining the counter's full 16-bit value.
+After each decision, update that counter exactly once using §5.2. There are no contextual inputs, mixer weights,
+APM tables or probability transformations. Fixed-probability decisions keep their usual probabilities.
+
+This profile stores two counter lines per model, for salts 0 and 1, with the same line widths as §5.5. Only the
+long move-residual lengths use salt 1. These lines are indexed directly by salt, without hashing or collisions,
+and their size does not depend on the frame count. Counters start at `p = 32768, n = 0`, then take their separate
+priors from `frames_fallback_prior.h`, using the same set and model order as §5.6. Each prior's key identifies
+`hash(7, 0)` or `hash(15, 0)` (low 32 bits), selecting salt 0 or 1; its value packs the probability, confidence and
+slot as in §5.6. No other prior keys are valid for this profile.
+
 ### 5.5 Table sizes
 
-A model's table size depends on the header's frame count, up to 16,384 frames (`b = bit_width(min(frame count,
+Except for `fastest_frames`, a model's table size depends on the header's frame count, up to 16,384 frames (`b = bit_width(min(frame count,
 16384))`), so a decoder must size every table exactly as the encoder did. The sizes are part of the format:
 
 | Model | Contexts | Table bits | Width | Mixer sets | APM contexts |

@@ -14,9 +14,14 @@ orz::osr_to_orz(input, packed, encoder);
 ```
 
 `replay_data_to_orz` accepts the same state option. The encoder stores the profile in the `.orz` header;
-`orz_decode_frames` selects it automatically. Fast streams use version 1 and require a reader that supports it.
+`orz_decode_frames` selects it automatically. Fast streams use version 1 and require a reader that supports their profile.
 Normal streams and verbatim fallbacks use version 0. The fast profile skips adaptive probability refinement
 while retaining all contexts, counters and mixer weights.
+
+For greater decode speed at a larger size cost, use `ENCODE_FASTEST_FRAME_DECODE` instead. This profile codes
+each model's decisions directly from shared adaptive counters, without context mixing or probability refinement.
+It takes precedence if both encoder options are set. Readers that support only the fast profile reject fastest
+streams; readers supporting fastest also decode normal and fast streams. Verbatim fallbacks clear both profile flags.
 
 For repeated frame decoding, retain the table storage across calls to avoid repeated allocations:
 
