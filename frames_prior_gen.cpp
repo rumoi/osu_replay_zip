@@ -1,8 +1,8 @@
 // Generates frames_prior.h: the starting state of the context mixing models (orz_frames.h, orz_modes.h) for each prior
 // set, fit to a list of replays. Not part of the orz build; compile it with the same headers and the LZMA SDK.
 //
-// usage: frames_prior_gen [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h
-//        frames_prior_gen --reuse [--pooled] cache_directory [entries] [sets at once] > frames_prior.h
+// usage: frames_prior_gen [--quick] [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h
+//        frames_prior_gen --reuse [--quick] [--pooled] cache_directory [entries] [sets at once] > frames_prior.h
 //   list.txt holds one replay per line: an .osr, or replay data without the .osr header in a file named
 //   replay-<osu|taiko|fruits|mania>-*. With - for the list, the replays come from stdin instead, each as a mode byte
 //   (an e_mode, relax included, or 255 for an .osr), its size in 4 bytes, then its bytes. entries caps the counters
@@ -13,6 +13,10 @@
 //   --keep leaves them there (the directory must be given), with each set's candidate counters and the bits each
 //   saves, and --reuse fits from such a directory: only pass 3 runs, so other entries or --pooled cost a fraction of
 //   a fit.
+//   --quick screens with confidences 1, 16 and 255 for both starting probabilities (7 trajectories instead of 19).
+//   Coarser scores can change which counters are retained. Use the default exhaustive search for final priors.
+//   Quick trials are saved separately as setN.quick.trials;
+//   --reuse --quick reads those, while --reuse reads only exhaustive trials.
 //
 // Per set, over its replays:
 //   1. train shared models on every replay; counters used in many replays are candidates, starting from their pooled
@@ -72,7 +76,7 @@ namespace {
 	constexpr size_t CANDIDATE_LINES{ 80000 };
 
 	constexpr u16 CONFIDENCE[]{ 1, 2, 4, 8, 16, 32, 64, 128, 255 };
-	constexpr int STARTS{ 2 }, CONFIDENCES{ (int)std::size(CONFIDENCE) }, TRIALS{ STARTS * CONFIDENCES + 1 }; // then flat
+	constexpr int STARTS{ 2 };
 
 	constexpr int MIX_ROUNDS{ 4 };
 
@@ -273,7 +277,13 @@ namespace {
 
 	};
 
+	template<bool Quick>
 	struct _candidate {
+
+		static constexpr int CONFIDENCE_STEP{ Quick ? 4 : 1 };
+		static constexpr int CONFIDENCES{ ((int)std::size(CONFIDENCE) - 1) / CONFIDENCE_STEP + 1 };
+		static constexpr int TRIALS{ STARTS * CONFIDENCES + 1 }; // then flat
+
 		u32 model, slot;
 		u64 key;
 		u16 start[STARTS]; // pooled, trained
@@ -293,11 +303,15 @@ namespace {
 		return l;
 	}() };
 
-	// pass 2: follows the candidates through each replay from every start, confidence and flat
+	// pass 2: follows the candidates through each replay from both starts, each searched confidence and flat
+	template<bool Quick>
 	struct _trials : cm::counter_trainer {
 
+		using candidate = _candidate<Quick>;
+		static constexpr int CONFIDENCES{ candidate::CONFIDENCES }, TRIALS{ candidate::TRIALS };
+
 		_models_list models{};
-		std::vector<_candidate> candidates;
+		std::vector<candidate> candidates;
 		std::vector<i32> row[FRAMES_PRIOR_MODELS]; // per line: where its counters start in slots, -1 for no candidates
 		std::vector<i32> slots; // per counter of a candidate line: its candidate, -1 for none
 		u32 replay{};
@@ -320,7 +334,7 @@ namespace {
 			if (i < 0 || candidates[i].key != table.keys[line])
 				return;
 
-			_candidate& c{ candidates[i] };
+			candidate& c{ candidates[i] };
 
 			if (c.replay != replay) {
 
@@ -328,7 +342,7 @@ namespace {
 
 				for (int s{}; s < STARTS; ++s)
 					for (int k{}; k < CONFIDENCES; ++k)
-						c.trial[s * CONFIDENCES + k] = { c.start[s], CONFIDENCE[k] };
+						c.trial[s * CONFIDENCES + k] = { c.start[s], CONFIDENCE[k * candidate::CONFIDENCE_STEP] };
 
 				c.trial[TRIALS - 1] = {};
 
@@ -375,12 +389,16 @@ namespace {
 		return { p.start.data(), p.keys.data(), p.values.data(), p.weight_start.data(), p.weights.data(), p.apm_start.data(), p.apm.data() };
 	}
 
+	template<bool Quick>
 	_set_trials trials_of(const std::filesystem::path& cache, u32 set) {
+
+		using candidate = _candidate<Quick>;
+		constexpr int CONFIDENCES{ candidate::CONFIDENCES }, TRIALS{ candidate::TRIALS };
 
 		_set_trials out{};
 
 		// 1. shared models over every replay
-		std::vector<_candidate> candidates;
+		std::vector<candidate> candidates;
 
 		{
 			_set_models M{};
@@ -461,7 +479,7 @@ namespace {
 					if (s.seen[at] < MIN_COUNT)
 						continue;
 
-					_candidate c{ l.model, slot, table.keys[l.index] };
+					candidate c{ l.model, slot, table.keys[l.index] };
 
 					c.start[0] = (u16)std::clamp<i64>(std::llround((s.ones[at] + 0.5) * 65536.0 / (s.seen[at] + 1.0)), 32, 65503);
 					c.start[1] = table.t[at].p;
@@ -474,8 +492,8 @@ namespace {
 
 		}
 
-		// 2. each candidate per replay, from flat and from each start and confidence
-		_trials trials{};
+		// 2. each candidate per replay, from flat and from each start and searched confidence
+		_trials<Quick> trials{};
 
 		{
 			_set_models M{};
@@ -526,7 +544,7 @@ namespace {
 			if (best == TRIALS - 1)
 				continue;
 
-			const u32 confidence{ CONFIDENCE[best % CONFIDENCES] };
+			const u32 confidence{ CONFIDENCE[(best % CONFIDENCES) * candidate::CONFIDENCE_STEP] };
 
 			out.picks.push_back({ c.bits[TRIALS - 1] - c.bits[best], c.model, (u32)c.key, c.start[best / CONFIDENCES] | confidence << 16 | c.slot << 24 });
 
@@ -536,13 +554,13 @@ namespace {
 	}
 
 	// a set's trials kept in the cache directory, for --reuse by the same build: the replays and pick count, then the picks
-	std::filesystem::path trials_file(const std::filesystem::path& cache, u32 set) {
-		return cache / ("set" + std::to_string(set) + ".trials");
+	std::filesystem::path trials_file(const std::filesystem::path& cache, u32 set, bool quick) {
+		return cache / ("set" + std::to_string(set) + (quick ? ".quick.trials" : ".trials"));
 	}
 
-	bool save_trials(const std::filesystem::path& cache, u32 set, const _set_trials& t) {
+	bool save_trials(const std::filesystem::path& cache, u32 set, const _set_trials& t, bool quick) {
 
-		FILE* file{ fopen(trials_file(cache, set).string().c_str(), "wb") };
+		FILE* file{ fopen(trials_file(cache, set, quick).string().c_str(), "wb") };
 
 		if (!file)
 			return false;
@@ -553,9 +571,9 @@ namespace {
 		return fclose(file) == 0 && ok;
 	}
 
-	bool load_trials(const std::filesystem::path& cache, u32 set, _set_trials& t) {
+	bool load_trials(const std::filesystem::path& cache, u32 set, _set_trials& t, bool quick) {
 
-		FILE* file{ fopen(trials_file(cache, set).string().c_str(), "rb") };
+		FILE* file{ fopen(trials_file(cache, set, quick).string().c_str(), "rb") };
 
 		if (!file)
 			return false;
@@ -776,14 +794,16 @@ namespace {
 
 int main(int argc, char** argv) {
 
-	bool keep{}, reuse{}, pooled{};
+	bool keep{}, reuse{}, pooled{}, quick{};
 	std::vector<const char*> args;
 
 	for (int i{ 1 }; i < argc; ++i) {
 
 		const std::string_view arg{ argv[i] };
 
-		if (arg == "--keep")
+		if (arg == "--quick")
+			quick = true;
+		else if (arg == "--keep")
 			keep = true;
 		else if (arg == "--reuse")
 			reuse = true;
@@ -796,8 +816,8 @@ int main(int argc, char** argv) {
 
 	if (args.empty() || (keep && (reuse || args.size() < 4))) {
 
-		fprintf(stderr, "usage: frames_prior_gen [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h\n"
-			"       frames_prior_gen --reuse [--pooled] cache_directory [entries] [sets at once] > frames_prior.h\n");
+		fprintf(stderr, "usage: frames_prior_gen [--quick] [--keep] [--pooled] list.txt [entries] [sets at once] [cache directory] > frames_prior.h\n"
+			"       frames_prior_gen --reuse [--quick] [--pooled] cache_directory [entries] [sets at once] > frames_prior.h\n");
 
 		return 1;
 	}
@@ -963,11 +983,11 @@ int main(int argc, char** argv) {
 	each_set([&](u32 s) {
 
 		if (!reuse)
-			trials[s] = trials_of(cache, s);
+			trials[s] = quick ? trials_of<true>(cache, s) : trials_of<false>(cache, s);
 
-		if (reuse ? !load_trials(cache, s, trials[s]) : keep && !save_trials(cache, s, trials[s])) {
+		if (reuse ? !load_trials(cache, s, trials[s], quick) : keep && !save_trials(cache, s, trials[s], quick)) {
 
-			fprintf(stderr, "can not %s %s\n", reuse ? "read" : "write", trials_file(cache, s).string().c_str());
+			fprintf(stderr, "can not %s %s\n", reuse ? "read" : "write", trials_file(cache, s, quick).string().c_str());
 
 			failed = true;
 
@@ -1044,6 +1064,10 @@ int main(int argc, char** argv) {
 	}
 
 	printf("#pragma once\n\n#include <cstdint>\n\n");
+
+	if (quick)
+		printf("// quick screening output: confidences 1/16/255, %d mixer/APM rounds; use an exhaustive fit for final priors\n\n", MIX_ROUNDS);
+
 	printf("// generated by frames_prior_gen.cpp: the starting state of the context mixing models per prior set (frames::prior_set)\n");
 	printf("// and model (frames::_models::all, modes::_models::all). Counters are keyed by the low 32 bits of their context hash,\n");
 	printf("// value = p | confidence << 16 | slot << 24; then each model's mixer weights and apm table\n\n");
