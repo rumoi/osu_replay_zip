@@ -325,6 +325,14 @@ namespace cm {
 
 		}
 
+		template<int N>
+		FORCEINLINE void bind_n(const u64* ctx, u64 salt = 0) {
+
+			for (int i{}; i < N; ++i)
+				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+
+		}
+
 		// the input count known at compile time, so the loops unroll
 		template<int N, typename Coder>
 		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
@@ -382,6 +390,34 @@ namespace cm {
 		}
 
 		// a single decision on its own contexts
+		template<typename Coder>
+		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
+
+			bind(ctx);
+
+			return code(c, y, 0u, set, apm_context);
+		}
+
+	};
+
+	// most models always mix the same number of contexts. Keep that count in their type so binding and coding
+	// do not dispatch on it for every bit; the state and arithmetic are the same as model's.
+	template<int N>
+	struct fixed_model : model {
+
+		void init(int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false) {
+			model::init(N, table_bits, width, mix_sets, apm_contexts, record_keys);
+		}
+
+		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
+			bind_n<N>(ctx, salt);
+		}
+
+		template<typename Coder>
+		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+			return code_n<N>(c, y, slot, set, apm_context);
+		}
+
 		template<typename Coder>
 		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
 

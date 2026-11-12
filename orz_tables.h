@@ -14,7 +14,10 @@ namespace modes {
 	struct _models {
 
 		frames::_models keys_time;
-		cm::model moved, dir, res, res_bits;
+		cm::fixed_model<6> moved;
+		cm::fixed_model<4> dir;
+		cm::fixed_model<5> res;
+		cm::fixed_model<2> res_bits;
 
 		void init(size_t frames, kind mode, bool record_keys = false) {
 
@@ -25,10 +28,10 @@ namespace modes {
 
 			const int b{ (int)std::bit_width(std::min(frames, frames::TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
-			moved.init(6, std::clamp(b + 3, 12, 20 + extra), 1, 64, 64, record_keys);
-			dir.init(4, std::clamp(b + 1, 10, 18 + extra), 1, 16, 16, record_keys);
-			res.init(5, std::clamp(b, 10, 18 + extra), RES_STEPS, RES_STEPS, RES_STEPS, record_keys);
-			res_bits.init(2, std::clamp(b + 1, 10, 18 + extra), 1, 8, 8, record_keys);
+			moved.init(std::clamp(b + 3, 12, 20 + extra), 1, 64, 64, record_keys);
+			dir.init(std::clamp(b + 1, 10, 18 + extra), 1, 16, 16, record_keys);
+			res.init(std::clamp(b, 10, 18 + extra), RES_STEPS, RES_STEPS, RES_STEPS, record_keys);
+			res_bits.init(std::clamp(b + 1, 10, 18 + extra), 1, 8, 8, record_keys);
 
 		}
 
