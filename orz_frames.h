@@ -340,7 +340,7 @@ namespace frames {
 			u64 ctx[6]{
 				(d1 * 64 + d2) * 3 + kc,
 				(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
-				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
+				(phase * 2 + kc) * 2 + kc1,
 				((u64)grid.bin(last_tick) * 32 + (u64)std::clamp<i64>(now - last_tick, 0, 31)) * 2 + kc,
 			};
 

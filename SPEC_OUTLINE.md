@@ -334,6 +334,8 @@ A model's table size depends on the header's frame count, up to 16,384 frames (`
 The first four serve every mode. The next eight are osu!standard only, and the last four osu!catch only. The time
 model's two extra inputs (the older deltas, and the last three frames' repeat flags, or for osu!taiko whether the keys
 stayed) are its last two, so its first four contexts are the same for every mode.
+Its clock-phase context groups frames by phase and whether keys change on this frame or changed on the previous one;
+the delta-history contexts model earlier deltas separately.
 
 ### 5.6 Priors
 
