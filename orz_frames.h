@@ -149,12 +149,22 @@ namespace frames {
 	}
 
 	// a / b in eighths up to 4, 33 when there is no reference
-	FORCEINLINE u64 ratio_bucket(i64 a, i64 b) {
+	FORCEINLINE u64 ratio_bucket(const i64 a, const i64 b) {
 
 		if (b <= 0)
 			return 33;
 
-		return (u64)std::clamp<i64>((a * 8 + b / 2) / b, 0, 32);
+		if (a <= 0)
+			return 0;
+
+		//if (a >= b * 4) return 32;
+
+		const auto u_a = u64(a);
+		const auto u_b = u64(b);
+
+		// we are going to trust the compiler here, to convert theses to the proper shifts.
+
+		return std::min<u64>((u_a * 8 + u_b / 2) / u_b, 32);
 	}
 
 	// raw bits (escapes), up to 64
