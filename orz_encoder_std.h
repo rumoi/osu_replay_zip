@@ -12,6 +12,7 @@
 #include "orz_frames.h"
 #include "orz_device_std.h"
 #include "orz_setup.h"
+#include "orz_lazer.h"
 
 namespace orz {
 
@@ -1382,7 +1383,7 @@ namespace standard {
 
 		std::vector<dspace::axis_params> cands;
 
-		if (px.device.kind == dspace::axis_mode::rational) {
+		if (px.device.kind == dspace::axis_mode::rational && px.device.rational.chain.B == 0.f) {
 
 			// the same lattice, the offset from the most common residue
 			const i64 D{ px.device.rational.D }, A{ px.device.rational.a };
@@ -1679,13 +1680,32 @@ namespace standard {
 				break;
 			}
 
-			const bool has_model{ forced || (!state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best)) };
+			bool has_model{ forced || (!state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
 
 				return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
 			};
+
+			// osu!lazer's text, and no device that fits: whole pixels by lazer's arithmetic, when that is smaller
+			if (state.exact_text() && !forced && !state.debug.disable_device && dt.size() >= 64 && (!has_model || misses(0) || misses(1))) {
+
+				if (dspace::_model_info pixels; lazer::detect(vals, pixels)) {
+
+					auto p{ position_streams(pixels, vals, dt, shared, state) };
+
+					if (!has_model || p.size() < best.size()) {
+
+						info = pixels;
+						best = std::move(p);
+						has_model = true;
+
+					}
+
+				}
+
+			}
 
 			if (!has_model || (!forced && (misses(0) || misses(1)))) {
 
