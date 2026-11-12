@@ -1502,6 +1502,30 @@ namespace standard {
 
 	}
 
+	// The device of the first forced hint that gives one on both axes, as the model: the setup the replay was recorded
+	// with, at this replay's play rate. False when no hint is forced.
+	inline bool forced_model(const orz_state& state, dspace::_model_info& info) {
+
+		for (const auto& h : state.hints) {
+
+			dspace::axis_params q[2]{ setup::device(h, 0), setup::device(h, 1) };
+
+			if (!h.force || q[0].device.kind == dspace::axis_mode::none || q[1].device.kind == dspace::axis_mode::none)
+				continue;
+
+			for (int a{}; a < 2; ++a) {
+
+				q[a].game.rate = state.play_rate;
+				info.axis[a] = dspace::axis_model{ q[a] };
+
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
 	inline bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
 		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
@@ -1653,31 +1677,11 @@ namespace standard {
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
-			// a forced hint's device on both axes is the model, with no search
-			bool forced{};
+			// a forced hint's device is the model, with no search
+			const bool forced{ forced_model(state, info) };
 
-			for (const auto& h : state.hints) {
-
-				if (!h.force)
-					continue;
-
-				dspace::axis_params q[2]{ setup::device(h, 0), setup::device(h, 1) };
-
-				if (q[0].device.kind == dspace::axis_mode::none || q[1].device.kind == dspace::axis_mode::none)
-					continue;
-
-				for (int a{}; a < 2; ++a) {
-
-					q[a].game.rate = state.play_rate;
-					info.axis[a] = dspace::axis_model{ q[a] };
-
-				}
-
+			if (forced)
 				best = position_streams(info, vals, dt, shared, state);
-				forced = true;
-
-				break;
-			}
 
 			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best)) };
 
@@ -1687,7 +1691,7 @@ namespace standard {
 				return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
 			};
 
-			if (!has_model || (!forced && (misses(0) || misses(1)))) {
+			if (!forced && (!has_model || misses(0) || misses(1))) {
 
 				auto text{ position_streams(all_text(), vals, dt, shared, state) };
 

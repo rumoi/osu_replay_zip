@@ -268,10 +268,7 @@ namespace cm {
 	};
 
 	template<typename Coder>
-	constexpr bool uses_balanced_prediction{ [] {
-		if constexpr (requires { Coder::balanced_prediction; }) return Coder::balanced_prediction;
-		else return false;
-	}() };
+	constexpr bool uses_balanced_prediction{ requires { requires Coder::balanced_prediction; } };
 
 	struct fastest_bit_encoder : bit_encoder {
 		static constexpr bool fallback_only{ true };
@@ -283,10 +280,7 @@ namespace cm {
 	};
 
 	template<typename Coder>
-	constexpr bool uses_fallback_only{ [] {
-		if constexpr (requires { Coder::fallback_only; }) return Coder::fallback_only;
-		else return false;
-	}() };
+	constexpr bool uses_fallback_only{ requires { requires Coder::fallback_only; } };
 
 	// no output: runs the models only (prior training). A trainer with observe(table, counter index, bit) also sees
 	// every counter update.
@@ -348,23 +342,7 @@ namespace cm {
 		// salt gives a second set of lines for the same contexts
 		template<typename Coder = bit_encoder>
 		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
-
-			if constexpr (uses_fallback_only<Coder>)
-				bind_fallback(salt);
-			else if constexpr (uses_balanced_prediction<Coder>) {
-
-				lines[0] = table.line(hash(salt * MAX_INPUTS, ctx[0]));
-				lines[1] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
-
-			} else {
-
-				for (int i{}; i < inputs; ++i)
-					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
-
-				lines[inputs] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
-
-			}
-
+			bind_lines<Coder>(inputs, ctx, salt);
 		}
 
 		// frame coding uses salts 0 and 1; the fallback profile stores their lines directly.
@@ -377,10 +355,18 @@ namespace cm {
 
 		}
 
+		// the input count known at compile time, so the loop unrolls
 		template<int N, typename Coder = bit_encoder>
 		FORCEINLINE void bind_n(const u64* ctx, u64 salt = 0) {
 
 			static_assert(N > 0 && N < MAX_INPUTS);
+
+			bind_lines<Coder>(N, ctx, salt);
+		}
+
+		// the lines of n contexts and the fallback, as the coder's profile takes them
+		template<typename Coder>
+		FORCEINLINE void bind_lines(int n, const u64* ctx, u64 salt) {
 
 			if constexpr (uses_fallback_only<Coder>)
 				bind_fallback(salt);
@@ -391,10 +377,10 @@ namespace cm {
 
 			} else {
 
-				for (int i{}; i < N; ++i)
+				for (int i{}; i < n; ++i)
 					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
 
-				lines[N] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+				lines[n] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
 
 			}
 
@@ -404,55 +390,49 @@ namespace cm {
 		template<int N, typename Coder>
 		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set) {
 
-			if constexpr (uses_fallback_only<Coder>) {
+			// prior counter statistics code nothing
+			constexpr bool counting{ std::is_base_of_v<counter_trainer, Coder> };
 
-				counter& k{ lines[0][slot] };
-
-				if constexpr (!std::is_base_of_v<counter_trainer, Coder>)
-					y = c.code(y, std::clamp((int)k.p, 32, 65504));
+			// a counter takes the bit, shown to a trainer that observes first
+			const auto learn = [&](counter& k) {
 
 				if constexpr (requires { c.observe(table, size_t{}, y); })
 					c.observe(table, (size_t)(&k - table.t.data()), y);
 
 				update(k, y);
-				return y;
 
+			};
+
+			if constexpr (uses_fallback_only<Coder>) {
+
+				counter& k{ lines[0][slot] };
+
+				if constexpr (!counting)
+					y = c.code(y, std::clamp((int)k.p, 32, 65504));
+
+				learn(k);
+
+				return y;
 			}
 
 			if constexpr (uses_balanced_prediction<Coder>) {
 
 				const counter& prediction{ lines[0][slot].n >= 8 ? lines[0][slot] : lines[1][slot] };
 
-				if constexpr (!std::is_base_of_v<counter_trainer, Coder>)
+				if constexpr (!counting)
 					y = c.code(y, std::clamp((int)prediction.p, 32, 65504));
 
 				// Keep both updates, including when the context and fallback alias the same counter.
-				for (int i{}; i < 2; ++i) {
-
-					counter& k{ lines[i][slot] };
-
-					if constexpr (requires { c.observe(table, size_t{}, y); })
-						c.observe(table, (size_t)(&k - table.t.data()), y);
-
-					update(k, y);
-
-				}
+				learn(lines[0][slot]);
+				learn(lines[1][slot]);
 
 				return y;
 			}
 
-			if constexpr (std::is_base_of_v<counter_trainer, Coder>) {
+			if constexpr (counting) {
 
-				for (int i{}; i < N; ++i) {
-
-					counter* const k{ lines[i] + slot };
-
-					if constexpr (requires { c.observe(table, size_t{}, y); })
-						c.observe(table, (size_t)(k - table.t.data()), y);
-
-					update(*k, y);
-
-				}
+				for (int i{}; i < N; ++i)
+					learn(lines[i][slot]);
 
 				return y;
 			}
@@ -471,8 +451,8 @@ namespace cm {
 
 			}
 
-			const int mixed{ (int)std::clamp<i64>(dot >> 16, -2047, 2047) };
-			const int p{ squash(mixed) };
+			const int p{ squash((int)std::clamp<i64>(dot >> 16, -2047, 2047)) };
+
 			y = c.code(y, std::clamp(p * 16, 32, 65504));
 
 			const int err{ ((y << 12) - p) * MIX_RATE };
