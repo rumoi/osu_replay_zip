@@ -238,7 +238,7 @@ namespace {
 	}
 
 	// pass 1: per counter the bits seen, per line the replays that used it
-	struct _counting : cm::bit_trainer {
+	struct _counting : cm::counter_trainer {
 
 		struct _table {
 			std::vector<u64> ones, seen; // per counter
@@ -294,7 +294,7 @@ namespace {
 	}() };
 
 	// pass 2: follows the candidates through each replay from every start, confidence and flat
-	struct _trials : cm::bit_trainer {
+	struct _trials : cm::counter_trainer {
 
 		_models_list models{};
 		std::vector<_candidate> candidates;

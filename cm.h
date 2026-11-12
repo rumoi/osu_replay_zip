@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace orz {
@@ -307,6 +308,9 @@ namespace cm {
 
 	};
 
+	// prior counter statistics do not use the mixed probability, weights or APM state.
+	struct counter_trainer : bit_trainer {};
+
 	// one kind of binary decision: per input a counter from its context's line, and the fallback's, mixed, then
 	// refined. bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
 	struct model {
@@ -361,6 +365,22 @@ namespace cm {
 		// the input count known at compile time, so the loops unroll
 		template<int N, typename Coder>
 		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+
+			if constexpr (std::is_base_of_v<counter_trainer, Coder>) {
+
+				for (int i{}; i < N; ++i) {
+
+					counter* const k{ lines[i] + slot };
+
+					if constexpr (requires { c.observe(table, size_t{}, y); })
+						c.observe(table, (size_t)(k - table.t.data()), y);
+
+					update(*k, y);
+
+				}
+
+				return y;
+			}
 
 			counter* k[N];
 			int x[N];
