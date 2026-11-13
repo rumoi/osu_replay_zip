@@ -1781,7 +1781,7 @@ namespace standard {
 		return true;
 	}
 
-	template<typename Reader>
+		template<typename Reader>
 	inline bool decode_profile(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_frames_head head{};
@@ -1804,8 +1804,6 @@ namespace standard {
 		frames::_frame_data fd{};
 		Reader reader{ tables.standard, head.rest, fd, side, R.size() };
 
-		const auto sample{ repeat::sample_of(fd.repeated) };
-
 		// tablet grid indices back to values
 		for (int a{}; a < 2; ++a)
 			if (grid_of[a].on)
@@ -1816,7 +1814,7 @@ namespace standard {
 
 		std::vector<float> out;
 
-		for (int a{}; a < 2; ++a) {
+		for (size_t a{}; a < 2; ++a) {
 
 			size_t n{};
 
@@ -1834,15 +1832,36 @@ namespace standard {
 			if (!dspace::decode_axis(info.axis[a], fd.K[a], fd.slack[a], fd.escaped[a], fd.dt, exact_text, out, escape_value))
 				return false;
 
-			for (size_t i{}; i < R.size(); ++i)
-				(&R[i].x)[a] = out[sample[i]];
+			size_t sample{};
 
-		}
+			// x pass also populates time and keys, second pass only populates y.
 
-		for (size_t i{}; i < R.size(); ++i) {
+			if (a == 0) {
 
-			R[i].delta = fd.delta[i];
-			R[i].keys = fold_keys(fd.keys[i]);
+				for (size_t i{}; i < R.size(); ++i) {
+
+					if (i && !fd.repeated[i])
+						++sample;
+
+					R[i].x = out[sample];
+
+					R[i].delta = fd.delta[i];
+					R[i].keys = fold_keys(fd.keys[i]);
+
+				}
+
+			} else {
+
+				for (size_t i{}; i < R.size(); ++i) {
+
+					if (i && !fd.repeated[i])
+						++sample;
+
+					R[i].y = out[sample];
+
+				}
+
+			}
 
 		}
 
