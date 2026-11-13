@@ -125,8 +125,28 @@ std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file,
 		return text;
 	}
 	
+	const auto get_minify = [&] {
+
+		switch (get_e_mode(file.encode_info)) {
+
+			case e_mode::osu:
+				return orz_text::minify_std_frames_text(25, R);
+
+			case e_mode::taiko:
+			case e_mode::taiko_relax:
+				return orz_text::minify_key_frames_text<0>(R);
+
+			case e_mode::mania:
+				return orz_text::minify_key_frames_text<1>(R);
+
+			default: break;
+		}
+
+		return orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest));
+	};
+
 	std::string text{
-		minify ? orz_text::minify_frames_text(25, R) : 
+		minify ? get_minify() :
 		orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest) != 0)
 	};
 
