@@ -110,7 +110,21 @@ bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u
 	return orz_decode_frames(raw_bytes, out, tables, options);
 }
 
-std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file, bool minify = 0) {
+inline u32 get_mods_from_header(const osr_parts::_parts& parts) {
+
+	const auto& h{ parts.header };
+
+	if (h.size() < 4)
+		return 0;
+
+	u32 mods;
+
+	memcpy(&mods, h.data() + h.size() - 4, 4);
+
+	return mods;
+}
+
+std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file, bool minify = 0, u32 mods = 0) {
 
 	const u32 info{ file.encode_info };
 
@@ -130,7 +144,9 @@ std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file,
 		switch (get_e_mode(file.encode_info)) {
 
 			case e_mode::osu:
-				return orz_text::minify_std_frames_text(25, R);
+				return orz_text::minify_std_frames_text(
+					(mods & OSR_MOD_DOUBLE_TIME) ? 25 : (mods & OSR_MOD_HALF_TIME) ? 12 : 17
+					, R);
 
 			case e_mode::taiko:
 			case e_mode::taiko_relax:
@@ -173,7 +189,7 @@ static bool decode_to_osr(std::span<const u8> raw_bytes, std::vector<u8>& final_
 
 	const std::vector<u8> compressed_string{ (info & ORZ_ENCODE_INFO::replay_verbatim) ?
 		std::vector<u8>(verbatim.begin(), verbatim.end()) :
-		compress_osr_string(replay_text(R, file, options & ORZ_OPTION::DECODE_MINIFY))
+		compress_osr_string(replay_text(R, file, options & ORZ_OPTION::DECODE_MINIFY, get_mods_from_header(parts)))
 	};
 
 	final_file_output.clear();
