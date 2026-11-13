@@ -3,7 +3,7 @@ namespace orz {
 
 	namespace orz_text {
 
-		std::string minify_frames_text(const i64 rate, const std::vector<_osr_frame>& R) {
+		inline std::string minify_frames_text(const i64 rate, const std::vector<_osr_frame>& R) {
 
 			std::string out;
 
@@ -16,7 +16,7 @@ namespace orz {
 
 			const auto write_frame = [&](const i64 delta, const auto x, const auto y, const u32 keys, const bool key_frame) {
 
-				if (out.empty())
+				if (out.size())
 					out += ',';
 
 				char* p{ std::to_chars(b, b + sizeof b, delta).ptr };
@@ -31,10 +31,6 @@ namespace orz {
 
 					p = dotnet::to_string(y, p, 0);
 
-					*p++ = '|';
-
-					p = std::to_chars(p, b + sizeof b, keys).ptr;
-
 				} else {
 
 					p = std::to_chars(p, b + sizeof(b), static_cast<i32>(x + 0.5f)).ptr;
@@ -43,16 +39,17 @@ namespace orz {
 
 					p = std::to_chars(p, b + sizeof(b), static_cast<i32>(y + 0.5f)).ptr;
 
-					*p++ = '|';
-					*p++ = '0';
-
 				}
+
+				*p++ = '|';
+
+				p = keys == 0 ? (*p = '0', ++p) : std::to_chars(p, b + sizeof b, keys).ptr;
 
 				out.append(b, p);
 
 			};
 
-			if (rate == 0) {
+			if (rate <= 1) {
 
 				for (const auto& r : R)
 					write_frame(r.delta, r.x, r.y, r.keys, true);
@@ -60,8 +57,7 @@ namespace orz {
 				return out;
 			}
 
-			bool previous_was_low{};
-			bool last_key_frame{ 1 };
+			u32 last_keys{~R[0].keys};
 
 			i64 running_time{};
 			i64 output_time{};
@@ -101,23 +97,13 @@ namespace orz {
 
 				running_time += i64(r.delta);
 
-				const bool key_frame{ r.keys != 0 };
-				const bool important{ key_frame || last_key_frame };
-				const bool long_frame{ r.delta > 50 };
+				const bool key_frame{ r.keys || (r.keys != last_keys) };
 
-				if (important) {
+				last_keys = r.keys;
 
-					if (key_frame && previous_was_low)
-						fill_lerp_frames(r, false);
+				if (key_frame || r.delta > 50) {
 
-					write_frame(running_time - output_time, r.x, r.y, r.keys, true);
-
-					output_time = running_time;
-					next_sample_time = running_time + rate;
-
-				} else if (long_frame) {
-
-					write_frame(running_time - output_time, r.x, r.y, 0, false);
+					write_frame(running_time - output_time, r.x, r.y, r.keys, key_frame);
 
 					output_time = running_time;
 					next_sample_time = running_time + rate;
@@ -130,9 +116,6 @@ namespace orz {
 
 				previous = &r;
 				previous_time = running_time;
-
-				previous_was_low = !important;
-				last_key_frame = key_frame;
 
 			}
 
