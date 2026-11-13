@@ -110,7 +110,7 @@ bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u
 	return orz_decode_frames(raw_bytes, out, tables, options);
 }
 
-std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file) {
+std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file, bool minify = 0) {
 
 	const u32 info{ file.encode_info };
 
@@ -124,8 +124,11 @@ std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file)
 
 		return text;
 	}
-
-	std::string text{ orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest) != 0) };
+	
+	std::string text{
+		minify ? orz_text::minify_frames_text(25, R) : 
+		orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest) != 0)
+	};
 
 	if (info & ORZ_ENCODE_INFO::trailing_comma)
 		text += ',';
@@ -143,14 +146,14 @@ static bool decode_to_osr(std::span<const u8> raw_bytes, std::vector<u8>& final_
 	const auto& [file, R] { decoded };
 
 	const u32 info{ file.encode_info };
-
+	
 	const auto parts{ osr_parts::decode(container_data(file, orz_tag::osr_meta_data)) };
 
 	const auto verbatim{ container_data(file, orz_tag::osr_verbatim) };
 
 	const std::vector<u8> compressed_string{ (info & ORZ_ENCODE_INFO::replay_verbatim) ?
 		std::vector<u8>(verbatim.begin(), verbatim.end()) :
-		compress_osr_string(replay_text(R, file))
+		compress_osr_string(replay_text(R, file, options & ORZ_OPTION::DECODE_MINIFY))
 	};
 
 	final_file_output.clear();

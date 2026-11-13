@@ -1781,7 +1781,7 @@ namespace standard {
 		return true;
 	}
 
-		template<typename Reader>
+	template<typename Reader>
 	inline bool decode_profile(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_frames_head head{};
@@ -1805,7 +1805,7 @@ namespace standard {
 		Reader reader{ tables.standard, head.rest, fd, side, R.size() };
 
 		// tablet grid indices back to values
-		for (int a{}; a < 2; ++a)
+		for (size_t a{}; a < 2; ++a)
 			if (grid_of[a].on)
 				for (auto& k : fd.K[a])
 					k = grid_value(grid_of[a], k);
@@ -1878,9 +1878,14 @@ namespace standard {
 	inline bool decode(const _orz_file& file, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		switch (file.frame_profile()) {
-		case _frame_profile::speed: return decode_profile<frames::_fastest_reader>(file.encode_info, data, R, tables);
-		case _frame_profile::balanced: return decode_profile<frames::_balanced_reader>(file.encode_info, data, R, tables);
-		default: return decode_profile<frames::_reader>(file.encode_info, data, R, tables);
+
+			case _frame_profile::speed:
+				return decode_profile<frames::_fastest_reader>(file.encode_info, data, R, tables);
+
+			case _frame_profile::balanced:
+				return decode_profile<frames::_balanced_reader>(file.encode_info, data, R, tables);
+
+			default: return decode_profile<frames::_reader>(file.encode_info, data, R, tables);
 		}
 
 	}

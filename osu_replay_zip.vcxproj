@@ -173,6 +173,7 @@
     <ClInclude Include="orz_encoder_std.h" />
     <ClInclude Include="orz_frames.h" />
     <ClInclude Include="orz_life.h" />
+    <ClInclude Include="orz_minify.h" />
     <ClInclude Include="orz_modes.h" />
     <ClInclude Include="orz_parts.h" />
     <ClInclude Include="orz_read.h" />

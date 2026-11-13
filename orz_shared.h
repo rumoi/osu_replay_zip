@@ -154,10 +154,13 @@ enum ORZ_OPTION : u32 {
 
 	DECODE_SKIP_CRC = 1 << 2,
 
+
 	ENCODE_COMPRESSION_PRIORITY_MASK = 3 << 3,
 	ENCODE_COMPRESSION_PRIORITY_SIZE = 0 << 3, // default: all contexts and mixer, without APM
 	ENCODE_COMPRESSION_PRIORITY_BALANCED = 1 << 3, // first context, direct prediction with fallback
 	ENCODE_COMPRESSION_PRIORITY_SPEED = 2 << 3, // direct fallback prediction only
+
+	DECODE_MINIFY = 1 << 5,
 
 };
 
