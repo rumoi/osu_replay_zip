@@ -31,8 +31,11 @@ namespace orz {
 
 					p = dotnet::to_string(y, p, 0);
 
-				}
-				else {
+					*p++ = '|';
+
+					p = std::to_chars(p, b + sizeof b, keys).ptr;
+
+				} else {
 
 					p = std::to_chars(p, b + sizeof(b), static_cast<i32>(x + 0.5f)).ptr;
 
@@ -40,11 +43,10 @@ namespace orz {
 
 					p = std::to_chars(p, b + sizeof(b), static_cast<i32>(y + 0.5f)).ptr;
 
+					*p++ = '|';
+					*p++ = '0';
+
 				}
-
-				*p++ = '|';
-
-				p = std::to_chars(p, b + sizeof b, keys).ptr;
 
 				out.append(b, p);
 
