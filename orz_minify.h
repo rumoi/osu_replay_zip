@@ -6,8 +6,47 @@ namespace orz {
 
 	namespace orz_text {
 
+		inline auto split_seed(std::span<const _osr_frame> R) {
+
+			struct _split {
+				std::span<const _osr_frame> body, seed;
+			};
+
+			const size_t has_seed{ R.size() && R.back().delta == -12345 };
+
+			return _split{ R.first(R.size() - has_seed), R.last(has_seed) };
+		}
+
+		inline void write_seed_frames(std::string& out, std::span<const _osr_frame> seed) {
+
+			for (const auto& r : seed) {
+
+				char b[64];
+
+				char* p{ b };
+
+				if (out.size())
+					*p++ = ',';
+
+				memcpy(p, "-12345|", 7);
+				p += 7;
+
+				p = dotnet::to_string(r.x, p, 0);
+
+				*p++ = '|';
+				p = dotnet::to_string(r.y, p, 0);
+
+				*p++ = '|';
+				p = std::to_chars(p, b + sizeof b, r.keys).ptr;
+
+				out.append(b, p);
+
+			}
+
+		}
+
 		template <bool is_mania>
-		inline std::string minify_key_frames_text(const std::vector<_osr_frame>& R) {
+		inline std::string minify_key_frames_text(std::span<const _osr_frame> R) {
 
 			std::string out;
 
@@ -54,29 +93,37 @@ namespace orz {
 
 			};
 
-			i64 merge_delta{};
-			u32 last_state{ ~get_state(R[0]) };
+			const auto [body, seed] { split_seed(R) };
 
-			for (const auto& r : R) {
+			if (body.size()) {
 
-				merge_delta += i64(r.delta);
+				i64 merge_delta{};
+				u32 last_state{ ~get_state(body[0]) };
 
-				const u32 state{ get_state(r) };
+				for (const auto& r : body) {
 
-				if (last_state == state)
-					continue;
+					merge_delta += i64(r.delta);
 
-				write_frame(merge_delta, state, r.y);
+					const u32 state{ get_state(r) };
 
-				merge_delta = 0;
-				last_state = state;
+					if (last_state == state)
+						continue;
+
+					write_frame(merge_delta, state, r.y);
+
+					merge_delta = 0;
+					last_state = state;
+
+				}
 
 			}
+
+			write_seed_frames(out, seed);
 
 			return out;
 		}
 
-		inline std::string minify_std_frames_text(const i64 rate, const std::vector<_osr_frame>& R) {
+		inline std::string minify_std_frames_text(const i64 rate, std::span<const _osr_frame> R) {
 
 			std::string out;
 
@@ -111,7 +158,9 @@ namespace orz {
 
 			};
 
-			if (R.size() < 3 || rate <= 1) {
+			const auto [body, seed] { split_seed(R) };
+
+			if (body.size() < 3 || rate <= 1) {
 
 				for (const auto& r : R)
 					write_frame(r.delta, r.x, r.y, r.keys, true);
@@ -119,17 +168,19 @@ namespace orz {
 				return out;
 			}
 
-			write_frame(R[0].delta, R[0].x, R[0].y, R[0].keys, true);
-			write_frame(R[1].delta, R[1].x, R[1].y, R[1].keys, true);
+			const auto head{ body.first(2) };
 
-			i64 running_time{ i64(R[0].delta) + i64(R[1].delta) };
+			for (const auto& r : head)
+				write_frame(r.delta, r.x, r.y, r.keys, true);
+
+			i64 running_time{ i64(head[0].delta) + i64(head[1].delta) };
 			i64 output_time{ running_time };
 			i64 next_sample_time{ running_time + rate };
 
-			const _osr_frame* previous{ &R[1] };
+			const _osr_frame* previous{ &head[1] };
 			i64 previous_time{ running_time };
 
-			u32 last_keys{ R[1].keys };
+			u32 last_keys{ head[1].keys };
 			bool first_gameplay_frame{ true };
 
 			const auto fill_lerp_frames = [&](const _osr_frame& current, const bool include_endpoint) {
@@ -158,9 +209,7 @@ namespace orz {
 
 			};
 
-			for (size_t i{ 2 }; i + 1 < R.size(); ++i) {
-
-				const auto& r{ R[i] };
+			for (const auto& r : body.subspan(2)) {
 
 				running_time += i64(r.delta);
 
@@ -186,13 +235,10 @@ namespace orz {
 				previous_time = running_time;
 			}
 
-			{
+			if (output_time != running_time)
+				write_frame(running_time - output_time, previous->x, previous->y, previous->keys, false);
 
-				const auto& tail{ R.back() };
-
-				write_frame(tail.delta, tail.x, tail.y, tail.keys, true);
-
-			}
+			write_seed_frames(out, seed);
 
 			return out;
 		}
