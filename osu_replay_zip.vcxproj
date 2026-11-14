@@ -143,6 +143,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AssemblerOutput>AssemblyAndSourceCode</AssemblerOutput>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -172,9 +173,11 @@
     <ClInclude Include="orz_encoder_std.h" />
     <ClInclude Include="orz_frames.h" />
     <ClInclude Include="orz_life.h" />
+    <ClInclude Include="orz_minify.h" />
     <ClInclude Include="orz_modes.h" />
     <ClInclude Include="orz_parts.h" />
     <ClInclude Include="orz_read.h" />
+    <ClInclude Include="orz_setup.h" />
     <ClInclude Include="orz_shared.h" />
     <ClInclude Include="orz_state.h" />
     <ClInclude Include="orz_tables.h" />

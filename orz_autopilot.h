@@ -190,6 +190,14 @@ namespace autopilot {
 			return !k.empty() && k.back().t >= t;
 		}
 
+		void reset() {
+
+			k.clear();
+			at = 0;
+			budget = SIZE_MAX;
+
+		}
+
 		// the last three knots at different times
 		trail tail() const {
 
@@ -357,6 +365,8 @@ namespace autopilot {
 
 		mutable size_t work{};
 
+		mutable path trial{};
+
 		// rough code length of a value
 		static int bits(i64 v) {
 			return v == 0 ? 1 : 2 * (64 - std::countl_zero((u64)(v < 0 ? -v : v))) + 2;
@@ -405,8 +415,9 @@ namespace autopilot {
 		// frames from i the move predicts in a row, per axis (the move covers `within` of them)
 		void run(i64 anchor_t, const move& m, size_t i, size_t (&n)[2], size_t& within) const {
 
-			path tr{};
+			path& tr{ trial };
 
+			tr.reset();
 			tr.k.push_back({ anchor_t, { m.from[0], m.from[1] } });
 			tr.add(m, anchor_t, true, sample_ms);
 
@@ -501,7 +512,10 @@ namespace autopilot {
 
 				const double mid{ (lo + hi) / 2 };
 
-				(in_out_cubic(mid, 0, 1, 1) < f ? lo : hi) = mid;
+				if (in_out_cubic(mid, 0, 1, 1) < f)
+					lo = mid;
+				else
+					hi = mid;
 
 			}
 
@@ -736,6 +750,7 @@ namespace autopilot {
 			const _screen screen{ p };
 
 			size_t total{};
+			path tr{};
 
 			for (const auto& [a, b] : pairs) {
 
@@ -743,8 +758,7 @@ namespace autopilot {
 
 				for (const kind type : { kind::line, kind::ease }) {
 
-					path tr{};
-
+					tr.reset();
 					tr.k.push_back({ s[a].t, { s[a].v[0], s[a].v[1] } });
 					tr.add({ type, 0, s[b].t - s[a].t, { s[a].v[0], s[a].v[1] }, { s[b].v[0], s[b].v[1] } }, s[a].t, true, p.sample_ms());
 

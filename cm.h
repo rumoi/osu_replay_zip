@@ -1,14 +1,14 @@
 #pragma once
 
 // binary context mixing (lpaq style), integer only so every platform makes the same predictions:
-// counters in a hashed table -> a gated linear mixer in the logistic domain -> an interpolating refinement (apm)
-// -> a 32-bit binary arithmetic coder. Mixer probabilities are 12 bits, coded probabilities 16 bits (P(1) * 65536).
+// counters in a hashed table -> a gated linear mixer in the logistic domain -> a 32-bit binary arithmetic coder. Mixer probabilities are 12 bits, coded probabilities 16 bits (P(1) * 65536).
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace orz {
@@ -89,11 +89,28 @@ namespace cm {
 		return h;
 	}
 
-	constexpr u16 COUNTER_LIMIT{ 255 };
+	constexpr u16 COUNTER_LIMIT{ 31 };
 
-	// P(1) in 16 bits; moves 1 / (n + 1.5) of the way to each bit, 1 / (COUNTER_LIMIT + 1.5) once n reaches it
+	// 2 bytes: P(1) in the top 11 bits, the count n in the low 5. Moves 1 / (n + 1.5) of the way to each bit,
+	// 1 / (COUNTER_LIMIT + 1.5) once n reaches it
 	struct counter {
-		u16 p{ 32768 }, n{};
+
+		u16 v{ 32768 };
+
+		// P(1) in 16 bits
+		FORCEINLINE int p() const {
+			return v & 0xFFE0;
+		}
+
+		FORCEINLINE u32 n() const {
+			return v & 31u;
+		}
+
+		// a prior's 16 bit P(1) and count
+		static counter of(u32 p, u32 n) {
+			return { (u16)((p & 0xFFE0) | std::min<u32>(n, COUNTER_LIMIT)) };
+		}
+
 	};
 
 	constexpr auto RATE{ [] {
@@ -108,12 +125,10 @@ namespace cm {
 
 	FORCEINLINE void update(counter& c, int y) {
 
-		const i64 target{ y ? 65535 : 0 };
+		const i64 target{ y ? 2047 : 0 }, p{ c.v >> 5 };
+		const u32 n{ c.n() };
 
-		c.p = (u16)(c.p + (((target - c.p) * RATE[c.n]) >> 16));
-
-		if (c.n < COUNTER_LIMIT)
-			++c.n;
+		c.v = (u16)(((p + (((target - p) * RATE[n]) >> 16)) << 5) | (n < COUNTER_LIMIT ? n + 1 : n));
 
 	}
 
@@ -136,6 +151,8 @@ namespace cm {
 
 			if (record_keys)
 				keys.assign(size_t(1) << bits, 0);
+			else
+				keys.clear();
 
 		}
 
@@ -153,54 +170,31 @@ namespace cm {
 
 	constexpr int MAX_INPUTS{ 8 };
 
-	// a weight starts at 0.3 and moves about 0.01 * error * input per bit, which keeps up within a single replay
-	constexpr int MIX_WEIGHT{ 19661 }, MIX_RATE{ 40 };
+	// the index of the fallback input: one line for all of a model's contexts, so each slot has a counter that every
+	// decision at it updates. A decision in a context not seen before still has that counter to go by.
+	constexpr int FALLBACK_INPUT{ MAX_INPUTS - 1 };
 
-	// refines a probability given a small context, interpolating 33 buckets over the stretched domain
-	struct apm {
+	// a weight starts at 0.3 and moves about 0.01 * error * input per bit, which keeps up within a single replay.
+	// The fallback's starts at 0, so it counts once it has predicted bits the contexts' counters did not.
+	constexpr int MIX_WEIGHT{ 19661 }, FALLBACK_WEIGHT{ 0 }, MIX_RATE{ 40 };
 
-		std::vector<u16> t;
-		size_t lo{};
-		int wt{};
-
-		void init(size_t contexts) {
-
-			t.resize(contexts * 33);
-
-			for (size_t c{}; c < contexts; ++c)
-				for (int j{}; j < 33; ++j)
-					t[c * 33 + j] = (u16)(squash((j - 16) * 128) * 16);
-
-		}
-
-		// 12-bit in, 16-bit out
-		FORCEINLINE int refine(int pr, size_t context) {
-
-			const int s{ stretch(pr) + 2048 };
-
-			lo = context * 33 + (s >> 7);
-			wt = s & 127;
-
-			return (t[lo] * (128 - wt) + t[lo + 1] * wt) >> 7;
-		}
-
-		FORCEINLINE void update(int y) {
-
-			const int target{ y ? 65535 : 0 };
-
-			t[lo] = (u16)(t[lo] + ((((target - t[lo]) * (128 - wt)) >> 7) * 5 >> 8));
-			t[lo + 1] = (u16)(t[lo + 1] + ((((target - t[lo + 1]) * wt) >> 7) * 5 >> 8));
-
-		}
-
-	};
+	// the weight the i-th of a model's mixed inputs starts at; the fallback is the last
+	constexpr int start_weight(size_t i, size_t mixed) {
+		return i + 1 < mixed ? MIX_WEIGHT : FALLBACK_WEIGHT;
+	}
 
 	struct bit_encoder {
 
 		u32 x1{}, x2{ 0xFFFFFFFFu };
 		std::vector<u8> out;
+		size_t limit{ SIZE_MAX }; // the stream, finish() included, may not reach this size
 
 		void check_end() const {}
+
+		// the stream can no longer stay under the limit
+		bool over() const {
+			return out.size() + 4 >= limit;
+		}
 
 		// p = P(1) in 16 bits
 		FORCEINLINE int code(int y, int p) {
@@ -285,6 +279,30 @@ namespace cm {
 		}
 	};
 
+	struct balanced_bit_encoder : bit_encoder {
+		static constexpr bool balanced_prediction{ true };
+	};
+
+	struct balanced_bit_decoder : bit_decoder {
+		using bit_decoder::bit_decoder;
+		static constexpr bool balanced_prediction{ true };
+	};
+
+	template<typename Coder>
+	constexpr bool uses_balanced_prediction{ requires { requires Coder::balanced_prediction; } };
+
+	struct fastest_bit_encoder : bit_encoder {
+		static constexpr bool fallback_only{ true };
+	};
+
+	struct fastest_bit_decoder : bit_decoder {
+		using bit_decoder::bit_decoder;
+		static constexpr bool fallback_only{ true };
+	};
+
+	template<typename Coder>
+	constexpr bool uses_fallback_only{ requires { requires Coder::fallback_only; } };
+
 	// no output: runs the models only (prior training). A trainer with observe(table, counter index, bit) also sees
 	// every counter update.
 	struct bit_trainer {
@@ -297,37 +315,148 @@ namespace cm {
 
 	};
 
-	// one kind of binary decision: per input a counter from its context's line, mixed, then refined.
+	// prior counter statistics do not use the mixed probability or weights.
+	struct counter_trainer : bit_trainer {};
+
+	struct balanced_counter_trainer : counter_trainer {
+		static constexpr bool balanced_prediction{ true };
+	};
+
+	struct fallback_counter_trainer : counter_trainer {
+		static constexpr bool fallback_only{ true };
+	};
+
+	// one kind of binary decision: per input a counter from its context's line, and the fallback's, mixed.
 	// bind() hashes the contexts once, code() then takes the decision's slot in each bound line.
 	struct model {
 
 		line_table table;
 		std::vector<int> weights; // mixer weights in 16.16 (inputs are stretched probabilities), a set per selector
-		apm refine;
-		int inputs{};
+		int inputs{}; // contexts, fewer than MAX_INPUTS: the fallback is mixed as one more
 		counter* lines[MAX_INPUTS]{};
 
-		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, size_t apm_contexts, bool record_keys = false) {
+		// the counters a decision mixes
+		int mixed() const {
+			return inputs + 1;
+		}
+
+		void init(int inputs_, int table_bits, u32 width, size_t mix_sets, bool record_keys = false,
+			bool fallback_only = false) {
 
 			inputs = inputs_;
 
-			table.init(table_bits, width, record_keys);
-			weights.assign(mix_sets * inputs, MIX_WEIGHT);
-			refine.init(apm_contexts);
+			table.init(fallback_only ? 1 : table_bits, width, record_keys);
+
+			if (fallback_only) {
+
+				weights.clear();
+				return;
+
+			}
+			weights.resize(mix_sets * mixed());
+
+			for (size_t i{}; i < weights.size(); ++i)
+				weights[i] = start_weight(i % mixed(), mixed());
 
 		}
 
 		// salt gives a second set of lines for the same contexts
+		template<typename Coder = bit_encoder>
 		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
+			bind_lines<Coder>(inputs, ctx, salt);
+		}
 
-			for (int i{}; i < inputs; ++i)
-				lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+		// frame coding uses salts 0 and 1; the fallback profile stores their lines directly.
+		FORCEINLINE void bind_fallback(u64 salt) {
+
+			if (!table.keys.empty())
+				table.keys[(size_t)salt] = hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0);
+
+			lines[0] = table.t.data() + (size_t)salt * table.width;
+
+		}
+
+		// the input count known at compile time, so the loop unrolls
+		template<int N, typename Coder = bit_encoder>
+		FORCEINLINE void bind_n(const u64* ctx, u64 salt = 0) {
+
+			static_assert(N > 0 && N < MAX_INPUTS);
+
+			bind_lines<Coder>(N, ctx, salt);
+		}
+
+		// the lines of n contexts and the fallback, as the coder's profile takes them
+		template<typename Coder>
+		FORCEINLINE void bind_lines(int n, const u64* ctx, u64 salt) {
+
+			if constexpr (uses_fallback_only<Coder>)
+				bind_fallback(salt);
+			else if constexpr (uses_balanced_prediction<Coder>) {
+
+				lines[0] = table.line(hash(salt * MAX_INPUTS, ctx[0]));
+				lines[1] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
+			} else {
+
+				for (int i{}; i < n; ++i)
+					lines[i] = table.line(hash(salt * MAX_INPUTS + (u64)i, ctx[i]));
+
+				lines[n] = table.line(hash(salt * MAX_INPUTS + FALLBACK_INPUT, 0));
+
+			}
 
 		}
 
 		// the input count known at compile time, so the loops unroll
 		template<int N, typename Coder>
-		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+		FORCEINLINE int code_n(Coder& c, int y, u32 slot, size_t set) {
+
+			// prior counter statistics code nothing
+			constexpr bool counting{ std::is_base_of_v<counter_trainer, Coder> };
+
+			// a counter takes the bit, shown to a trainer that observes first
+			const auto learn = [&](counter& k) {
+
+				if constexpr (requires { c.observe(table, size_t{}, y); })
+					c.observe(table, (size_t)(&k - table.t.data()), y);
+
+				update(k, y);
+
+			};
+
+			if constexpr (uses_fallback_only<Coder>) {
+
+				counter& k{ lines[0][slot] };
+
+				if constexpr (!counting)
+					y = c.code(y, std::clamp(k.p(), 32, 65504));
+
+				learn(k);
+
+				return y;
+			}
+
+			if constexpr (uses_balanced_prediction<Coder>) {
+
+				const counter& prediction{ lines[0][slot].n() >= 8 ? lines[0][slot] : lines[1][slot] };
+
+				if constexpr (!counting)
+					y = c.code(y, std::clamp(prediction.p(), 32, 65504));
+
+				// Keep both updates, including when the context and fallback alias the same counter.
+				learn(lines[0][slot]);
+				learn(lines[1][slot]);
+
+				return y;
+			}
+
+			if constexpr (counting) {
+
+				for (int i{}; i < N; ++i)
+					learn(lines[i][slot]);
+
+				return y;
+			}
 
 			counter* k[N];
 			int x[N];
@@ -338,15 +467,14 @@ namespace cm {
 			for (int i{}; i < N; ++i) {
 
 				k[i] = lines[i] + slot;
-				x[i] = stretch(k[i]->p >> 4);
+				x[i] = stretch(k[i]->p() >> 4);
 				dot += (i64)x[i] * w[i];
 
 			}
 
 			const int p{ squash((int)std::clamp<i64>(dot >> 16, -2047, 2047)) };
-			const int pa{ refine.refine(p, apm_context) };
 
-			y = c.code(y, std::clamp((p * 16 + 3 * pa) >> 2, 32, 65504));
+			y = c.code(y, std::clamp(p * 16, 32, 65504));
 
 			const int err{ ((y << 12) - p) * MIX_RATE };
 
@@ -360,34 +488,63 @@ namespace cm {
 
 			}
 
-			refine.update(y);
-
 			return y;
 		}
 
 		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set, size_t apm_context) {
+		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set) {
 
-			switch (inputs) {
-			case 1: return code_n<1>(c, y, slot, set, apm_context);
-			case 2: return code_n<2>(c, y, slot, set, apm_context);
-			case 3: return code_n<3>(c, y, slot, set, apm_context);
-			case 4: return code_n<4>(c, y, slot, set, apm_context);
-			case 5: return code_n<5>(c, y, slot, set, apm_context);
-			case 6: return code_n<6>(c, y, slot, set, apm_context);
-			case 7: return code_n<7>(c, y, slot, set, apm_context);
-			default: return code_n<8>(c, y, slot, set, apm_context);
+			switch (mixed()) {
+			case 2: return code_n<2>(c, y, slot, set);
+			case 3: return code_n<3>(c, y, slot, set);
+			case 4: return code_n<4>(c, y, slot, set);
+			case 5: return code_n<5>(c, y, slot, set);
+			case 6: return code_n<6>(c, y, slot, set);
+			case 7: return code_n<7>(c, y, slot, set);
+			default: return code_n<8>(c, y, slot, set);
 			}
 
 		}
 
 		// a single decision on its own contexts
 		template<typename Coder>
-		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set, size_t apm_context) {
+		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set) {
 
-			bind(ctx);
+			bind<Coder>(ctx);
 
-			return code(c, y, 0u, set, apm_context);
+			return code(c, y, 0u, set);
+		}
+
+	};
+
+	// most models always mix the same number of contexts. Keep that count in their type so binding and coding
+	// do not dispatch on it for every bit; the state and arithmetic are the same as model's.
+	template<int N>
+	struct fixed_model : model {
+
+		static_assert(N > 0 && N < MAX_INPUTS);
+
+		void init(int table_bits, u32 width, size_t mix_sets, bool record_keys = false,
+			bool fallback_only = false) {
+			model::init(N, table_bits, width, mix_sets, record_keys, fallback_only);
+		}
+
+		template<typename Coder = bit_encoder>
+		FORCEINLINE void bind(const u64* ctx, u64 salt = 0) {
+			bind_n<N, Coder>(ctx, salt);
+		}
+
+		template<typename Coder>
+		FORCEINLINE int code(Coder& c, int y, u32 slot, size_t set) {
+			return code_n<N + 1>(c, y, slot, set);
+		}
+
+		template<typename Coder>
+		FORCEINLINE int code(Coder& c, int y, const u64* ctx, size_t set) {
+
+			bind<Coder>(ctx);
+
+			return code(c, y, 0u, set);
 		}
 
 	};

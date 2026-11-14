@@ -83,13 +83,14 @@ inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 
 }
 
-// state.file as the LZMA replay data as it is: no frames, no seed, no text flags
+// state.file as the LZMA replay data as it is: no frames, no seed, no text or compression-priority flags
 inline void write_verbatim(orz_state& state) {
 
 	state.seed = {};
 
 	state.file.container.clear();
-	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest);
+	state.file.encode_info &= ~u32(ORZ_ENCODE_INFO::trailing_comma | ORZ_ENCODE_INFO::text_shortest |
+		ORZ_ENCODE_INFO::compression_priority_mask);
 	state.file.encode_info |= ORZ_ENCODE_INFO::replay_verbatim;
 
 	finish_orz_file(0, frames_crc(state.input, {}), state);
@@ -114,6 +115,7 @@ bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want, _table_
 struct _osr_header {
 
 	e_mode mode;
+	float rate; // the play rate its mods give
 
 	std::span<const u8> before_life; // the game mode up to the mods, stored as they are
 	_life_bar life;
@@ -203,6 +205,9 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 
 	h.mode = (e_mode)(relax ? (u32)e_mode::osu_relax + game_mode : game_mode);
 
+	// double time (nightcore sets it too) and half time
+	h.rate = (header_values->mods & OSR_MOD_DOUBLE_TIME) ? 1.5f : (header_values->mods & OSR_MOD_HALF_TIME) ? 0.75f : 1.f;
+
 	const size_t life_start{ pos };
 
 	if (!skip_string())
@@ -257,6 +262,14 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 
 // LZMA replay data into state.output, with the e_mode of state.file (and the .osr parts in state, when it has them)
 static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
+
+	const u32 compression_priority{ (state.options & ENCODE_COMPRESSION_PRIORITY_MASK) >> 3 };
+
+	if (compression_priority == 3)
+		return; // reserved; public encode returns false with an empty output
+
+	state.file.version = ORZ_VERSION;
+	state.file.encode_info |= compression_priority << 8;
 
 	// the span is the caller's, it does not outlive this encode
 	state.lzma = lzma;
@@ -381,6 +394,8 @@ bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state)
 			state.after_life.assign(h.after_life.begin(), h.after_life.end());
 			state.tail.assign(h.tail.begin(), h.tail.end());
 			state.life = std::move(h.life);
+
+			state.header_rate = h.rate;
 
 			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
 

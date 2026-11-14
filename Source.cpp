@@ -110,11 +110,17 @@ static int run(const int param_count, char** param) {
 
 	if (decode) {
 
-		if (!orz::orz_to_osr(data, result)) {
+		orz::orz_state state{};
+
+		if (!orz::decode_to_osr(data, result, state)) {
+
+			std::vector<orz::_osr_frame> frames;
+
+			state.options = orz::DECODE_SKIP_CRC;
 
 			if (orz::is_newer_orz(data))
 				fprintf(stderr, "error: %s was made by a newer version of orz\n", in_s.c_str());
-			else if (orz::_decoded_orz d; orz::orz_decode_frames(data, d, orz::DECODE_SKIP_CRC))
+			else if (orz::decode(data, frames, state))
 				fprintf(stderr, "error: %s fails its CRC check (damaged, or written by an incompatible orz build)\n", in_s.c_str());
 			else
 				fprintf(stderr, "error: %s is not a valid .orz file\n", in_s.c_str());

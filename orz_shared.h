@@ -86,7 +86,7 @@ inline void no_FMA_check() {
 
 }
 
-constexpr u32 ORZ_VERSION{ 0 };
+constexpr u32 ORZ_VERSION{ 0 }; // unreleased format; the compression priority selects the frame model
 
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
 constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
@@ -102,7 +102,7 @@ enum class e_mode : u32 {
 
 };
 
-// the encode info as a file stores it: the e_mode in the low 4 bits (8 of 16 used), then a bit each
+// the encode info as a file stores it: e_mode, replay flags, then the two-bit compression priority
 enum ORZ_ENCODE_INFO : u32 {
 
 	e_mode_bits = 15,
@@ -115,9 +115,14 @@ enum ORZ_ENCODE_INFO : u32 {
 
 	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
+	compression_priority_mask = 3 << 8, // 0 = size, 1 = balanced, 2 = speed; 3 is reserved
+	compression_priority_size = 0 << 8,
+	compression_priority_balanced = 1 << 8,
+	compression_priority_speed = 2 << 8,
+
 };
 
-constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 };
+constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 }; // first bucket width, with overflow for higher flags
 
 FORCEINLINE e_mode get_e_mode(u32 encode_info) {
 	return (e_mode)(encode_info & ORZ_ENCODE_INFO::e_mode_bits);
@@ -145,11 +150,22 @@ enum ORZ_OPTION : u32 {
 
 	ENCODE_CHECK_ROUND_TRIP = 1 << 0,
 
+	ENCODE_NO_DEVICE = 1 << 1, // skip cursor device-model detection
+
 	DECODE_SKIP_CRC = 1 << 2,
+
+
+	ENCODE_COMPRESSION_PRIORITY_MASK = 3 << 3,
+	ENCODE_COMPRESSION_PRIORITY_SIZE = 0 << 3, // default: all contexts and mixer, without APM
+	ENCODE_COMPRESSION_PRIORITY_BALANCED = 1 << 3, // first context, direct prediction with fallback
+	ENCODE_COMPRESSION_PRIORITY_SPEED = 2 << 3, // direct fallback prediction only
+
+	DECODE_MINIFY = 1 << 5,
 
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
+constexpr u32 OSR_MOD_DOUBLE_TIME{ 1 << 6 }, OSR_MOD_HALF_TIME{ 1 << 8 };
 
 enum class orz_tag : u8 {
 
@@ -663,6 +679,8 @@ struct small_string{
 };
 
 
+enum class _frame_profile { size, balanced, speed };
+
 struct _orz_file {
 
 	u32 version;
@@ -673,6 +691,10 @@ struct _orz_file {
 	u32 seed;
 
 	u32 frame_count;
+
+	_frame_profile frame_profile() const {
+		return (_frame_profile)((encode_info & compression_priority_mask) >> 8);
+	}
 
 	struct _container {
 
@@ -718,7 +740,14 @@ struct _orz_file {
 		CRC = bs.read_bits<32>();
 
 		encode_info = bs.read_bucket<ORZ_ENCODE_INFO_BITS>();
-		
+
+		constexpr u32 known_info{ e_mode_bits | has_osr_header | trailing_comma | replay_verbatim | text_shortest | compression_priority_mask };
+		const u32 priority{ (encode_info & compression_priority_mask) >> 8 };
+
+		if ((encode_info & ~known_info) || get_e_mode(encode_info) >= e_mode::e_mode_max ||
+			priority == 3 || (priority != 0 && (encode_info & replay_verbatim)))
+			return 0;
+
 		if (seeded = bs.read_bits<1>())
 			seed = bs.read_length_bucket<3, ORZ_SEED_LENGTH>();
 

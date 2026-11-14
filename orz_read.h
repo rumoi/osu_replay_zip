@@ -19,14 +19,7 @@ static std::span<const u8> container_data(const _orz_file& file, orz_tag tag) {
 	return {};
 }
 
-struct _decoded_orz {
-	_orz_file file;
-	std::vector<_osr_frame> frames;
-};
-
-static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _decoded_orz& out, _table_memory& tables) {
-
-	_orz_file file{};
+static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _orz_file& file, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 	if (!file.decode(raw_bytes) || file.frame_count > ORZ_MAX_FRAMES)
 		return false;
@@ -40,13 +33,15 @@ static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _dec
 
 	const bool verbatim{ (info & ORZ_ENCODE_INFO::replay_verbatim) != 0 }; // there is no frames stream
 
-	std::vector<_osr_frame> R(file.frame_count);
+	R.clear();
+	R.reserve((size_t)file.frame_count + (file.seeded ? 1 : 0));
+	R.resize(file.frame_count);
 
 	if (!verbatim) {
 
 		const auto frames_data{ container_data(file, orz_tag::frames) };
 
-		if (!(uses_modes_coder(mode) ? modes::decode(info, frames_data, R, tables) : standard::decode(info, frames_data, R, tables)))
+		if (!(uses_modes_coder(mode) ? modes::decode(file, frames_data, R, tables) : standard::decode(file, frames_data, R, tables)))
 			return false;
 
 	}
@@ -83,32 +78,41 @@ static bool decode_frames(std::span<const u8> raw_bytes, const u32 options, _dec
 
 	}
 
-	out = { std::move(file), std::move(R) };
-
 	return true;
 }
 
-// an ORZ file held in memory into frames; false for anything that is not a valid file
-bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, _table_memory& tables, const u32 options = 0) {
+// an .orz held in memory into its frames (the closing seed frame included); state.file is the file read, state.options
+// DECODE_SKIP_CRC skips the check. False for anything that is not a valid file. One orz_state per thread serves
+// encode and decode (the tables are reused)
+bool decode(std::span<const u8> orz, std::vector<_osr_frame>& frames, orz_state& state) {
 
 	no_FMA_check();
 
+	state.reset_volatile();
+
 	try {
-		return decode_frames(raw_bytes, options, out, tables);
+		return decode_frames(orz, state.options, state.file, frames, state.tables);
 	} catch (const std::exception&) {
 		return false;
 	}
 
 }
 
-bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u32 options = 0) {
+inline u32 get_mods_from_header(const osr_parts::_parts& parts) {
 
-	_table_memory tables{};
+	const auto& h{ parts.header };
 
-	return orz_decode_frames(raw_bytes, out, tables, options);
+	if (h.size() < 4)
+		return 0;
+
+	u32 mods;
+
+	memcpy(&mods, h.data() + h.size() - 4, 4);
+
+	return mods;
 }
 
-std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file) {
+std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file, bool minify = 0, u32 mods = 0) {
 
 	const u32 info{ file.encode_info };
 
@@ -122,8 +126,33 @@ std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file)
 
 		return text;
 	}
+	
+	const auto get_minify = [&] {
 
-	std::string text{ orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest) != 0) };
+		switch (get_e_mode(file.encode_info)) {
+
+			case e_mode::osu:
+				return orz_text::minify_std_frames_text(
+					(mods & OSR_MOD_DOUBLE_TIME) ? 25 : (mods & OSR_MOD_HALF_TIME) ? 12 : 17
+					, R);
+
+			case e_mode::taiko:
+			case e_mode::taiko_relax:
+				return orz_text::minify_key_frames_text<0>(R);
+
+			case e_mode::mania:
+				return orz_text::minify_key_frames_text<1>(R);
+
+			default: break;
+		}
+
+		return orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest));
+	};
+
+	std::string text{
+		minify ? get_minify() :
+		orz_text::frames_text(R, (info & ORZ_ENCODE_INFO::text_shortest) != 0)
+	};
 
 	if (info & ORZ_ENCODE_INFO::trailing_comma)
 		text += ',';
@@ -131,24 +160,18 @@ std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file)
 	return text;
 }
 
-static bool decode_to_osr(std::span<const u8> raw_bytes, std::vector<u8>& final_file_output, const u32 options, _table_memory& tables) {
-
-	_decoded_orz decoded;
-
-	if (!orz_decode_frames(raw_bytes, decoded, tables, options))
-		return false;
-
-	const auto& [file, R] { decoded };
+// a decoded file and its frames into the .osr (or bare replay data) they came from
+static void write_osr(const _orz_file& file, const std::vector<_osr_frame>& R, const u32 options, std::vector<u8>& final_file_output) {
 
 	const u32 info{ file.encode_info };
-
+	
 	const auto parts{ osr_parts::decode(container_data(file, orz_tag::osr_meta_data)) };
 
 	const auto verbatim{ container_data(file, orz_tag::osr_verbatim) };
 
 	const std::vector<u8> compressed_string{ (info & ORZ_ENCODE_INFO::replay_verbatim) ?
 		std::vector<u8>(verbatim.begin(), verbatim.end()) :
-		compress_osr_string(replay_text(R, file))
+		compress_osr_string(replay_text(R, file, options & ORZ_OPTION::DECODE_MINIFY, get_mods_from_header(parts)))
 	};
 
 	final_file_output.clear();
@@ -183,34 +206,42 @@ static bool decode_to_osr(std::span<const u8> raw_bytes, std::vector<u8>& final_
 	// bytes after the replay data (online score id, extra data), verbatim
 	add_to_u8(final_file_output, parts.tail);
 
-	return true;
 }
 
-// an .orz into the .osr (or bare replay data) it came from
-bool orz_to_osr(std::span<const u8> orz, std::vector<u8>& out, _table_memory& tables, const u32 options = 0) {
+// an .orz into the .osr (or bare replay data) it came from; state.options DECODE_SKIP_CRC, DECODE_MINIFY. The frames
+// are decoded into state.input
+bool decode_to_osr(std::span<const u8> orz, std::vector<u8>& osr, orz_state& state) {
 
 	no_FMA_check();
 
+	state.reset_volatile();
+
 	try {
-		return decode_to_osr(orz, out, options, tables);
+
+		if (!decode_frames(orz, state.options, state.file, state.input, state.tables))
+			return false;
+
+		write_osr(state.file, state.input, state.options, osr);
+
+		return true;
+
 	} catch (const std::exception&) {
 		return false;
 	}
 
 }
 
-bool orz_to_osr(std::span<const u8> orz, std::vector<u8>& out, const u32 options = 0) {
-
-	_table_memory tables{};
-
-	return orz_to_osr(orz, out, tables, options);
-}
-
 bool orz_round_trip_ok(std::span<const u8> orz, const std::string& want, _table_memory& tables) {
 
-	_decoded_orz d;
+	_orz_file file{};
+	std::vector<_osr_frame> R;
 
-	return orz_decode_frames(orz, d, tables) && replay_text(d.frames, d.file) == want;
+	try {
+		return decode_frames(orz, 0, file, R, tables) && replay_text(R, file) == want;
+	} catch (const std::exception&) {
+		return false;
+	}
+
 }
 
 }

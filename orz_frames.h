@@ -15,6 +15,7 @@
 #include "orz_time.h"
 #include "cm.h"
 #include "frames_prior.h"
+#include "frames_fallback_prior.h"
 #include "orz_autopilot.h"
 
 namespace orz {
@@ -90,7 +91,12 @@ namespace frames {
 
 	struct _models {
 
-		cm::model keys_changed, keys_bits, keys_high, time, repeat, move, move_bits, slack, escape, escape_value, ap_event, ap_value;
+		cm::fixed_model<5> keys_changed, escape, ap_event;
+		cm::fixed_model<4> keys_bits, repeat;
+		cm::fixed_model<1> keys_high, slack;
+		cm::fixed_model<6> move;
+		cm::fixed_model<2> move_bits, escape_value, ap_value;
+		cm::model time;
 
 		// in frames_prior.h order
 		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
@@ -100,32 +106,32 @@ namespace frames {
 		// tables follow the replay's length up to TABLE_FRAMES (the frame count of a file to decode is untrusted), and are
 		// larger when training priors. The keys and time models, which every mode uses:
 		// time_history: the time model also takes the older deltas and the mode's flags (relax, osu!taiko)
-		void init_keys_time(size_t frames, bool time_history, bool record_keys = false) {
+		void init_keys_time(size_t frames, bool time_history, bool record_keys = false, bool fallback_only = false) {
 
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
 			// single decision models: a counter per line; time / move / slack: a line of counters per context
-			keys_changed.init(5, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			keys_bits.init(4, std::clamp(b + 2, 14, 20 + extra), 1, 64, 64, record_keys);
-			keys_high.init(1, 8, 1, 1, 1, record_keys);
-			time.init(time_history ? 6 : 4, std::clamp(b, 12, 16 + extra), 64, 64 * 3 * 3, 64 * 3, record_keys);
+			keys_changed.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, record_keys, fallback_only);
+			keys_bits.init(std::clamp(b + 2, 14, 20 + extra), 1, 64, record_keys, fallback_only);
+			keys_high.init(8, 1, 1, record_keys, fallback_only);
+			time.init(time_history ? 6 : 4, std::clamp(b, 12, record_keys ? 16 + extra : 14), 64, 64 * 3 * 3, record_keys, fallback_only);
 
 		}
 
-		void init(size_t frames, e_mode mode, bool record_keys = false) {
+		void init(size_t frames, e_mode mode, bool record_keys = false, bool fallback_only = false) {
 
 			const int b{ (int)std::bit_width(std::min(frames, TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
-			init_keys_time(frames, is_relax(mode), record_keys);
+			init_keys_time(frames, is_relax(mode), record_keys, fallback_only);
 
-			repeat.init(4, std::clamp(b + 4, 16, 22 + extra), 1, 64, 64, record_keys);
-			move.init(6, std::clamp(b + 3, 12, 17 + extra), 32, MOVE_STEPS * 4 * 2, MOVE_STEPS * 32, record_keys);
-			move_bits.init(2, std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, 8 * 32, record_keys);
-			slack.init(1, std::clamp(b - 2, 10, 16), 16, 64, 64, record_keys);
-			escape.init(5, std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, 16 * 3, record_keys);
-			escape_value.init(2, 10 + extra, 64, 1, 1, record_keys);
-			ap_event.init(5, std::clamp(b, 10, 16 + extra), 1, 8, 8, record_keys);
-			ap_value.init(2, 12 + extra, 64, 1, 1, record_keys);
+			repeat.init(std::clamp(b + 4, 16, 22 + extra), 1, 64, record_keys, fallback_only);
+			move.init(std::clamp(b + 3, 12, record_keys ? 17 + extra : 16), 32, MOVE_STEPS * 4 * 2, record_keys, fallback_only);
+			move_bits.init(std::clamp(b + 2, 12, 20 + extra), 1, 8 * 4, record_keys, fallback_only);
+			slack.init(std::clamp(b - 2, 10, 16), 16, 64, record_keys, fallback_only);
+			escape.init(std::clamp(b + 2, 12, 20 + extra), 1, 16 * 3, record_keys, fallback_only);
+			escape_value.init(10 + extra, 64, 1, record_keys, fallback_only);
+			ap_event.init(std::clamp(b, 10, 16 + extra), 1, 8, record_keys, fallback_only);
+			ap_value.init(12 + extra, 64, 1, record_keys, fallback_only);
 
 		}
 
@@ -143,12 +149,22 @@ namespace frames {
 	}
 
 	// a / b in eighths up to 4, 33 when there is no reference
-	FORCEINLINE u64 ratio_bucket(i64 a, i64 b) {
+	FORCEINLINE u64 ratio_bucket(const i64 a, const i64 b) {
 
 		if (b <= 0)
 			return 33;
 
-		return (u64)std::clamp<i64>((a * 8 + b / 2) / b, 0, 32);
+		if (a <= 0)
+			return 0;
+
+		//if (a >= b * 4) return 32;
+
+		const auto u_a = u64(a);
+		const auto u_b = u64(b);
+
+		// we are going to trust the compiler here, to convert theses to the proper shifts.
+
+		return std::min<u64>((u_a * 8 + u_b / 2) / u_b, 32);
 	}
 
 	// raw bits (escapes), up to 64
@@ -231,7 +247,7 @@ namespace frames {
 				(s * 32 + (u64)std::min(frames_since_change, 31)) * 32 + log_bucket(now - last_change),
 			};
 
-			if (!M.keys_changed.code(c, want != pk, ctx, s, s))
+			if (!M.keys_changed.code(c, want != pk, ctx, s))
 				return pk;
 
 			const u32 flip{ want ^ pk };
@@ -252,13 +268,13 @@ namespace frames {
 
 				const size_t set{ (size_t)b * 2 + (size_t)is_down };
 
-				flipped |= (u32)M.keys_bits.code(c, (int)((flip >> b) & 1), bctx, set, set) << b;
+				flipped |= (u32)M.keys_bits.code(c, (int)((flip >> b) & 1), bctx, set) << b;
 
 			}
 
 			// a change above the modelled keys (never seen in osu!standard, kept for exactness)
 			const u64 hctx[1]{ flipped != 0 };
-			const u32 high{ flipped == 0 || M.keys_high.code(c, (flip >> bits) != 0, hctx, 0, 0) ?
+			const u32 high{ flipped == 0 || M.keys_high.code(c, (flip >> bits) != 0, hctx, 0) ?
 				(u32)raw(c, flip >> bits, 32 - bits) : 0u };
 
 			return pk ^ (flipped | (high << bits));
@@ -334,18 +350,25 @@ namespace frames {
 		template<typename Coder>
 		int code(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 repeats) {
 
+			return m.inputs == 4 ? code_n<4>(c, m, past, want, phase, kc, kc1, repeats) :
+				code_n<6>(c, m, past, want, phase, kc, kc1, repeats);
+		}
+
+		template<int N, typename Coder>
+		int code_n(Coder& c, cm::model& m, std::span<const int> past, int want, u64 phase, u64 kc, u64 kc1, u64 repeats) {
+
 			const size_t f{ past.size() };
 			const u64 d1{ f >= 1 ? delta_bucket(past[f - 1]) : 50 }, d2{ f >= 2 ? delta_bucket(past[f - 2]) : 50 };
 
 			u64 ctx[6]{
 				(d1 * 64 + d2) * 3 + kc,
 				(((u64)std::min(zero_run, 15) * 16 + (u64)std::min(prev_zero_run, 15)) * 16 + (u64)std::min(one_run, 15)) * 3 + kc,
-				((phase * 64 + d1) * 3 + kc) * 2 + kc1,
+				(phase * 2 + kc) * 2 + kc1,
 				((u64)grid.bin(last_tick) * 32 + (u64)std::clamp<i64>(now - last_tick, 0, 31)) * 2 + kc,
 			};
 
 			// relax
-			if (m.inputs > 4) {
+			if constexpr (N > 4) {
 
 				const u64 d3{ f >= 3 ? delta_bucket(past[f - 3]) : 50 }, d4{ f >= 4 ? delta_bucket(past[f - 4]) : 50 };
 
@@ -354,37 +377,63 @@ namespace frames {
 
 			}
 
-			// mixer weights and apm also by whether the keys change on this frame or did on the last
+			// mixer weights also by whether the keys change on this frame or did on the last
 			const size_t regime{ d1 <= 5 ? 0u : d1 <= 13 ? 1u : 2u }, key_change{ kc ? 2u : kc1 ? 1u : 0u };
 
-			m.bind(ctx);
+			m.bind_n<N, Coder>(ctx);
 
-			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };
-			const u32 index{ (u32)(std::find(table.begin(), table.end(), want) - table.begin()) };
+			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };			
 
-			// the branches to the leaf, from the leaf up
+			using coder_type = std::remove_cvref_t<Coder>;
+			constexpr bool ENCODING = std::is_base_of_v<cm::bit_decoder, coder_type> == 0;
+
+			u32 index{};
 			u8 branch[64];
 			int depth{};
 
-			for (u32 e{ 64 + (index < listed ? index : LISTED) }; e != 0; e = TIME_TREE_UP[e][0])
-				branch[depth++] = TIME_TREE_UP[e][1];
+			if constexpr (ENCODING) {
+
+				index = (u32)(std::find(table.begin(), table.end(), want) - table.begin());
+
+				for (u32 e{ 64 + (index < listed ? index : LISTED) }; e != 0; e = TIME_TREE_UP[e][0]){
+
+					branch[depth++] = TIME_TREE_UP[e][1];
+
+				}
+
+			}
 
 			u32 node{};
 
 			while (node < 64) {
 
 				const size_t step{ (size_t)node * 3 };
-				const int y{ depth ? branch[--depth] : 0 };
 
-				node = TIME_TREE[node][m.code(c, y, node, (step + regime) * 3 + key_change, step + key_change)];
+				int y{};
+
+				if constexpr (ENCODING)
+					y = depth ? branch[--depth] : 0;
+
+				node = TIME_TREE[node][
+					m.code_n<N + 1>(
+						c, y, node,
+						(step + regime) * 3 + key_change
+					)
+				];
 
 			}
 
 			// a leaf past the table (a damaged file) reads as the escape
 			u32 at{ std::min(node - 64, listed) };
 
-			if (at == listed && listed < n)
-				at = listed + (u32)(gamma(c, index - listed + 1) - 1);
+			if (at == listed && listed < n) {
+
+				if constexpr (ENCODING)
+					at = listed + (u32)(gamma(c, index - listed + 1) - 1);
+				else
+					at = listed + (u32)(gamma(c, 1) - 1);
+
+			}
 
 			const int d{ n ? table[std::min(at, n - 1)] : 0 };
 
@@ -469,16 +518,14 @@ namespace frames {
 			((u64)f.since_move * 16 + f.gap) * 41 + (u64)(f.prev_res + 20),
 		};
 
-		const size_t apc{ (size_t)std::min(f.scale, 31) };
-
 		// steps as MOVE_STEPS, the long lengths in a second line
-		M.move.bind(ctx);
+		M.move.bind<Coder>(ctx);
 
 		const auto decide = [&](int y, u32 step) {
 
 			const u32 slot{ step < 32 ? step : step & 15 };
 
-			return M.move.code(c, y, slot, ((size_t)step * 4 + (size_t)f.regime) * 2 + (size_t)f.order, (size_t)step * 32 + apc);
+			return M.move.code(c, y, slot, ((size_t)step * 4 + (size_t)f.regime) * 2 + (size_t)f.order);
 		};
 
 		if (decide(r == 0, 0))
@@ -512,7 +559,7 @@ namespace frames {
 
 		if (n == 12) {
 
-			M.move.bind(ctx, 1);
+			M.move.bind<Coder>(ctx, 1);
 
 			while (n < 62 && decide(len > n, 32 + (u32)std::min(n - 12, 15)))
 				++n;
@@ -532,7 +579,7 @@ namespace frames {
 				const u64 id{ (u64)k * 4 + (out & ((u64(1) << k) - 1)) };
 				const u64 cx[2]{ ((ctx[0] * 64 + (u64)n) * 64 + id) * 2, ((scale_ctx * 64 + (u64)n) * 64 + id) * 2 + 1 };
 
-				out = (out << 1) | (u64)M.move_bits.code(c, bit, cx, (size_t)id * 4 + (size_t)f.regime, (size_t)id * 32 + (size_t)std::min(n, 31));
+				out = (out << 1) | (u64)M.move_bits.code(c, bit, cx, (size_t)id * 4 + (size_t)f.regime);
 
 			} else
 				out = (out << 1) | (u64)c.code(bit, 32768);
@@ -544,11 +591,11 @@ namespace frames {
 
 	// mouse slack: the candidate index (<= 2 * MOUSE_SLACK_RANGE), unary
 	template<typename Coder>
-	int slack_value(Coder& c, cm::model& m, int k, int axis, i64 d) {
+	int slack_value(Coder& c, cm::fixed_model<1>& m, int k, int axis, i64 d) {
 
 		const u64 ctx[1]{ (u64)axis * 64 + (u64)bit_length(d) };
 
-		m.bind(ctx);
+		m.bind<Coder>(ctx);
 
 		u64 v{};
 
@@ -556,7 +603,7 @@ namespace frames {
 
 			const u32 slot{ (u32)std::min<u64>(v, 15) };
 
-			if (!m.code(c, (u64)k > v, slot, slot, slot))
+			if (!m.code(c, (u64)k > v, slot, slot))
 				break;
 
 			++v;
@@ -569,23 +616,23 @@ namespace frames {
 	// an autopilot move's field: zero, sign, bit length (unary), then the bits under the leading one, the first two modelled.
 	// Valid fields are far below MAX_MOVE.
 	template<typename Coder>
-	i64 ap_number(Coder& c, cm::model& m, i64 v, u64 field, u64 ctx) {
+	i64 ap_number(Coder& c, cm::fixed_model<2>& m, i64 v, u64 field, u64 ctx) {
 
 		const u64 cx[2]{ field * 4096 + ctx, field };
 
-		m.bind(cx);
+		m.bind<Coder>(cx);
 
-		if (m.code(c, v == 0, 0u, 0, 0))
+		if (m.code(c, v == 0, 0u, 0))
 			return 0;
 
-		const int negative{ m.code(c, v < 0, 1u, 0, 0) };
+		const int negative{ m.code(c, v < 0, 1u, 0) };
 
 		const u64 a{ v < 0 ? 0 - u64(v) : u64(v) };
 		const int len{ a ? 63 - std::countl_zero(a) : 0 };
 
 		int n{};
 
-		while (n < 62 && m.code(c, len > n, 2u + (u32)std::min(n, 29), 0, 0))
+		while (n < 62 && m.code(c, len > n, 2u + (u32)std::min(n, 29), 0))
 			++n;
 
 		u64 out{ 1 };
@@ -594,7 +641,7 @@ namespace frames {
 
 			const int bit{ (int)((a >> b) & 1) };
 
-			out = (out << 1) | (u64)(k < 2 ? m.code(c, bit, 32u + (u32)std::min(n, 15) * 2 + (u32)k, 0, 0) : c.code(bit, 32768));
+			out = (out << 1) | (u64)(k < 2 ? m.code(c, bit, 32u + (u32)std::min(n, 15) * 2 + (u32)k, 0) : c.code(bit, 32768));
 
 		}
 
@@ -604,7 +651,7 @@ namespace frames {
 	// an escaped position's value against decode_axis's prediction: the distance in 7 digit mantissas (in ulps for
 	// shortest round-trip text) when near, else the raw float. prev_len: per axis, the last distance's bit length.
 	template<typename Coder>
-	float escape_value(Coder& c, cm::model& m, const _escape& e, int a, bool exact_text, int& prev_len, bool encoding) {
+	float escape_value(Coder& c, cm::fixed_model<2>& m, const _escape& e, int a, bool exact_text, int& prev_len, bool encoding) {
 
 		const float x{ e.x }, pred{ e.pred };
 
@@ -614,22 +661,22 @@ namespace frames {
 		const u64 kind{ (u64)a * 2 + exact_text };
 		const u64 ctx[2]{ kind, kind * 64 + (u64)prev_len };
 
-		m.bind(ctx);
+		m.bind<Coder>(ctx);
 
 		if (!std::isnan(e.near[0])) {
 
 			const int k{ encoding ? (x == e.near[0] ? 1 : x == e.near[1] ? 2 : 0) : 0 };
 
-			if (m.code(c, k != 0, 40u, 0, 0)) {
+			if (m.code(c, k != 0, 40u, 0)) {
 
 				prev_len = 34;
 
-				return e.near[m.code(c, k == 2, 41u, 0, 0)];
+				return e.near[m.code(c, k == 2, 41u, 0)];
 			}
 
 		}
 
-		if (!std::isfinite(pred) || !m.code(c, near, 0u, 0, 0)) {
+		if (!std::isfinite(pred) || !m.code(c, near, 0u, 0)) {
 
 			prev_len = 63;
 
@@ -641,7 +688,7 @@ namespace frames {
 
 		int n{};
 
-		while (n < 33 && m.code(c, len > n, 1 + (u32)n, 0, 0))
+		while (n < 33 && m.code(c, len > n, 1 + (u32)n, 0))
 			++n;
 
 		prev_len = n;
@@ -685,7 +732,7 @@ namespace frames {
 
 		const bool want{ encoding && st.at < fd.moves.size() && fd.moves[st.at].sample == i };
 
-		if (!M.ap_event.code(c, want, ctx, (size_t)last * 2 + is_knot, (size_t)last * 2 + is_knot))
+		if (!M.ap_event.code(c, want, ctx, (size_t)last * 2 + is_knot))
 			return;
 
 		autopilot::event e{ want ? fd.moves[st.at++] : autopilot::event{} };
@@ -779,8 +826,15 @@ namespace frames {
 
 		for (size_t f{}; f < frames; ++f) {
 
-			if ((f & 1023) == 0)
+			if ((f & 1023) == 0) {
+
 				c.check_end();
+
+				if constexpr (requires { c.over(); })
+					if (c.over())
+						return;
+
+			}
 
 			const u32 pk{ f ? fd.keys[f - 1] : 0u };
 			const u64 phase{ side.grid.bin(now) };
@@ -838,7 +892,7 @@ namespace frames {
 
 				const size_t set{ (size_t)std::min<u64>(dd, 20) * 3 + (size_t)std::min<u64>(p1, 2) };
 
-				repeated = M.repeat.code(c, encoding ? fd.repeated[f] : 0, ctx, set, set) != 0;
+				repeated = M.repeat.code(c, encoding ? fd.repeated[f] : 0, ctx, set) != 0;
 
 				fd.repeated[f] = repeated;
 
@@ -931,7 +985,7 @@ namespace frames {
 					history[a].fill(mf, dt);
 
 					mf.order = q;
-					mf.first_res = q ? bit_length(first_res) * 2 + (first_res < 0) : 0;
+					mf.first_res = q ? bit_length(first_res) * 2 : 0;
 					mf.accel = mp.n >= 2 ? signed_length(mp.hist[a][0] - mp.hist[a][1]) : 0;
 					mf.vel_gap = mp.n >= 1 ? signed_length(dspace::move_predictor::round_div(mp.hist[a][0] * dspace::move_predictor::ms(pdt),
 						dspace::move_predictor::ms(mp.hist_dt[0])) - pr) : 0;
@@ -972,7 +1026,7 @@ namespace frames {
 
 						const size_t set{ (size_t)std::min<u64>(sb, 15) * 3 + (size_t)other };
 
-						escaped = M.escape.code(c, want, ectx, set, set) != 0;
+						escaped = M.escape.code(c, want, ectx, set) != 0;
 
 						if (escaped) {
 
@@ -1053,24 +1107,21 @@ namespace frames {
 	}
 
 	// a starting state: counters by context hash (p | confidence << 16 | slot << 24), then per model the mixer weights
-	// and apm table, which a model takes only when the sizes match
 	struct _prior {
 		const u32* start;
 		const u32* keys; // the low 32 bits, all a table's index takes
 		const u32* values;
 		const u32* weight_start;
 		const i32* weights;
-		const u32* apm_start;
-		const u16* apm;
 	};
 
 	inline _prior builtin_prior(u32 set) {
 		return { FRAMES_PRIOR_START[set], FRAMES_PRIOR_KEYS, FRAMES_PRIOR_VALUES, FRAMES_PRIOR_WEIGHT_START[set],
-			FRAMES_PRIOR_WEIGHTS, FRAMES_PRIOR_APM_START[set], FRAMES_PRIOR_APM };
+			FRAMES_PRIOR_WEIGHTS };
 	}
 
 	// models: in frames_prior.h order, nullptr where a mode has no such model
-	inline void seed(const std::array<cm::model*, FRAMES_PRIOR_MODELS>& models, const _prior& prior) {
+	inline void seed(const std::array<cm::model*, FRAMES_PRIOR_MODELS>& models, const _prior& prior, bool counters_only = false) {
 
 		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
 
@@ -1083,41 +1134,70 @@ namespace frames {
 
 				const u32 value{ prior.values[j] };
 
-				auto& k{ md->table.line(prior.keys[j])[value >> 24] };
-
-				k.p = (u16)(value & 0xFFFF);
-				k.n = (u16)((value >> 16) & 0xFF);
+				md->table.line(prior.keys[j])[value >> 24] = cm::counter::of(value & 0xFFFF, (value >> 16) & 0xFF);
 
 			}
+
+			if (counters_only)
+				continue;
 
 			const u32 w0{ prior.weight_start[m] }, w1{ prior.weight_start[m + 1] };
 
 			if (md->weights.size() == w1 - w0)
 				std::copy(prior.weights + w0, prior.weights + w1, md->weights.begin());
 
-			const u32 a0{ prior.apm_start[m] }, a1{ prior.apm_start[m + 1] };
+		}
 
-			if (md->refine.t.size() == a1 - a0)
-				std::copy(prior.apm + a0, prior.apm + a1, md->refine.t.begin());
+	}
+
+	inline void seed_fallback(const std::array<cm::model*, FRAMES_PRIOR_MODELS>& models, u32 set) {
+
+		static_assert(FALLBACK_PRIOR_SETS == FRAMES_PRIOR_SETS && FALLBACK_PRIOR_MODELS == FRAMES_PRIOR_MODELS);
+
+		for (u32 m{}; m < FRAMES_PRIOR_MODELS; ++m) {
+
+			cm::model* md{ models[m] };
+
+			if (!md)
+				continue;
+
+			for (u32 j{ FALLBACK_PRIOR_START[set][m] }; j < FALLBACK_PRIOR_START[set][m + 1]; ++j) {
+
+				const u32 value{ FALLBACK_PRIOR_VALUES[j] };
+				md->table.t[value >> 24] = cm::counter::of(value & 0xFFFF, (value >> 16) & 0xFF);
+
+			}
 
 		}
 
 	}
 
-	inline void seed_priors(_models& M, const _side& side) {
-		seed(M.all(), builtin_prior(prior_set(side)));
+	inline void seed_priors(_models& M, const _side& side, bool fallback_only = false, bool balanced = false) {
+		if (fallback_only)
+			seed_fallback(M.all(), prior_set(side));
+		else
+			seed(M.all(), builtin_prior(prior_set(side)), balanced);
 	}
 
 	// the frames, then each axis's escape values in order
-	inline std::vector<u8> encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
-		bool exact_text) {
+	template<typename Encoder = cm::bit_encoder>
+	inline bool encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
+		bool exact_text, size_t limit, std::vector<u8>& out) {
 
-		M.init(frames, side.mode);
-		seed_priors(M, side);
+		if (limit <= 4)
+			return false;
 
-		cm::bit_encoder e{};
+		M.init(frames, side.mode, false, cm::uses_fallback_only<Encoder>);
+		seed_priors(M, side, cm::uses_fallback_only<Encoder>, cm::uses_balanced_prediction<Encoder>);
+
+		Encoder e{};
+
+		e.limit = limit;
 
 		frame_loop(e, M, fd, side, frames, true);
+
+		if (e.over())
+			return false;
 
 		for (int a{}; a < 2; ++a) {
 
@@ -1128,20 +1208,26 @@ namespace frames {
 
 		}
 
-		return e.finish();
+		if (e.over())
+			return false;
+
+		add_to_u8(out, e.finish());
+
+		return true;
 	}
 
 	// decodes the frames on construction, then hands out the escape values as decode_axis asks for them
-	struct _reader {
+	template<typename Decoder>
+	struct _basic_reader {
 
 		_models& M;
-		cm::bit_decoder d;
+		Decoder d;
 		int prev_len[2]{};
 
-		_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
+		_basic_reader(_models& models, std::span<const u8> data, _frame_data& fd, const _side& side, size_t frames) : M{ models }, d{ data } {
 
-			M.init(frames, side.mode);
-			seed_priors(M, side);
+			M.init(frames, side.mode, false, cm::uses_fallback_only<Decoder>);
+			seed_priors(M, side, cm::uses_fallback_only<Decoder>, cm::uses_balanced_prediction<Decoder>);
 
 			frame_loop(d, M, fd, side, frames, false);
 
@@ -1155,6 +1241,10 @@ namespace frames {
 		}
 
 	};
+
+	using _reader = _basic_reader<cm::bit_decoder>;
+	using _balanced_reader = _basic_reader<cm::balanced_bit_decoder>;
+	using _fastest_reader = _basic_reader<cm::fastest_bit_decoder>;
 
 }
 

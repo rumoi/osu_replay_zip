@@ -230,10 +230,10 @@ namespace modes {
 		template<typename Coder>
 		i64 residual(Coder& c, _models& M, i64 r, const u64 (&ctx)[5], int scale) {
 
-			M.res.bind(ctx);
+			M.fruit.res.bind<Coder>(ctx);
 
 			const auto decide = [&](int y, u32 step) {
-				return M.res.code(c, y, step, step, step);
+				return M.fruit.res.code(c, y, step, step);
 			};
 
 			if (decide(r == 0, 0))
@@ -276,7 +276,7 @@ namespace modes {
 					const u64 id{ (u64)k * 4 + (out & ((u64(1) << k) - 1)) };
 					const u64 cx[2]{ (ctx[0] * 64 + (u64)n) * 8 + id, ((u64)n * 8 + id) * 2 + 1 };
 
-					out = (out << 1) | (u64)M.res_bits.code(c, bit, cx, (size_t)id, (size_t)id);
+					out = (out << 1) | (u64)M.fruit.res_bits.code(c, bit, cx, (size_t)id);
 
 				} else
 					out = (out << 1) | (u64)c.code(bit, 32768);
@@ -308,7 +308,7 @@ namespace modes {
 
 			const size_t mset{ (size_t)moved * 32 + (size_t)std::min(run, 15) * 2 + kc };
 
-			if (!M.moved.code(c, encoding && want != x_ord, mctx, mset, mset)) {
+			if (!M.fruit.moved.code(c, encoding && want != x_ord, mctx, mset)) {
 
 				if (!encoding)
 					r.x = x;
@@ -328,7 +328,7 @@ namespace modes {
 			};
 
 			const size_t dset{ (size_t)moved * 8 + (size_t)std::min(run, 7) };
-			const int d{ M.dir.code(c, encoding && (wx > x ? 1 : -1) == dir, dctx, dset, dset) ? dir : -dir };
+			const int d{ M.fruit.dir.code(c, encoding && (wx > x ? 1 : -1) == dir, dctx, dset) ? dir : -dir };
 
 			const float pred{ predict(d, r.keys, r.delta) };
 
@@ -512,7 +512,8 @@ namespace modes {
 	}
 
 	// osu!taiko, osu!catch or osu!mania, as the gamemode says
-	void encode(const _osr& r, orz_state& state) {
+	template<typename Encoder>
+	void encode_profile(const _osr& r, orz_state& state) {
 
 		const kind mode{ mode_of(state.mode()) };
 
@@ -534,12 +535,12 @@ namespace modes {
 
 		frame_time::write_table(head, side.table, grid);
 
-		_models& M{ state.tables.modes };
+		_models M{ state.tables.modes() };
 
-		M.init(R.size(), mode);
-		M.seed(mode);
+		M.init(R.size(), mode, false, cm::uses_fallback_only<Encoder>);
+		M.seed(mode, cm::uses_fallback_only<Encoder>, cm::uses_balanced_prediction<Encoder>);
 
-		cm::bit_encoder e{};
+		Encoder e{};
 
 		code_escapes(e, R, esc, true);
 
@@ -559,7 +560,17 @@ namespace modes {
 
 	}
 
-	bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+	void encode(const _osr& r, orz_state& state) {
+		if (state.file.frame_profile() == _frame_profile::speed)
+			encode_profile<cm::fastest_bit_encoder>(r, state);
+		else if (state.file.frame_profile() == _frame_profile::balanced)
+			encode_profile<cm::balanced_bit_encoder>(r, state);
+		else
+			encode_profile<cm::bit_encoder>(r, state);
+	}
+
+	template<typename Decoder>
+	bool decode_profile(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_bit_view head{ data };
 
@@ -569,7 +580,7 @@ namespace modes {
 			return false;
 		side.exact_text = (encode_info & ORZ_ENCODE_INFO::text_shortest) != 0;
 
-		cm::bit_decoder d{ head.get_tail() };
+		Decoder d{ head.get_tail() };
 
 		std::vector<u8> esc(R.size());
 		std::vector<std::pair<u32, float>> speeds;
@@ -586,14 +597,24 @@ namespace modes {
 
 		}
 
-		_models& M{ tables.modes };
+		_models M{ tables.modes() };
 
-		M.init(R.size(), side.mode);
-		M.seed(side.mode);
+		M.init(R.size(), side.mode, false, cm::uses_fallback_only<Decoder>);
+		M.seed(side.mode, cm::uses_fallback_only<Decoder>, cm::uses_balanced_prediction<Decoder>);
 
 		frame_loop(d, M, R, esc, speeds, side, false);
 
 		return true;
+	}
+
+	bool decode(const _orz_file& file, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+
+		switch (file.frame_profile()) {
+		case _frame_profile::speed: return decode_profile<cm::fastest_bit_decoder>(file.encode_info, data, R, tables);
+		case _frame_profile::balanced: return decode_profile<cm::balanced_bit_decoder>(file.encode_info, data, R, tables);
+		default: return decode_profile<cm::bit_decoder>(file.encode_info, data, R, tables);
+		}
+
 	}
 
 }

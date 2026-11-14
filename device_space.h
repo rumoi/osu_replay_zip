@@ -76,6 +76,12 @@ namespace dspace {
 		float scale, off;
 		bool unrounded_sub; // pos - off stays unrounded (x87 register) before the multiply
 		float window_half, origin;  // absolute: size / 2, screen origin - client origin
+		bool origin_unrounded; // absolute on the desktop, x87: the origin joins L / 65536 * span before that is rounded
+		bool product_rounded; // absolute on the window, x87: (L - 32768) * speed is rounded to float before the rest
+
+		// mouse: the replay's play rate. Frame times are the song's, and a mouse reports in real time: under double time
+		// a frame holds two thirds of the reports its time says. 1, 1.5 (double time) or 0.75 (half time); 0 counts as 1.
+		float rate;
 		bool operator==(const _game_state_model&) const = default;
 	};
 
@@ -117,12 +123,15 @@ namespace dspace {
 		bool operator==(const axis_params&) const = default;
 	};
 
-	// common window sizes
+	// Common window sizes, the likeliest first: by how many players use each, counted over the players of a replay
+	// corpus, each once by their usual window (sizes nobody used keep their place at the end), with 2560x1440 kept
+	// second as it grows more common. The device search tries them in this order, so that what fits several windows
+	// as well lands on the likeliest, and a file names a window by its place here.
 	constexpr int PM_RES[][2]{
-		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1360, 768 }, { 1600, 900 }, { 1280, 720 },
-		{ 1680, 1050 }, { 1920, 1200 }, { 1440, 900 }, { 1280, 800 }, { 1280, 1024 }, { 1024, 768 },
-		{ 800, 600 }, { 3840, 2160 }, { 2560, 1080 }, { 3440, 1440 }, { 1536, 864 }, { 1280, 960 },
-		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1152, 864 }, { 1600, 1024 }, { 1920, 1440 },
+		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1600, 900 }, { 1680, 1050 }, { 1024, 768 },
+		{ 1440, 900 }, { 1280, 800 }, { 2560, 1080 }, { 1280, 1024 }, { 1920, 1440 }, { 1360, 768 },
+		{ 1152, 864 }, { 800, 600 }, { 1280, 960 }, { 1920, 1200 }, { 3840, 2160 }, { 3440, 1440 },
+		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1600, 1024 }, { 1280, 720 }, { 1536, 864 },
 	};
 
 	FORCEINLINE constexpr auto playfield(int W, int H) {
@@ -187,6 +196,61 @@ namespace dspace {
 		axis_model axis[2];
 	};
 
+	// a tablet's own lattice under an axis's coded integers: value(j) = (A * j + C) >> 32
+	struct _native_grid {
+		bool on;
+		u64 A; // 32:32 fixed p
+		i64 C; // 32:32 fixed p
+	};
+
+	// The hardware and software configuration behind a coding model (orz_setup.h): what an encode says of the player's
+	// setup, and what a caller hands back as a hint for the player's next replays. A hint is not trusted unless it is
+	// forced: the device it stands for is a candidate for the search, and has to fit the replay as any other does.
+	// Unknown parts are 0.
+	struct _setup {
+
+		enum class input : u8 {
+			unknown,
+			pixels, // whole window pixels: the system cursor, or a raw mouse at sensitivity 1
+			mouse,  // raw relative movement
+			tablet, // raw absolute positions
+			lattice, // any other input, by the positions it can give (lattice): a game that is not stable says its own
+		};
+
+		input kind{};
+
+		u32 window[2]{}; // the game window
+
+		// sensitivity (mouse, and a tablet's in game), mouse reports per second: 1 is one per frame, the game without raw
+		// input, which moves by a frame's whole movement at once
+		float sens{}, poll{};
+
+		// tablet
+		u32 desktop[2]{}; // pixels the coded integers cover: one monitor, or the virtual desktop
+		i32 window_at[2]{}; // the window's position within them, as coded
+		bool to_window[2]{}; // the range is mapped onto the window itself (the game's option), not through the desktop
+		double grid_step[2]{}; // the tablet's lattice as coded: coded integers per tablet count, 0: none
+
+		// the game's float arithmetic as each axis was coded (one game has one, but an axis that fits either way keeps
+		// what it was coded with): the x87 unit at 53 bits, pos - off kept unrounded, the screen origin added unrounded,
+		// the window mapping's product rounded
+		bool x87[2]{}, unrounded_sub[2]{}, origin_unrounded[2]{}, product_rounded[2]{};
+
+		// lattice: an axis's positions are (a * k + b) / D for whole k, as float((a * k + b) / (double)D)
+		rational_params lattice[2]{};
+
+		// the share of each axis's positions the model did not give: as a hint, the setup is taken again while it fits
+		// about as well
+		float missed[2]{};
+
+		// as a hint: the replay was recorded with this very setup, as the game that recorded it says. It is coded with
+		// the setup's device without a search, and a position that device does not give is escaped: a wrong setup costs
+		// size, never the replay.
+		bool force{};
+
+		bool operator==(const _setup&) const = default;
+	};
+
 	FORCEINLINE float rational_value(const axis_params& p, i64 k) {
 		return (float)(((double)p.device.rational.a * (double)k + p.device.rational.b) / (double)p.device.rational.D);
 	}
@@ -213,9 +277,17 @@ namespace dspace {
 				return a * p.device.absolute.span;
 			}
 
-			const float a{ (float)((double)(L - 32768) * p.device.absolute.speed) };
+			// at 53 bits the whole expression is rounded once, when it is stored: the game's cast of the product to float
+			// does nothing to a value the x87 unit already holds as one. Some clients do round it there (two in three
+			// replays do not): product_rounded.
+			if (p.game.product_rounded) {
 
-			return (float)(((double)a + 32768.0) / 65536.0 * p.device.absolute.span);
+				const float a{ (float)((double)(L - 32768) * p.device.absolute.speed) };
+
+				return (float)(((double)a + 32768.0) / 65536.0 * p.device.absolute.span);
+			}
+
+			return (float)(((double)(L - 32768) * (double)p.device.absolute.speed + 32768.0) / 65536.0 * p.device.absolute.span);
 		}
 
 		// ToScreenCoords: (float)L / 65536 * width + screen.X; then - ClientBounds.X; then (pos - W/2) * speed + W/2
@@ -228,18 +300,24 @@ namespace dspace {
 
 			a = a - (-p.game.origin);
 
-			if (p.device.absolute.speed != 1.f) {
-				a = a - p.game.window_half;
-				a = a * p.device.absolute.speed;
-				a = a + p.game.window_half;
-			}
+			// the speed is applied about the window's middle whatever it is: at 24 bits the subtraction and the addition
+			// each round, so even a speed of 1 changes the value
+			a = a - p.game.window_half;
+			a = a * p.device.absolute.speed;
+			a = a + p.game.window_half;
 
 			return a;
 		}
 
-		float a{ (float)((double)L / 65536.0 * p.device.absolute.span) };
+		// ToScreenCoords gives (float)(L / 65536 * width + screen.X): on the x87 unit the sum is rounded once, so an origin
+		// that is the screen's (a client at 0) never sees the product rounded
+		float a{ p.game.origin_unrounded ?
+			(float)((double)L / 65536.0 * p.device.absolute.span + p.game.origin) :
+			(float)((double)L / 65536.0 * p.device.absolute.span)
+		};
 
-		a = (float)((double)a + p.game.origin);
+		if (!p.game.origin_unrounded)
+			a = (float)((double)a + p.game.origin);
 
 		if (p.device.absolute.speed != 1.f)
 			a = (float)(((double)a - p.game.window_half) * p.device.absolute.speed + p.game.window_half);
@@ -331,7 +409,9 @@ namespace dspace {
 
 		const i64 n{ std::abs(dk) };
 
-		const double want{ std::clamp((double)dt * p.device.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
+		const double real_ms{ p.game.rate > 0.f ? (double)dt / (double)p.game.rate : (double)dt };
+
+		const double want{ std::clamp(real_ms * p.device.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
 
 		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
@@ -1145,6 +1225,9 @@ namespace dspace {
 
 	static_assert(std::size(POLL_RATES) == 7);
 
+	// a mouse axis's play rate code past the game's three: the rate follows as float bits
+	constexpr u32 RATE_CUSTOM{ 3 };
+
 	inline void write_poll(float poll, bit_stream& o) {
 
 		u32 k{};
@@ -1185,6 +1268,14 @@ namespace dspace {
 
 			write_setting(p.device.mouse.sens, o);
 			write_poll(p.device.mouse.poll, o);
+			// the play rate: one of the game's three, or any other as its float's bits, the sign left out
+			const u32 rate{ p.game.rate == 1.5f ? 1u : p.game.rate == 0.75f ? 2u : p.game.rate == 1.f || !(p.game.rate > 0.f) ? 0u : RATE_CUSTOM };
+
+			o.write_bits<2>(rate);
+
+			if (rate == RATE_CUSTOM)
+				o.write_bits<31>(std::bit_cast<u32>(p.game.rate));
+
 			o.push_back(p.game.unrounded_sub);
 			write_field(p.game, axis, o);
 
@@ -1195,6 +1286,9 @@ namespace dspace {
 			o.push_back(p.device.absolute.mapping == tablet_mapping::window);
 			o.push_back(p.game.fp == float_unit::x87);
 			o.push_back(p.game.unrounded_sub);
+
+			// one bit for how the x87 unit rounds along the mapping: the origin's on the desktop, the product's on the window
+			o.push_back(p.device.absolute.mapping == tablet_mapping::window ? p.game.product_rounded : p.game.origin_unrounded);
 
 			write_u((u32)p.device.absolute.span, o);
 			write_u((u32)rc::zz((int)p.game.origin), o);
@@ -1231,6 +1325,19 @@ namespace dspace {
 			if (p.device.mouse.poll > 8000.f)
 				return false;
 
+			constexpr float RATES[]{ 1.f, 1.5f, 0.75f };
+
+			if (const u32 rate{ (u32)in.read_bits<2>() }; rate != RATE_CUSTOM)
+				p.game.rate = RATES[rate];
+			else {
+
+				p.game.rate = std::bit_cast<float>((u32)in.read_bits<31>());
+
+				if (!(p.game.rate > 0.f) || !std::isfinite(p.game.rate))
+					return false;
+
+			}
+
 			p.game.unrounded_sub = in.read_bits<1>() != 0;
 
 			if (!read_field(in, axis, p.game))
@@ -1243,6 +1350,12 @@ namespace dspace {
 			p.device.absolute.mapping = in.read_bits<1>() ? tablet_mapping::window : tablet_mapping::desktop;
 			p.game.fp = in.read_bits<1>() ? float_unit::x87 : float_unit::sse;
 			p.game.unrounded_sub = in.read_bits<1>() != 0;
+
+			if (p.device.absolute.mapping == tablet_mapping::window)
+				p.game.product_rounded = in.read_bits<1>() != 0;
+			else
+				p.game.origin_unrounded = in.read_bits<1>() != 0;
+
 			p.device.absolute.span = (float)read_u(in);
 			p.game.origin = (float)rc::unzz(read_u(in));
 			p.game.window_half = (float)read_u(in);
@@ -1362,8 +1475,12 @@ namespace dspace {
 		}
 
 		// n / m rounded half away from zero, m > 0
-		static i64 round_div(i64 n, i64 m) {
-			return n >= 0 ? (n + m / 2) / m : -((-n + m / 2) / m);
+		static FORCEINLINE i64 round_div(i64 n, i64 m) {
+
+			const u64 a{ (u64)std::abs(n) + (u64)m / 2 };
+			const u64 q{ (a | (u64)m) >> 32 ? a / (u64)m : (u32)a / (u32)m };
+
+			return n >= 0 ? (i64)q : -(i64)q;
 		}
 
 		i64 window(const int a, const int dt) const {
