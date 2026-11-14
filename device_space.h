@@ -767,8 +767,31 @@ namespace dspace {
 	// bounds: optional precomputed text_bounds of vals
 	// max_escapes: give up past this many (streams incomplete)
 	// decoded: optional, gets what decode_axis will return per frame
-	inline axis_streams encode_axis(const axis_params& p, std::span<const float> vals, std::span<const int> dt,
-		bool exact_text, std::span<const dotnet::text_bounds> bounds = {}, size_t max_escapes = SIZE_MAX, float* decoded = nullptr) {
+	// one axis's samples as views: the values, their text bounds, the time since the previous sample
+	struct _axis_samples {
+
+		std::span<const float> vals;
+		std::span<const dotnet::text_bounds> bounds;
+		std::span<const int> dt;
+
+		size_t size() const {
+			return vals.size();
+		}
+
+		_axis_samples first(size_t n) const {
+			return { vals.first(n), bounds.first(n), dt.first(n) };
+		}
+
+		_axis_samples sub(size_t from, size_t n) const {
+			return { vals.subspan(from, n), bounds.subspan(from, n), dt.subspan(from, n) };
+		}
+
+	};
+
+	inline axis_streams encode_axis(const axis_params& p, const _axis_samples& samples, bool exact_text, size_t max_escapes = SIZE_MAX,
+		float* decoded = nullptr) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		axis_streams o{};
 		o.K.resize(vals.size());
@@ -824,7 +847,7 @@ namespace dspace {
 
 		const auto bound = [&](const size_t i) {
 
-			return bounds.empty() ? dotnet::text_bounds{ vals[i], exact_text } : bounds[i];
+			return bounds[i];
 		};
 
 		if (p.device.kind == axis_mode::text) {
@@ -986,7 +1009,9 @@ namespace dspace {
 	}
 
 	// each segment encoded on its own, joined in frame order
-	inline axis_streams encode_axis_model(const axis_model& m, std::span<const float> vals, std::span<const int> dt, bool exact_text) {
+	inline axis_streams encode_axis_model(const axis_model& m, const _axis_samples& samples, bool exact_text) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		axis_streams o{};
 		o.K.resize(vals.size());
@@ -1001,8 +1026,7 @@ namespace dspace {
 				continue;
 
 			const auto part{
-				encode_axis(m.seg[k].p, vals.subspan(from, to - from), dt.subspan(from, to - from),
-					exact_text, {}, SIZE_MAX, o.decoded.data() + from)
+				encode_axis(m.seg[k].p, samples.sub(from, to - from), exact_text, SIZE_MAX, o.decoded.data() + from)
 			};
 
 			std::copy(part.K.begin(), part.K.end(), o.K.begin() + from);

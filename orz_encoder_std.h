@@ -795,8 +795,10 @@ namespace standard {
 		return a.param.device.kind == dspace::axis_mode::rational ? dspace::rational_value(a.param, L) : dspace::absolute_field(a, L);
 	}
 
-	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const float> vals,
+	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, const dspace::_axis_samples& samples,
 		bool exact_text, const _native_grid& g) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		const dspace::_axis a{ p };
 
@@ -828,7 +830,7 @@ namespace standard {
 
 			prev = Ls;
 
-			const dotnet::text_bounds b{ vals[i], exact_text };
+			const dotnet::text_bounds& b{ bounds[i] };
 
 			if (held && dk == 0) {
 
@@ -1064,8 +1066,7 @@ namespace standard {
 	};
 
 	inline _positions position_streams(
-		const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, orz_state& state,
+		const dspace::_model_info& m, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, orz_state& state,
 		size_t limit = SIZE_MAX, const autopilot::_params& ap = {},
 		const std::vector<autopilot::event>& moves = {}
 	) {
@@ -1075,7 +1076,7 @@ namespace standard {
 		p.autopilot = ap.on;
 
 		for (int a{}; a < 2; ++a)
-			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text());
+			p.st[a] = dspace::encode_axis_model(m.axis[a], samples[a], state.exact_text());
 
 		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream model_head{};
@@ -1107,7 +1108,7 @@ namespace standard {
 					if (!hinted.on)
 						continue;
 
-					auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), hinted) };
+					auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], state.exact_text(), hinted) };
 
 					// a finer grid than the tablet's holds the positions too, at a higher cost: on the tablet's own grid
 					// neighbouring counts are the most common gap between the counts a replay visits
@@ -1141,14 +1142,14 @@ namespace standard {
 				if (!grid[a].on)
 					continue;
 
-				on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), grid[a]);
+				on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], state.exact_text(), grid[a]);
 
 				// a driver spreads a whole number of tablet counts over its output range (65535, a doubled 32767, 65536),
 				// so a fitted step near such a one is that one. The integers of a lattice of N counts are on one of
 				// range - N too, and the fit can land on either: the tablet's own is the one its counts move smoothly on.
 				const double step{ (double)grid[a].A / 4294967296. };
 
-				size_t cost{ grid_cost(m.axis[a].seg[0].p, grid[a], on_grid[a], dt, a, state.exact_text()) };
+				size_t cost{ grid_cost(m.axis[a].seg[0].p, grid[a], on_grid[a], samples[a].dt, a, state.exact_text()) };
 
 				for (const double range : { 65535., 65534., 65536. }) {
 
@@ -1164,9 +1165,9 @@ namespace standard {
 						if (!exact.on || exact.A == grid[a].A)
 							continue;
 
-						auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), exact) };
+						auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], state.exact_text(), exact) };
 
-						if (const size_t c{ grid_cost(m.axis[a].seg[0].p, exact, st, dt, a, state.exact_text()) }; c < cost) {
+						if (const size_t c{ grid_cost(m.axis[a].seg[0].p, exact, st, samples[a].dt, a, state.exact_text()) }; c < cost) {
 
 							cost = c;
 							grid[a] = exact;
@@ -1348,18 +1349,18 @@ namespace standard {
 	}
 
 	// the replay's frames with autopilot moves in place of a device model
-	inline _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
-		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state, size_t limit = SIZE_MAX) {
+	inline _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const dspace::_axis_samples (&samples)[2],
+		const _shared_streams& shared, orz_state& state, size_t limit = SIZE_MAX) {
 
 		size_t covered{};
 
 		const auto moves{ autopilot::fitter{ s, ap }.fit(covered) };
 
-		return position_streams(all_text(), vals, dt, shared, state, limit, ap, moves);
+		return position_streams(all_text(), samples, shared, state, limit, ap, moves);
 	}
 
 	// mouse axes differ, try each other and keep the winners
-	inline void try_other_mouse(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	inline void try_other_mouse(orz_state& state, const dspace::_axis_samples (&samples)[2],
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		const bool differ{
@@ -1375,7 +1376,7 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
+			size_t best{ axis_cost(ws[a], samples[a].dt, a, state.exact_text()) };
 
 			for (const auto& [W, H] : PM_RES) {
 
@@ -1388,12 +1389,12 @@ namespace standard {
 
 				q.game.off = a ? oy : ox;
 
-				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
+				auto st{ dspace::encode_axis(q, samples[a], state.exact_text(), samples[a].size() / 2) };
 
-				if (st.escapes.size() * 2 > vals[a].size())
+				if (st.escapes.size() * 2 > samples[a].size())
 					continue;
 
-				if (const size_t c{ axis_cost(st, dt, a, state.exact_text()) }; c < best) {
+				if (const size_t c{ axis_cost(st, samples[a].dt, a, state.exact_text()) }; c < best) {
 
 					best = c;
 					*to[a] = q;
@@ -1408,8 +1409,10 @@ namespace standard {
 	}
 
 	// x's device on y (the same window, y's offset), taken when it misses at most 0.1% of y's samples
-	inline bool device_from_x(orz_state& state, const std::vector<float>& vals, const std::vector<int>& dt, const dspace::axis_params& px,
-		dspace::axis_params& py, dspace::axis_streams& streams) {
+	inline bool device_from_x(orz_state& state, const dspace::_axis_samples& samples, const dspace::axis_params& px, dspace::axis_params& py,
+		dspace::axis_streams& streams) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		std::vector<dspace::axis_params> cands;
 
@@ -1474,7 +1477,7 @@ namespace standard {
 
 		for (const auto& q : cands) {
 
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), {}, limit + 1) };
+			auto st{ dspace::encode_axis(q, samples, state.exact_text(), limit + 1) };
 
 			if (st.escapes.size() + st.repeats <= limit) {
 
@@ -1489,7 +1492,7 @@ namespace standard {
 		return false;
 	}
 
-	inline void share_mouse(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	inline void share_mouse(orz_state& state, const dspace::_axis_samples (&samples)[2],
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		dspace::axis_params* p[2]{ &px, &py };
@@ -1501,7 +1504,7 @@ namespace standard {
 			if (p[m]->device.kind != dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::none)
 				continue;
 
-			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
+			size_t best{ axis_cost(ws[a], samples[a].dt, a, state.exact_text()) };
 
 			for (const auto& [W, H] : PM_RES) {
 
@@ -1514,12 +1517,12 @@ namespace standard {
 
 				q.game.off = a ? oy : ox;
 
-				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
+				auto st{ dspace::encode_axis(q, samples[a], state.exact_text(), samples[a].size() / 2) };
 
-				if (st.escapes.size() * 2 > vals[a].size())
+				if (st.escapes.size() * 2 > samples[a].size())
 					continue;
 
-				if (const size_t c{ axis_cost(st, dt, a, state.exact_text()) }; c < best) {
+				if (const size_t c{ axis_cost(st, samples[a].dt, a, state.exact_text()) }; c < best) {
 
 					best = c;
 					*p[a] = q;
@@ -1557,8 +1560,7 @@ namespace standard {
 		return false;
 	}
 
-	inline bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
+	inline bool detect_device_model(orz_state& state, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
 		// whole replay, one model per axis
 		dspace::_model_info whole{};
@@ -1569,29 +1571,29 @@ namespace standard {
 
 			dspace::axis_params px, py;
 
-			px = detect_axis_model(state, vals[0], dt, 0, nullptr, ws[0]);
+			px = detect_axis_model(state, samples[0], 0, nullptr, ws[0]);
 
 			// y's own search only when x's device does not fit it (not osu!catch, whose y is the catcher's fixed height)
 			if (px.device.kind != dspace::axis_mode::none) {
 
-				if (game_mode(state.mode()) == 2 || !device_from_x(state, vals[1], dt, px, py, ws[1]))
-					py = detect_axis_model(state, vals[1], dt, 1, &px, ws[1]);
+				if (game_mode(state.mode()) == 2 || !device_from_x(state, samples[1], px, py, ws[1]))
+					py = detect_axis_model(state, samples[1], 1, &px, ws[1]);
 
 			} else {
 
 				// x found nothing: detect y on its own, then retry x with y's mapping
-				py = detect_axis_model(state, vals[1], dt, 1, nullptr, ws[1]);
+				py = detect_axis_model(state, samples[1], 1, nullptr, ws[1]);
 
 				if (py.device.kind == dspace::axis_mode::absolute)
-					px = detect_axis_model(state, vals[0], dt, 0, &py, ws[0]);
+					px = detect_axis_model(state, samples[0], 0, &py, ws[0]);
 
 			}
 
 			if (px.device.kind != dspace::axis_mode::none || py.device.kind != dspace::axis_mode::none)
-				refine_window(state, vals, dt, px, py, ws);
+				refine_window(state, samples, px, py, ws);
 
-			try_other_mouse(state, vals, dt, px, py, ws);
-			share_mouse(state, vals, dt, px, py, ws);
+			try_other_mouse(state, samples, px, py, ws);
+			share_mouse(state, samples, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
@@ -1604,7 +1606,7 @@ namespace standard {
 		bool try_segments{ !whole_ok };
 
 		for (int a{}; a < 2 && whole_ok; ++a)
-			try_segments |= (ws[a].escapes.size() + ws[a].repeats) * 100 > vals[a].size() * 3;
+			try_segments |= (ws[a].escapes.size() + ws[a].repeats) * 100 > samples[a].size() * 3;
 
 		// shortest round-trip text (osu!lazer) dont gain from segments
 		// lazer will need to be handled properly in the future if we want higher gain
@@ -1616,7 +1618,7 @@ namespace standard {
 		if (whole_any) {
 
 			info = text_filled(whole);
-			best = position_streams(info, vals, dt, shared, state);
+			best = position_streams(info, samples, shared, state);
 			found = true;
 
 		}
@@ -1630,14 +1632,14 @@ namespace standard {
 				return whole.axis[a].seg[0].p.device.kind != dspace::axis_mode::mouse;
 			};
 
-			seg.axis[0] = segment_axis(state, vals[0], dt, 0, nullptr, whole.axis[0].all_none(), desktops(0));
-			seg.axis[1] = segment_axis(state, vals[1], dt, 1, &seg.axis[0], whole.axis[1].all_none(), desktops(1));
+			seg.axis[0] = segment_axis(state, samples[0], 0, nullptr, whole.axis[0].all_none(), desktops(0));
+			seg.axis[1] = segment_axis(state, samples[1], 1, &seg.axis[0], whole.axis[1].all_none(), desktops(1));
 
 			if (!seg.axis[0].all_none() || !seg.axis[1].all_none()) {
 
 				const auto filled{ text_filled(seg) };
 
-				auto p{ position_streams(filled, vals, dt, shared, state, found ? best.size() : SIZE_MAX) };
+				auto p{ position_streams(filled, samples, shared, state, found ? best.size() : SIZE_MAX) };
 
 				if (!found || p.size() < best.size()) {
 
@@ -1697,6 +1699,20 @@ namespace standard {
 
 		}
 
+		// each sample's text bounds, once per replay: detection and every candidate share them
+		std::vector<dotnet::text_bounds> bounds[2];
+
+		for (int a{}; a < 2; ++a) {
+
+			bounds[a].reserve(vals[a].size());
+
+			for (const float v : vals[a])
+				bounds[a].push_back(dotnet::text_bounds{ v, state.exact_text() });
+
+		}
+
+		const dspace::_axis_samples samples[2]{ { vals[0], bounds[0], dt }, { vals[1], bounds[1], dt } };
+
 		dspace::_model_info info{ all_text() };
 		_positions best{};
 
@@ -1707,16 +1723,16 @@ namespace standard {
 		const auto ap_samples{ try_autopilot ? autopilot_samples(r, shared, state.exact_text()) : std::vector<autopilot::sample>{} };
 
 		if (const auto ap{ try_autopilot ? autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) : autopilot::_params{} }; ap.on)
-			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
+			best = autopilot_streams(ap_samples, ap, samples, shared, state);
 		else {
 
 			// a forced hint's device is the model, with no search
 			const bool forced{ forced_model(state, info) };
 
 			if (forced)
-				best = position_streams(info, vals, dt, shared, state);
+				best = position_streams(info, samples, shared, state);
 
-			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best)) };
+			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, samples, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
@@ -1726,7 +1742,7 @@ namespace standard {
 
 			if (!forced && (!has_model || misses(0) || misses(1))) {
 
-				auto text{ position_streams(all_text(), vals, dt, shared, state, has_model ? best.size() + 1 : SIZE_MAX) };
+				auto text{ position_streams(all_text(), samples, shared, state, has_model ? best.size() + 1 : SIZE_MAX) };
 
 				if (!has_model || text.size() <= best.size()) {
 
@@ -1746,7 +1762,7 @@ namespace standard {
 
 				if (const auto search{ try_autopilot ? search_autopilot(ap_samples) : autopilot::_params{} }; search.on) {
 
-					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state, best.size()) };
+					auto moves{ autopilot_streams(ap_samples, search, samples, shared, state, best.size()) };
 
 					if (moves.size() < best.size())
 						best = std::move(moves);

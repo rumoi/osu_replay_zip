@@ -459,12 +459,12 @@ namespace standard {
 		return bound < 40.0 * 1e15 ? (size_t)(bound / 40.0) : SIZE_MAX;
 	}
 
-	static prefix_result prefix_eval(const orz_state& state, const dspace::axis_params& p, std::span<const float> vals,
-		std::span<const int> dt, std::span<const dotnet::text_bounds> bounds, size_t n, size_t max_escapes = SIZE_MAX) {
+	static prefix_result prefix_eval(const orz_state& state, const dspace::axis_params& p, const dspace::_axis_samples& samples, size_t n,
+		size_t max_escapes = SIZE_MAX) {
 
-		n = std::min(n, vals.size());
+		n = std::min(n, samples.size());
 
-		const auto o{ dspace::encode_axis(p, vals.first(n), dt.first(n), state.exact_text(), bounds.first(n), max_escapes) };
+		const auto o{ dspace::encode_axis(p, samples.first(n), state.exact_text(), max_escapes) };
 
 		if (o.escapes.size() > max_escapes)
 			return { INFINITY, o.escapes.size() };
@@ -536,9 +536,9 @@ namespace standard {
 	}
 
 	// the score if below bound, else infinity
-	static double prefix_score(const orz_state& state, const dspace::axis_params& p, std::span<const float> vals,
-		std::span<const int> dt, std::span<const dotnet::text_bounds> bounds, size_t n, double bound = INFINITY) {
-		return prefix_eval(state, p, vals, dt, bounds, n, escape_cap(bound)).score;
+	static double prefix_score(const orz_state& state, const dspace::axis_params& p, const dspace::_axis_samples& samples, size_t n,
+		double bound = INFINITY) {
+		return prefix_eval(state, p, samples, n, escape_cap(bound)).score;
 	}
 
 	FORCEINLINE bool near_grid(const double v, const double step, const double tol) {
@@ -1165,8 +1165,9 @@ namespace standard {
 	// a little (a tablet around 0.1%), so one that says how much it missed where it came from is held to about that,
 	// up to the 1% at which the search itself looks further. The setups of a player's replays often differ in a
 	// setting, so a mouse's polling rate is searched as it is for any mouse.
-	static bool hinted_axis(orz_state& state, std::span<const float> vals, std::span<const int> dt, int axis,
-		std::span<const dotnet::text_bounds> bounds, dspace::axis_params& p, dspace::axis_streams& streams) {
+	static bool hinted_axis(orz_state& state, const dspace::_axis_samples& samples, int axis, dspace::axis_params& p, dspace::axis_streams& streams) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		float missed{};
 
@@ -1181,7 +1182,7 @@ namespace standard {
 
 			const size_t limit{ limit_of(q) };
 
-			st = dspace::encode_axis(q, vals, dt, state.exact_text(), bounds, limit + 1);
+			st = dspace::encode_axis(q, samples, state.exact_text(), limit + 1);
 
 			if (st.escapes.size() + st.repeats > limit || shared_factor(st))
 				return false;
@@ -1215,7 +1216,7 @@ namespace standard {
 
 				constexpr size_t PREFIX{ 2000 };
 
-				double best{ prefix_score(state, q, vals, dt, bounds, PREFIX) };
+				double best{ prefix_score(state, q, samples, PREFIX) };
 
 				auto r{ q };
 
@@ -1223,7 +1224,7 @@ namespace standard {
 
 					const auto t{ at_rate(q, rate) };
 
-					if (const double sc{ prefix_score(state, t, vals, dt, bounds, PREFIX, best) }; sc < best) {
+					if (const double sc{ prefix_score(state, t, samples, PREFIX, best) }; sc < best) {
 
 						best = sc;
 						r = t;
@@ -1237,7 +1238,7 @@ namespace standard {
 
 					const size_t limit{ limit_of(r) };
 
-					auto rs{ dspace::encode_axis(r, vals, dt, state.exact_text(), bounds, limit + 1) };
+					auto rs{ dspace::encode_axis(r, samples, state.exact_text(), limit + 1) };
 
 					if (rs.escapes.size() + rs.repeats <= limit && !shared_factor(rs)) {
 
@@ -1267,8 +1268,9 @@ namespace standard {
 
 	// tries to find the best model for one axis.
 	// failing to find one is the huge perf problem - having to try and bruteforce an acceptable solution
-	static dspace::axis_params detect_axis_model(orz_state& state, std::span<const float> vals, std::span<const int> dt,
-		int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false, double fit_s = 0., double fit_c = 0.) {
+	static dspace::axis_params detect_axis_model(orz_state& state, const dspace::_axis_samples& samples, int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false, double fit_s = 0., double fit_c = 0.) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		const dspace::axis_params none{};
 
@@ -1277,15 +1279,10 @@ namespace standard {
 		if (vals.size() < 64)
 			return none;
 
-		std::vector<dotnet::text_bounds> bounds(vals.size());
-
-		for (size_t i{}; i < vals.size(); ++i)
-			bounds[i] = dotnet::text_bounds{ vals[i], state.exact_text() };
-
 		const std::span<const float> p{ vals.subspan(2) };
 
 		// a hinted device that fits is taken as it is, no search
-		if (dspace::axis_params q; !refine && hinted_axis(state, vals, dt, axis, bounds, q, streams))
+		if (dspace::axis_params q; !refine && hinted_axis(state, samples, axis, q, streams))
 			return q;
 
 		// no step may be found here even though the other axis found a mapping
@@ -1317,7 +1314,7 @@ namespace standard {
 
 			const size_t limit{ vals.size() / 1000 };
 
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), bounds, limit + 1) };
+			auto st{ dspace::encode_axis(q, samples, state.exact_text(), limit + 1) };
 
 			// one pixel of a window H high is 480 / H field units
 			const double height{ 480. * (double)q.device.rational.D / (double)q.device.rational.a };
@@ -1401,7 +1398,7 @@ namespace standard {
 
 				for (u32 i{}; i < mouse.size(); ++i) {
 
-					const auto r{ prefix_eval(state, mouse[i], vals, dt, bounds, n / 8) };
+					const auto r{ prefix_eval(state, mouse[i], samples, n / 8) };
 
 					order[i] = { r.score, i };
 					fewest = std::min(fewest, r.escapes);
@@ -1421,7 +1418,7 @@ namespace standard {
 					if (low > listed_best)
 						break;
 
-					const auto r{ prefix_eval(state, mouse[i], vals, dt, bounds, n, escape_cap(listed_best)) };
+					const auto r{ prefix_eval(state, mouse[i], samples, n, escape_cap(listed_best)) };
 
 					if (r.score == INFINITY)
 						continue;
@@ -1476,7 +1473,7 @@ namespace standard {
 						if (rate == listed_rate)
 							continue;
 
-						if (const double sc{ prefix_score(state, at_rate(mouse[i], rate), vals, dt, bounds, n, r.score) }; sc < r.score) {
+						if (const double sc{ prefix_score(state, at_rate(mouse[i], rate), samples, n, r.score) }; sc < r.score) {
 
 							r.score = sc;
 							r.rate = rate;
@@ -1533,9 +1530,9 @@ namespace standard {
 			const auto tablet_eval = [&](const dspace::axis_params& q, size_t max_escapes) {
 
 				if (informative)
-					return prefix_eval(state, q, tv, tdt, tb, tv.size(), max_escapes);
+					return prefix_eval(state, q, { tv, tb, tdt }, tv.size(), max_escapes);
 
-				return prefix_eval(state, q, vals, dt, bounds, 400, max_escapes);
+				return prefix_eval(state, q, samples, 400, max_escapes);
 
 			};
 
@@ -1551,7 +1548,7 @@ namespace standard {
 				constexpr size_t N{ 400 };
 
 				for (const auto& q : cands) {
-					if (clean = (prefix_eval(state, q, vals, dt, bounds, N, (N - 1) / 100).escapes * 100 < N))
+					if (clean = (prefix_eval(state, q, samples, N, (N - 1) / 100).escapes * 100 < N))
 						break;
 				}
 
@@ -1729,8 +1726,8 @@ namespace standard {
 					q.game.fp = dspace::float_unit(order[i].second & 1);
 
 					const double sc{ rv.empty() ?
-						prefix_score(state, q, vals, dt, bounds, PREFIX) :
-						prefix_score(state, q, rv, rdt, rb, rv.size())
+						prefix_score(state, q, samples, PREFIX) :
+						prefix_score(state, q, { rv, rb, rdt }, rv.size())
 					};
 
 					if (std::isfinite(sc))
@@ -1890,7 +1887,7 @@ namespace standard {
 		const auto consider = [&](const dspace::axis_params& q, bool variant = false) {
 
 			// a model that escapes most frames is worse than text ordinals (the encode stops once it has)
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), bounds, vals.size() / 2) };
+			auto st{ dspace::encode_axis(q, samples, state.exact_text(), samples.size() / 2) };
 
 			if (st.escapes.size() * 2 > vals.size())
 				return;
@@ -1926,7 +1923,7 @@ namespace standard {
 
 				constexpr size_t N{ 1000 };
 
-				double best{ prefix_score(state, chosen, vals, dt, bounds, N) };
+				double best{ prefix_score(state, chosen, samples, N) };
 				i64 best_j{};
 
 				const auto at = [&](i64 j) {
@@ -1951,7 +1948,7 @@ namespace standard {
 
 						const auto q{ at(from + k * stride) };
 
-						if (const double sc{ prefix_score(state, q, vals, dt, bounds, N, best) }; sc < best) {
+						if (const double sc{ prefix_score(state, q, samples, N, best) }; sc < best) {
 
 							best = sc;
 							best_j = from + k * stride;
@@ -1974,7 +1971,7 @@ namespace standard {
 
 			dspace::axis_streams rs;
 
-			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::none) {
+			if (const auto r{ detect_axis_model(state, samples, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::none) {
 
 				if (const size_t cost{ device_cost(state, r, rs, dt, axis) }; cost < chosen_cost) {
 
@@ -1996,7 +1993,7 @@ namespace standard {
 		return chosen;
 	}
 
-	static void refine_window(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	static void refine_window(orz_state& state, const dspace::_axis_samples (&samples)[2],
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		dspace::axis_params* pa[2]{ &px, &py };
@@ -2014,7 +2011,7 @@ namespace standard {
 		if (!lattice(px) && !lattice(py))
 			return;
 
-		if ((ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= vals[0].size())
+		if ((ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= samples[0].size())
 			return;
 
 		dspace::axis_params tab{ t >= 0 ? *pa[t] : px.device.kind == dspace::axis_mode::absolute ? px : py };
@@ -2024,7 +2021,7 @@ namespace standard {
 		tab.device.absolute.mapping = dspace::tablet_mapping::window;
 		tab.game.origin = 0.f;
 
-		const std::span<const float> p[2]{ std::span<const float>{ vals[0] }.subspan(2), std::span<const float>{ vals[1] }.subspan(2) };
+		const std::span<const float> p[2]{ samples[0].vals.subspan(2), samples[1].vals.subspan(2) };
 
 		double sx{}, sy{}, c{};
 
@@ -2095,22 +2092,22 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			auto pick{ spread_frames(informative_frames(state, vals[a]), 128) };
+			auto pick{ spread_frames(informative_frames(state, samples[a].vals), 128) };
 
 			if (pick.size() < 32) {
 
 				pick.clear();
 
-				for (size_t i{ 2 }; i < vals[a].size(); i += std::max<size_t>(1, vals[a].size() / 128))
+				for (size_t i{ 2 }; i < samples[a].size(); i += std::max<size_t>(1, samples[a].size() / 128))
 					pick.push_back(i);
 
 			}
 
 			for (const size_t i : pick) {
 
-				tv[a].push_back(vals[a][i]);
-				tdt[a].push_back(dt[i]);
-				tb[a].push_back(dotnet::text_bounds{ vals[a][i], state.exact_text() });
+				tv[a].push_back(samples[a].vals[i]);
+				tdt[a].push_back(samples[a].dt[i]);
+				tb[a].push_back(samples[a].bounds[i]);
 
 			}
 
@@ -2148,7 +2145,7 @@ namespace standard {
 				size_t esc{};
 
 				for (int a{}; a < 2; ++a)
-					esc += dspace::encode_axis(make(W, H, si, a), tv[a], tdt[a], state.exact_text(), tb[a]).escapes.size();
+					esc += dspace::encode_axis(make(W, H, si, a), { tv[a], tb[a], tdt[a] }, state.exact_text()).escapes.size();
 
 				scored.push_back({ esc, { W, H, si } });
 
@@ -2161,7 +2158,7 @@ namespace standard {
 		size_t best_cost{};
 
 		for (int a{}; a < 2; ++a)
-			best_cost += device_cost(state, *pa[a], ws[a], dt, a);
+			best_cost += device_cost(state, *pa[a], ws[a], samples[a].dt, a);
 
 		for (size_t i{}; i < std::min<size_t>(scored.size(), 4); ++i) {
 
@@ -2174,13 +2171,13 @@ namespace standard {
 			for (int a{}; a < 2; ++a) {
 
 				q[a] = make(W, H, si, a);
-				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text(), {}, vals[a].size() / 2);
+				st[a] = dspace::encode_axis(q[a], samples[a], state.exact_text(), samples[a].size() / 2);
 
-				if (st[a].escapes.size() * 2 > vals[a].size())
+				if (st[a].escapes.size() * 2 > samples[a].size())
 					cost = SIZE_MAX;
 
 				if (cost != SIZE_MAX)
-					cost += device_cost(state, q[a], st[a], dt, a);
+					cost += device_cost(state, q[a], st[a], samples[a].dt, a);
 
 			}
 
@@ -2205,16 +2202,18 @@ namespace standard {
 	// so each 250 frame chunk is detected on its own
 	constexpr size_t SEGMENT_CHUNK{ 250 };
 
-	static size_t escapes_of(const dspace::axis_params& p, std::span<const float> vals, std::span<const int> dt,
-		size_t from, size_t to, bool exact_text) {
-		return dspace::encode_axis(p, vals.subspan(from, to - from), dt.subspan(from, to - from), exact_text).escapes.size();
+	static size_t escapes_of(const dspace::axis_params& p, const dspace::_axis_samples& samples, size_t from, size_t to, bool exact_text) {
+
+		return dspace::encode_axis(p, samples.sub(from, to - from), exact_text).escapes.size();
 	}
 
 	constexpr size_t SEGMENT_GIVE_UP{ 4 };
 	constexpr size_t SEGMENT_REUSE_THRESHOLD{ 200 };
 
-	static dspace::axis_model segment_axis(orz_state& state, std::span<const float> vals, std::span<const int> dt, int axis,
-		const dspace::axis_model* other, bool give_up_early, bool virtual_desktops) {
+	static dspace::axis_model segment_axis(orz_state& state, const dspace::_axis_samples& samples, int axis, const dspace::axis_model* other,
+		bool give_up_early, bool virtual_desktops) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		const size_t n{ vals.size() };
 		dspace::axis_model m;
@@ -2229,14 +2228,14 @@ namespace standard {
 
 			const bool reuse{
 				!m.seg.empty() && m.seg.back().p.device.kind != dspace::axis_mode::none &&
-				escapes_of(m.seg.back().p, vals, dt, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
+				escapes_of(m.seg.back().p, samples, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
 			};
 
 			dspace::axis_streams unused;
 
 			const dspace::axis_params p{ reuse ?
 				m.seg.back().p :
-				detect_axis_model(state, vals.subspan(from, to - from), dt.subspan(from, to - from), axis,
+				detect_axis_model(state, samples.sub(from, to - from), axis,
 					other ? &other->at(from, other_at) : nullptr, unused, virtual_desktops)
 			};
 
@@ -2245,7 +2244,7 @@ namespace standard {
 
 				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
 
-					return device_cost(state, q, dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text()),
+					return device_cost(state, q, dspace::encode_axis(q, samples.sub(a, b - a), state.exact_text()),
 						dt.subspan(a, b - a), axis);
 				};
 
@@ -2297,7 +2296,7 @@ namespace standard {
 					if (nb >= m.seg.size() || m.seg[nb].p.device.kind == dspace::axis_mode::none)
 						continue;
 
-					if (escapes_of(m.seg[nb].p, vals, dt, from, to, state.exact_text()) * 2 < to - from) {
+					if (escapes_of(m.seg[nb].p, samples, from, to, state.exact_text()) * 2 < to - from) {
 
 						m.seg[k].p = m.seg[nb].p;
 
@@ -2339,13 +2338,12 @@ namespace standard {
 
 			{
 
-				const auto v{ vals.subspan(w0, w1 - w0) };
-				const auto d{ dt.subspan(w0, w1 - w0) };
+				const auto w{ samples.sub(w0, w1 - w0) };
 
-				for (const auto& [f, x] : dspace::encode_axis(A, v, d, state.exact_text()).escapes)
+				for (const auto& [f, x] : dspace::encode_axis(A, w, state.exact_text()).escapes)
 					missA[f] = 1;
 
-				for (const auto& [f, x] : dspace::encode_axis(B, v, d, state.exact_text()).escapes)
+				for (const auto& [f, x] : dspace::encode_axis(B, w, state.exact_text()).escapes)
 					missB[f] = 1;
 
 			}
