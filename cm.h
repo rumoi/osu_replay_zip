@@ -172,8 +172,14 @@ namespace cm {
 
 		u32 x1{}, x2{ 0xFFFFFFFFu };
 		std::vector<u8> out;
+		size_t limit{ SIZE_MAX }; // the stream, finish() included, may not reach this size
 
 		void check_end() const {}
+
+		// the stream can no longer stay under the limit
+		bool over() const {
+			return out.size() + 4 >= limit;
+		}
 
 		// p = P(1) in 16 bits
 		FORCEINLINE int code(int y, int p) {

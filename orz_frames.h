@@ -826,8 +826,15 @@ namespace frames {
 
 		for (size_t f{}; f < frames; ++f) {
 
-			if ((f & 1023) == 0)
+			if ((f & 1023) == 0) {
+
 				c.check_end();
+
+				if constexpr (requires { c.over(); })
+					if (c.over())
+						return;
+
+			}
 
 			const u32 pk{ f ? fd.keys[f - 1] : 0u };
 			const u64 phase{ side.grid.bin(now) };
@@ -1177,15 +1184,23 @@ namespace frames {
 
 	// the frames, then each axis's escape values in order
 	template<typename Encoder = cm::bit_encoder>
-	inline std::vector<u8> encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
-		bool exact_text) {
+	inline bool encode(_models& M, _frame_data& fd, const _side& side, size_t frames, const std::vector<_escape> (&values)[2],
+		bool exact_text, size_t limit, std::vector<u8>& out) {
+
+		if (limit <= 4)
+			return false;
 
 		M.init(frames, side.mode, false, cm::uses_fallback_only<Encoder>);
 		seed_priors(M, side, cm::uses_fallback_only<Encoder>, cm::uses_balanced_prediction<Encoder>);
 
 		Encoder e{};
 
+		e.limit = limit;
+
 		frame_loop(e, M, fd, side, frames, true);
+
+		if (e.over())
+			return false;
 
 		for (int a{}; a < 2; ++a) {
 
@@ -1196,7 +1211,12 @@ namespace frames {
 
 		}
 
-		return e.finish();
+		if (e.over())
+			return false;
+
+		add_to_u8(out, e.finish());
+
+		return true;
 	}
 
 	// decodes the frames on construction, then hands out the escape values as decode_axis asks for them

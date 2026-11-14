@@ -97,6 +97,11 @@ namespace standard {
 			same_bits(r[1].x, POS_DEFAULT_X) && same_bits(r[1].y, POS_DEFAULT_Y);
 	}
 
+	inline bool check_if_AP(const _osr& r) {
+
+		return std_default_pos_of(r) && same_bits(r[2].x, 256.f) && r[2].y >= 192.f && r[2].y <= 500.f;
+	}
+
 	inline _shared_streams shared_streams(const _osr& r, bool std_default_pos, bool std_default_time) {
 
 		_shared_streams sh{};
@@ -1050,15 +1055,20 @@ namespace standard {
 		_native_grid grid[2]{}; // the native grids the frames were coded on
 		_native_grid fitted[2]{}; // the native grids that fit, coded on or not
 		bool autopilot{}; // coded with the autopilot path model
+		bool over{};
 
 		size_t size() const {
-			return frames.size();
+			return over ? SIZE_MAX : frames.size();
 		}
 
 	};
 
-	inline _positions position_streams(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, orz_state& state, const autopilot::_params& ap = {}, const std::vector<autopilot::event>& moves = {}) {
+	inline _positions position_streams(
+		const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
+		const _shared_streams& shared, orz_state& state,
+		size_t limit = SIZE_MAX, const autopilot::_params& ap = {},
+		const std::vector<autopilot::event>& moves = {}
+	) {
 
 		_positions p{};
 
@@ -1171,7 +1181,7 @@ namespace standard {
 
 			}
 
-		const auto build = [&](bool use_grid) {
+		const auto build = [&](bool use_grid, size_t below, std::vector<u8>& out) {
 
 			bit_stream head{ model_head };
 
@@ -1213,14 +1223,24 @@ namespace standard {
 
 			const frames::_side side{ m.axis, shared.table, shared.time_grid(), state.mode(), ap, shared.std_default_time };
 
-			if (state.file.frame_profile() == _frame_profile::speed)
-				add_to_u8(head.data, frames::encode<cm::fastest_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text()));
-			else if (state.file.frame_profile() == _frame_profile::balanced)
-				add_to_u8(head.data, frames::encode<cm::balanced_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text()));
-			else
-				add_to_u8(head.data, frames::encode<cm::bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text()));
+			if (below <= head.data.size())
+				return false;
 
-			return head.data;
+			const size_t coded_below{ below == SIZE_MAX ? SIZE_MAX : below - head.data.size() };
+
+			bool ok;
+
+			if (state.file.frame_profile() == _frame_profile::speed)
+				ok = frames::encode<cm::fastest_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text(), coded_below, head.data);
+			else if (state.file.frame_profile() == _frame_profile::balanced)
+				ok = frames::encode<cm::balanced_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text(), coded_below, head.data);
+			else
+				ok = frames::encode<cm::bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text(), coded_below, head.data);
+
+			if (ok)
+				out = std::move(head.data);
+
+			return ok;
 		};
 
 		p.fitted[0] = grid[0];
@@ -1231,15 +1251,26 @@ namespace standard {
 		for (int a{}; a < 2; ++a)
 			use_grid &= !grid[a].on || on_grid[a].escapes.size() * 20 < on_grid[a].K.size();
 
-		auto best{ build(use_grid) };
+		std::vector<u8> best;
 
+		bool built{ build(use_grid, limit, best) };
+
+		// the grid only replaces a smaller stream
 		if (!use_grid && (grid[0].on || grid[1].on))
-			if (auto g{ build(true) }; g.size() < best.size()) {
+			if (std::vector<u8> g; build(true, built ? best.size() : limit, g)) {
 
 				best = std::move(g);
 				use_grid = true;
+				built = true;
 
 			}
+
+		if (!built) {
+
+			p.over = true;
+
+			return p;
+		}
 
 		if (use_grid)
 			for (int a{}; a < 2; ++a)
@@ -1318,13 +1349,13 @@ namespace standard {
 
 	// the replay's frames with autopilot moves in place of a device model
 	inline _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
-		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state) {
+		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state, size_t limit = SIZE_MAX) {
 
 		size_t covered{};
 
 		const auto moves{ autopilot::fitter{ s, ap }.fit(covered) };
 
-		return position_streams(all_text(), vals, dt, shared, state, ap, moves);
+		return position_streams(all_text(), vals, dt, shared, state, limit, ap, moves);
 	}
 
 	// mouse axes differ, try each other and keep the winners
@@ -1606,7 +1637,7 @@ namespace standard {
 
 				const auto filled{ text_filled(seg) };
 
-				auto p{ position_streams(filled, vals, dt, shared, state) };
+				auto p{ position_streams(filled, vals, dt, shared, state, found ? best.size() : SIZE_MAX) };
 
 				if (!found || p.size() < best.size()) {
 
@@ -1669,11 +1700,13 @@ namespace standard {
 		dspace::_model_info info{ all_text() };
 		_positions best{};
 
-		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text. Relax
-		// and autopilot do not go together.
-		const auto ap_samples{ autopilot_samples(r, shared, state.exact_text()) };
+		// autopilot (autoplay's start only): clearly autopilot replays skip the device models, others that have none try it
+		// against text. Relax and autopilot do not go together.
+		const bool try_autopilot{ !relax && check_if_AP(original) };
 
-		if (const auto ap{ relax ? autopilot::_params{} : autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
+		const auto ap_samples{ try_autopilot ? autopilot_samples(r, shared, state.exact_text()) : std::vector<autopilot::sample>{} };
+
+		if (const auto ap{ try_autopilot ? autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) : autopilot::_params{} }; ap.on)
 			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
 		else {
 
@@ -1693,7 +1726,7 @@ namespace standard {
 
 			if (!forced && (!has_model || misses(0) || misses(1))) {
 
-				auto text{ position_streams(all_text(), vals, dt, shared, state) };
+				auto text{ position_streams(all_text(), vals, dt, shared, state, has_model ? best.size() + 1 : SIZE_MAX) };
 
 				if (!has_model || text.size() <= best.size()) {
 
@@ -1711,9 +1744,9 @@ namespace standard {
 
 			if (text_only(0) && text_only(1)) {
 
-				if (const auto search{ relax ? autopilot::_params{} : search_autopilot(ap_samples) }; search.on) {
+				if (const auto search{ try_autopilot ? search_autopilot(ap_samples) : autopilot::_params{} }; search.on) {
 
-					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state) };
+					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state, best.size()) };
 
 					if (moves.size() < best.size())
 						best = std::move(moves);
