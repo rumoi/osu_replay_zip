@@ -620,8 +620,6 @@ namespace standard {
 		// integers it never lands on: one every step / (step - 1), each alone among visited ones. How far apart those are
 		// gives the step, to within fine_reach counts across the span. It is looked for where the gaps agree on no
 		// step, or on one that then holds no lattice (near 1.5 every gap of 1, 2 or 3 is within reach of a step).
-		double fine_reach{};
-
 		std::unordered_map<i64, int> apart;
 
 		i64 last{};
@@ -674,7 +672,7 @@ namespace standard {
 		// the estimate's deviation as a share of the step: four of them across the span, in counts
 		const double deviation{ std::sqrt(std::max(share * (1. - share), 1. / n) / n) / (every * (every - 1.)) };
 
-		fine_reach = std::min(64., 2. + 4. * deviation * (double)(d.back() - d.front()) / s);
+		const double fine_reach{ std::min(64., 2. + 4. * deviation * (double)(d.back() - d.front()) / s) };
 
 		// the lattice holds the replay's integers only where its counts stay in step across the whole span: by less
 		// than the share of integers it skips, which a few samples show unless it is small
@@ -796,7 +794,7 @@ namespace standard {
 	}
 
 	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, const dspace::_axis_samples& samples,
-		bool exact_text, const _native_grid& g) {
+		const _native_grid& g) {
 
 		const auto& [vals, bounds, dt]{ samples };
 
@@ -1054,7 +1052,6 @@ namespace standard {
 
 		std::vector<u8> frames; // the frames stream
 		std::array<dspace::axis_streams, 2> st;
-		_native_grid grid[2]{}; // the native grids the frames were coded on
 		_native_grid fitted[2]{}; // the native grids that fit, coded on or not
 		bool autopilot{}; // coded with the autopilot path model
 		bool over{};
@@ -1108,7 +1105,7 @@ namespace standard {
 					if (!hinted.on)
 						continue;
 
-					auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], state.exact_text(), hinted) };
+					auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], hinted) };
 
 					// a finer grid than the tablet's holds the positions too, at a higher cost: on the tablet's own grid
 					// neighbouring counts are the most common gap between the counts a replay visits
@@ -1142,7 +1139,7 @@ namespace standard {
 				if (!grid[a].on)
 					continue;
 
-				on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], state.exact_text(), grid[a]);
+				on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], grid[a]);
 
 				// a driver spreads a whole number of tablet counts over its output range (65535, a doubled 32767, 65536),
 				// so a fitted step near such a one is that one. The integers of a lattice of N counts are on one of
@@ -1165,7 +1162,7 @@ namespace standard {
 						if (!exact.on || exact.A == grid[a].A)
 							continue;
 
-						auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], state.exact_text(), exact) };
+						auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], exact) };
 
 						if (const size_t c{ grid_cost(m.axis[a].seg[0].p, exact, st, samples[a].dt, a, state.exact_text()) }; c < cost) {
 
@@ -1275,12 +1272,8 @@ namespace standard {
 
 		if (use_grid)
 			for (int a{}; a < 2; ++a)
-				if (grid[a].on) {
-
+				if (grid[a].on)
 					p.st[a].decoded = on_grid[a].decoded;
-					p.grid[a] = grid[a];
-
-				}
 
 		p.frames = std::move(best);
 

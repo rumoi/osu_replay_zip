@@ -384,8 +384,7 @@ namespace frames {
 
 			const u32 n{ (u32)table.size() }, listed{ std::min(n, LISTED) };			
 
-			using coder_type = std::remove_cvref_t<Coder>;
-			constexpr bool ENCODING = std::is_base_of_v<cm::bit_decoder, coder_type> == 0;
+			constexpr bool ENCODING = std::is_base_of_v<cm::bit_decoder, Coder> == 0;
 
 			u32 index{};
 			u8 branch[64];

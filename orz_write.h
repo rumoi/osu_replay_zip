@@ -268,7 +268,6 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 	if (compression_priority == 3)
 		return; // reserved; public encode returns false with an empty output
 
-	state.file.version = ORZ_VERSION;
 	state.file.encode_info |= compression_priority << 8;
 
 	// the span is the caller's, it does not outlive this encode
