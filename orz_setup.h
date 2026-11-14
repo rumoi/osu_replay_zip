@@ -261,6 +261,7 @@ namespace setup {
 
 			}
 
+			return s;
 		}
 
 		return s;
