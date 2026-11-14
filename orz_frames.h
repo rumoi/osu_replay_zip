@@ -1134,10 +1134,7 @@ namespace frames {
 
 				const u32 value{ prior.values[j] };
 
-				auto& k{ md->table.line(prior.keys[j])[value >> 24] };
-
-				k.p = (u16)(value & 0xFFFF);
-				k.n = (u16)((value >> 16) & 0xFF);
+				md->table.line(prior.keys[j])[value >> 24] = cm::counter::of(value & 0xFFFF, (value >> 16) & 0xFF);
 
 			}
 
@@ -1167,7 +1164,7 @@ namespace frames {
 			for (u32 j{ FALLBACK_PRIOR_START[set][m] }; j < FALLBACK_PRIOR_START[set][m + 1]; ++j) {
 
 				const u32 value{ FALLBACK_PRIOR_VALUES[j] };
-				md->table.t[value >> 24] = { (u16)value, (u16)((value >> 16) & 0xFF) };
+				md->table.t[value >> 24] = cm::counter::of(value & 0xFFFF, (value >> 16) & 0xFF);
 
 			}
 

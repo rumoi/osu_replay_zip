@@ -89,11 +89,28 @@ namespace cm {
 		return h;
 	}
 
-	constexpr u16 COUNTER_LIMIT{ 255 };
+	constexpr u16 COUNTER_LIMIT{ 31 };
 
-	// P(1) in 16 bits; moves 1 / (n + 1.5) of the way to each bit, 1 / (COUNTER_LIMIT + 1.5) once n reaches it
+	// 2 bytes: P(1) in the top 11 bits, the count n in the low 5. Moves 1 / (n + 1.5) of the way to each bit,
+	// 1 / (COUNTER_LIMIT + 1.5) once n reaches it
 	struct counter {
-		u16 p{ 32768 }, n{};
+
+		u16 v{ 32768 };
+
+		// P(1) in 16 bits
+		FORCEINLINE int p() const {
+			return v & 0xFFE0;
+		}
+
+		FORCEINLINE u32 n() const {
+			return v & 31u;
+		}
+
+		// a prior's 16 bit P(1) and count
+		static counter of(u32 p, u32 n) {
+			return { (u16)((p & 0xFFE0) | std::min<u32>(n, COUNTER_LIMIT)) };
+		}
+
 	};
 
 	constexpr auto RATE{ [] {
@@ -108,12 +125,10 @@ namespace cm {
 
 	FORCEINLINE void update(counter& c, int y) {
 
-		const i64 target{ y ? 65535 : 0 };
+		const i64 target{ y ? 2047 : 0 }, p{ c.v >> 5 };
+		const u32 n{ c.n() };
 
-		c.p = (u16)(c.p + (((target - c.p) * RATE[c.n]) >> 16));
-
-		if (c.n < COUNTER_LIMIT)
-			++c.n;
+		c.v = (u16)(((p + (((target - p) * RATE[n]) >> 16)) << 5) | (n < COUNTER_LIMIT ? n + 1 : n));
 
 	}
 
@@ -414,7 +429,7 @@ namespace cm {
 				counter& k{ lines[0][slot] };
 
 				if constexpr (!counting)
-					y = c.code(y, std::clamp((int)k.p, 32, 65504));
+					y = c.code(y, std::clamp(k.p(), 32, 65504));
 
 				learn(k);
 
@@ -423,10 +438,10 @@ namespace cm {
 
 			if constexpr (uses_balanced_prediction<Coder>) {
 
-				const counter& prediction{ lines[0][slot].n >= 8 ? lines[0][slot] : lines[1][slot] };
+				const counter& prediction{ lines[0][slot].n() >= 8 ? lines[0][slot] : lines[1][slot] };
 
 				if constexpr (!counting)
-					y = c.code(y, std::clamp((int)prediction.p, 32, 65504));
+					y = c.code(y, std::clamp(prediction.p(), 32, 65504));
 
 				// Keep both updates, including when the context and fallback alias the same counter.
 				learn(lines[0][slot]);
@@ -452,7 +467,7 @@ namespace cm {
 			for (int i{}; i < N; ++i) {
 
 				k[i] = lines[i] + slot;
-				x[i] = stretch(k[i]->p >> 4);
+				x[i] = stretch(k[i]->p() >> 4);
 				dot += (i64)x[i] * w[i];
 
 			}

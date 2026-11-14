@@ -1475,8 +1475,12 @@ namespace dspace {
 		}
 
 		// n / m rounded half away from zero, m > 0
-		static i64 round_div(i64 n, i64 m) {
-			return n >= 0 ? (n + m / 2) / m : -((-n + m / 2) / m);
+		static FORCEINLINE i64 round_div(i64 n, i64 m) {
+
+			const u64 a{ (u64)std::abs(n) + (u64)m / 2 };
+			const u64 q{ (a | (u64)m) >> 32 ? a / (u64)m : (u32)a / (u32)m };
+
+			return n >= 0 ? (i64)q : -(i64)q;
 		}
 
 		i64 window(const int a, const int dt) const {
