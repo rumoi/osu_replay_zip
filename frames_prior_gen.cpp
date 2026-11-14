@@ -142,13 +142,14 @@ namespace {
 			if (!with_frames)
 				return frames::set_taiko + mode;
 
-			_decoded_orz d;
+			orz_state state{};
+			std::vector<_osr_frame> frames;
 
-			if (!orz_decode_frames(orz, d) || d.frames.size() < r.frames)
+			if (!orz::decode(orz, frames, state) || frames.size() < r.frames)
 				return SETS;
 
 			// without the closing seed frame
-			r.R.assign(d.frames.begin(), d.frames.begin() + r.frames);
+			r.R.assign(frames.begin(), frames.begin() + r.frames);
 			r.prepared = modes::prepare(r.R, mode, (flags & ORZ_ENCODE_INFO::text_shortest) != 0);
 
 			return frames::set_taiko + mode;
@@ -195,7 +196,8 @@ namespace {
 	struct _set_models {
 
 		frames::_models standard;
-		modes::_models other;
+		modes::_catch_models fruit;
+		modes::_models other{ standard, fruit };
 
 		void init(u32 set, size_t frames, bool training, bool fallback = false) {
 

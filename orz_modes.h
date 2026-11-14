@@ -230,10 +230,10 @@ namespace modes {
 		template<typename Coder>
 		i64 residual(Coder& c, _models& M, i64 r, const u64 (&ctx)[5], int scale) {
 
-			M.res.bind<Coder>(ctx);
+			M.fruit.res.bind<Coder>(ctx);
 
 			const auto decide = [&](int y, u32 step) {
-				return M.res.code(c, y, step, step);
+				return M.fruit.res.code(c, y, step, step);
 			};
 
 			if (decide(r == 0, 0))
@@ -276,7 +276,7 @@ namespace modes {
 					const u64 id{ (u64)k * 4 + (out & ((u64(1) << k) - 1)) };
 					const u64 cx[2]{ (ctx[0] * 64 + (u64)n) * 8 + id, ((u64)n * 8 + id) * 2 + 1 };
 
-					out = (out << 1) | (u64)M.res_bits.code(c, bit, cx, (size_t)id);
+					out = (out << 1) | (u64)M.fruit.res_bits.code(c, bit, cx, (size_t)id);
 
 				} else
 					out = (out << 1) | (u64)c.code(bit, 32768);
@@ -308,7 +308,7 @@ namespace modes {
 
 			const size_t mset{ (size_t)moved * 32 + (size_t)std::min(run, 15) * 2 + kc };
 
-			if (!M.moved.code(c, encoding && want != x_ord, mctx, mset)) {
+			if (!M.fruit.moved.code(c, encoding && want != x_ord, mctx, mset)) {
 
 				if (!encoding)
 					r.x = x;
@@ -328,7 +328,7 @@ namespace modes {
 			};
 
 			const size_t dset{ (size_t)moved * 8 + (size_t)std::min(run, 7) };
-			const int d{ M.dir.code(c, encoding && (wx > x ? 1 : -1) == dir, dctx, dset) ? dir : -dir };
+			const int d{ M.fruit.dir.code(c, encoding && (wx > x ? 1 : -1) == dir, dctx, dset) ? dir : -dir };
 
 			const float pred{ predict(d, r.keys, r.delta) };
 
@@ -535,7 +535,7 @@ namespace modes {
 
 		frame_time::write_table(head, side.table, grid);
 
-		_models& M{ state.tables.modes };
+		_models M{ state.tables.modes() };
 
 		M.init(R.size(), mode, false, cm::uses_fallback_only<Encoder>);
 		M.seed(mode, cm::uses_fallback_only<Encoder>, cm::uses_balanced_prediction<Encoder>);
@@ -597,7 +597,7 @@ namespace modes {
 
 		}
 
-		_models& M{ tables.modes };
+		_models M{ tables.modes() };
 
 		M.init(R.size(), side.mode, false, cm::uses_fallback_only<Decoder>);
 		M.seed(side.mode, cm::uses_fallback_only<Decoder>, cm::uses_balanced_prediction<Decoder>);

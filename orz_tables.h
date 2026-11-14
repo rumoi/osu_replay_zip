@@ -11,13 +11,19 @@ namespace modes {
 	// catcher residual decisions: 0 zero, 1 sign, 2 length gate, 3-34 length up, 35-63 length down
 	constexpr u32 RES_STEPS{ 64 };
 
-	struct _models {
+	struct _catch_models {
 
-		frames::_models keys_time;
 		cm::fixed_model<6> moved;
 		cm::fixed_model<4> dir;
 		cm::fixed_model<5> res;
 		cm::fixed_model<2> res_bits;
+
+	};
+	
+	struct _models {
+
+		frames::_models& keys_time;
+		_catch_models& fruit;
 
 		void init(size_t frames, kind mode, bool record_keys = false, bool fallback_only = false) {
 
@@ -28,16 +34,16 @@ namespace modes {
 
 			const int b{ (int)std::bit_width(std::min(frames, frames::TABLE_FRAMES)) }, extra{ record_keys ? 4 : 0 };
 
-			moved.init(std::clamp(b + 3, 12, 20 + extra), 1, 64, record_keys, fallback_only);
-			dir.init(std::clamp(b + 1, 10, 18 + extra), 1, 16, record_keys, fallback_only);
-			res.init(std::clamp(b, 10, record_keys ? 18 + extra : 14), RES_STEPS, RES_STEPS, record_keys, fallback_only);
-			res_bits.init(std::clamp(b + 1, 10, 18 + extra), 1, 8, record_keys, fallback_only);
+			fruit.moved.init(std::clamp(b + 3, 12, 20 + extra), 1, 64, record_keys, fallback_only);
+			fruit.dir.init(std::clamp(b + 1, 10, 18 + extra), 1, 16, record_keys, fallback_only);
+			fruit.res.init(std::clamp(b, 10, record_keys ? 18 + extra : 14), RES_STEPS, RES_STEPS, record_keys, fallback_only);
+			fruit.res_bits.init(std::clamp(b + 1, 10, 18 + extra), 1, 8, record_keys, fallback_only);
 
 		}
 
 		// in frames_prior.h order
 		std::array<cm::model*, FRAMES_PRIOR_MODELS> all() {
-			return { &keys_time.keys_changed, &keys_time.keys_bits, &keys_time.keys_high, &keys_time.time, &moved, &dir, &res, &res_bits };
+			return { &keys_time.keys_changed, &keys_time.keys_bits, &keys_time.keys_high, &keys_time.time, &fruit.moved, &fruit.dir, &fruit.res, &fruit.res_bits };
 		}
 
 		void seed(kind mode, bool fallback_only = false, bool balanced = false) {
@@ -54,8 +60,12 @@ namespace modes {
 // the coders' context mixing tables, kept between replays
 struct _table_memory {
 
-	frames::_models standard;
-	modes::_models modes;
+	frames::_models frames;
+	modes::_catch_models fruit;
+
+	modes::_models modes() {
+		return { frames, fruit };
+	}
 
 };
 

@@ -1214,11 +1214,11 @@ namespace standard {
 			const frames::_side side{ m.axis, shared.table, shared.time_grid(), state.mode(), ap, shared.std_default_time };
 
 			if (state.file.frame_profile() == _frame_profile::speed)
-				add_to_u8(head.data, frames::encode<cm::fastest_bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+				add_to_u8(head.data, frames::encode<cm::fastest_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text()));
 			else if (state.file.frame_profile() == _frame_profile::balanced)
-				add_to_u8(head.data, frames::encode<cm::balanced_bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+				add_to_u8(head.data, frames::encode<cm::balanced_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text()));
 			else
-				add_to_u8(head.data, frames::encode<cm::bit_encoder>(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+				add_to_u8(head.data, frames::encode<cm::bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text()));
 
 			return head.data;
 		};
@@ -1802,7 +1802,7 @@ namespace standard {
 		side.std_default_time = head.std_default_time;
 
 		frames::_frame_data fd{};
-		Reader reader{ tables.standard, head.rest, fd, side, R.size() };
+		Reader reader{ tables.frames, head.rest, fd, side, R.size() };
 
 		// tablet grid indices back to values
 		for (size_t a{}; a < 2; ++a)
