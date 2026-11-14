@@ -415,29 +415,77 @@ namespace dspace {
 
 		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
+	
+	FORCEINLINE bool in_window(const _axis& a, float X, float Y) {
 
-	inline float mouse_advance_m(const _axis& a, float X, i64 dk, i64 m) {
+		const float size{ a.window };
+
+		return size <= 0.f || (X >= 0.f && X <= size - 1.f && Y >= 0.f && Y <= size - 1.f);
+	}
+
+	template<bool is_clamped = false>
+	FORCEINLINE float mouse_advance_m(const _axis& a, float X, i64 dk, i64 m) {
 
 		if (dk == 0)
 			return X;
 
 		const i64 n{ std::abs(dk) }, sgn{ dk < 0 ? -1 : 1 };
+		
+		const double step[2]{
+			(double)(sgn * (n / m)) * (double)a.param.device.mouse.sens,
+			(double)(sgn * (n / m + 1)) * (double)a.param.device.mouse.sens
+		};
 
-		// while playing the cursor is clamped to the window after every report (RawMouseHandler)
+		const i64 longer{ n % m };
 		const float size{ a.window };
+
+		float Y{ X };
 
 		for (i64 q{}; q < m; ++q) {
 
-			const i64 c{ n / m + (q < n % m) };
+			Y = (float)((double)Y + step[q < longer]);
 
-			X = (float)((double)X + (double)(sgn * c) * (double)a.param.device.mouse.sens);
-
-			if (size > 0.f)
-				X = std::clamp(X, 0.f, size - 1.f);
+			if constexpr (is_clamped)
+				if (size > 0.f)
+					Y = std::clamp(Y, 0.f, size - 1.f);
 
 		}
 
-		return X;
+		if constexpr (!is_clamped)
+			if (!in_window(a, X, Y))
+				return mouse_advance_m<true>(a, X, dk, m);
+
+		return Y;
+	}
+
+	constexpr int MOUSE_BATCH{ 4 };
+
+	inline void mouse_advance_each(const _axis& a, float X, i64 dk, const i64 (&m)[MOUSE_BATCH], int count, float (&out)[MOUSE_BATCH]) {
+
+		const i64 n{ std::abs(dk) }, sgn{ dk < 0 ? -1 : 1 };
+
+		double step[MOUSE_BATCH][2];
+		i64 longer[MOUSE_BATCH], most{};
+
+		for (int j{}; j < count; ++j) {
+
+			step[j][0] = (double)(sgn * (n / m[j])) * (double)a.param.device.mouse.sens;
+			step[j][1] = (double)(sgn * (n / m[j] + 1)) * (double)a.param.device.mouse.sens;
+			longer[j] = n % m[j];
+			most = std::max(most, m[j]);
+			out[j] = X;
+
+		}
+
+		for (i64 q{}; q < most; ++q)
+			for (int j{}; j < count; ++j)
+				if (q < m[j])
+					out[j] = (float)((double)out[j] + step[j][q < longer[j]]);
+
+		for (int j{}; j < count; ++j)
+			if (!in_window(a, X, out[j]))
+				out[j] = mouse_advance_m<true>(a, X, dk, m[j]);
+
 	}
 
 	inline float mouse_advance(const _axis& a, float X, i64 dk, int dt) {
@@ -495,20 +543,33 @@ namespace dspace {
 
 			while (count <= k && next_split < (int)std::size(OFFSETS)) {
 
-				const i64 r{ m + OFFSETS[next_split++] };
+				i64 r[MOUSE_BATCH];
+				int got{};
 
-				if (r < 1 || r > n || r > MOUSE_MAX_REPORTS)
-					continue;
+				while (got < MOUSE_BATCH && next_split < (int)std::size(OFFSETS)) {
 
-				const float v{ mouse_advance_m(a, X, dk, r) };
+					const i64 t{ m + OFFSETS[next_split++] };
 
-				bool seen{};
+					if (t >= 1 && t <= n && t <= MOUSE_MAX_REPORTS)
+						r[got++] = t;
 
-				for (int q{}; q < count; ++q)
-					seen |= std::bit_cast<u32>(list[q]) == std::bit_cast<u32>(v);
+				}
 
-				if (!seen)
-					list[count++] = v;
+				float v[MOUSE_BATCH];
+
+				mouse_advance_each(a, X, dk, r, got, v);
+
+				for (int i{}; i < got; ++i) {
+
+					bool seen{};
+
+					for (int q{}; q < count; ++q)
+						seen |= std::bit_cast<u32>(list[q]) == std::bit_cast<u32>(v[i]);
+
+					if (!seen)
+						list[count++] = v[i];
+
+				}
 
 			}
 
