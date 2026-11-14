@@ -1285,6 +1285,33 @@ namespace standard {
 		if (dspace::axis_params q; !refine && hinted_axis(state, samples, axis, q, streams))
 			return q;
 
+		// the device found on the first frames, when it also fits the last frames and then the whole axis
+		// is taken without the whole axis's search
+		if (constexpr size_t W{ 500 }; !refine && vals.size() >= 3 * W) {
+
+			dspace::axis_streams first;
+
+			const auto q{ detect_axis_model(state, samples.first(W), axis, other, first, virtual_desktops) };
+
+			// missing at most 2% of the samples it is tried on (a mouse's seed frame aside)
+			const auto fits = [&](const dspace::_axis_samples& part, dspace::axis_streams& st) {
+
+				const size_t limit{ part.size() / 50 + (q.device.kind == dspace::axis_mode::mouse) };
+
+				st = dspace::encode_axis(q, part, state.exact_text(), limit + 1);
+
+				return st.escapes.size() + st.repeats <= limit;
+			};
+
+			if (dspace::axis_streams last, st; is_device(q.device.kind) && fits(samples.sub(vals.size() - W, W), last) && fits(samples, st)) {
+
+				streams = std::move(st);
+
+				return q;
+			}
+
+		}
+
 		// no step may be found here even though the other axis found a mapping
 		const bool reuse_absolute{ other && other->device.kind == dspace::axis_mode::absolute };
 
