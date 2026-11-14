@@ -1184,10 +1184,7 @@ namespace standard {
 
 			st = dspace::encode_axis(q, samples, state.exact_text(), limit + 1);
 
-			if (st.escapes.size() + st.repeats > limit || shared_factor(st))
-				return false;
-
-			return true;
+			return st.escapes.size() + st.repeats <= limit && !shared_factor(st);
 		};
 
 		for (size_t k{}; k < state.hints.size(); ++k) {
@@ -1236,11 +1233,7 @@ namespace standard {
 				// the rate the prefix prefers is a variant of the hinted one: the whole axis decides, by its margin
 				if (r != q) {
 
-					const size_t limit{ limit_of(r) };
-
-					auto rs{ dspace::encode_axis(r, samples, state.exact_text(), limit + 1) };
-
-					if (rs.escapes.size() + rs.repeats <= limit && !shared_factor(rs)) {
+					if (dspace::axis_streams rs; fits(r, rs)) {
 
 						const size_t cost{ device_cost(state, r, rs, dt, axis) };
 

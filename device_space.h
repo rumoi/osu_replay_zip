@@ -825,7 +825,6 @@ namespace dspace {
 		return false;
 	}
 
-	// bounds: optional precomputed text_bounds of vals
 	// max_escapes: give up past this many (streams incomplete)
 	// decoded: optional, gets what decode_axis will return per frame
 	// one axis's samples as views: the values, their text bounds, the time since the previous sample
@@ -906,18 +905,13 @@ namespace dspace {
 			return o;
 		}
 
-		const auto bound = [&](const size_t i) {
-
-			return bounds[i];
-		};
-
 		if (p.device.kind == axis_mode::text) {
 
 			for (size_t i{}; i < vals.size(); ++i) {
 
 				if (i64 ord; dotnet::text_ord(vals[i], exact_text, ord)) {
 
-					if (const float v{ dotnet::from_text_ord(ord, exact_text) }; bound(i).contains(v)) {
+					if (const float v{ dotnet::from_text_ord(ord, exact_text) }; bounds[i].contains(v)) {
 
 						o.K[i] = ord;
 						out(i, v);
@@ -944,7 +938,7 @@ namespace dspace {
 				if (o.escapes.size() > max_escapes)
 					return;
 
-				const dotnet::text_bounds b{ bound(i) };
+				const dotnet::text_bounds b{ bounds[i] };
 
 				i64 k;
 				float v;
@@ -1007,7 +1001,7 @@ namespace dspace {
 				return o;
 
 			const float x{ vals[i] };
-			const dotnet::text_bounds b{ bound(i) };
+			const dotnet::text_bounds b{ bounds[i] };
 
 			bool escaped{ i == 0 };
 
@@ -1038,7 +1032,7 @@ namespace dspace {
 				if (first_fit(cand, b, k, Y)) {
 
 					if (decoded && dk != 0 && i + 1 < vals.size())
-						mouse_finalize(cand, b, vals[i + 1], bound(i + 1), dt[i + 1], k, Y);
+						mouse_finalize(cand, b, vals[i + 1], bounds[i + 1], dt[i + 1], k, Y);
 
 					if (dk != 0)
 						o.slack.push_back(k);

@@ -183,16 +183,16 @@ namespace orz {
 			u32 last_keys{ head[1].keys };
 			bool first_gameplay_frame{ true };
 
-			const auto fill_lerp_frames = [&](const _osr_frame& current, const bool include_endpoint) {
+			const auto fill_lerp_frames = [&](const _osr_frame& current) {
 
 				const i64 span{ running_time - previous_time };
 
-				if (span <= 0 || span > 50)
+				if (span <= 0)
 					return;
 
 				const float inv_span{ 1.f / static_cast<float>(span) };
 
-				while (next_sample_time < running_time || (include_endpoint && next_sample_time == running_time)) {
+				while (next_sample_time <= running_time) {
 
 					const i64 sample_time{ next_sample_time };
 
@@ -227,7 +227,7 @@ namespace orz {
 
 				} else {
 
-					fill_lerp_frames(r, true);
+					fill_lerp_frames(r);
 
 				}
 
