@@ -13,6 +13,7 @@
 #include <fstream>
 #include <new>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -20,11 +21,13 @@
 #include <emmintrin.h>
 #endif
 
-// replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
+// replay data is decoded and encoded with the LZMA SDK (Lib, built with Z7_ST: one thread). Its decoder has an
+// assembly version for x64 (LzmaDecOpt.asm, MASM) and arm64 (LzmaDecOpt.S), used when Lib is built with
+// Z7_LZMA_DEC_OPT and that file; without them LzmaDec.c decodes on its own.
 #include "LzmaDec.h"
+#include "LzmaEnc.h"
 #include "crc.h"
 #include "orz_types.h"
-#include "osu_lzma.h"
 
 namespace orz {
 
@@ -991,9 +994,41 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 	return true;
 }
 
-// the replay text as osu! stores it, so replay data the game wrote comes back byte for byte (osu_lzma.h)
+// the replay text as replay data osu! reads: 5 property bytes, the u64 size, the LZMA stream with no end mark.
+// Compressed for speed (the SDK's fast mode on a short hash chain), so not to the bytes osu! wrote
 inline std::vector<u8> compress_osr_string(std::string_view string) {
-	return osu_lzma::compress({ (const u8*)string.data(), string.size() });
+
+	CLzmaEncProps props;
+
+	LzmaEncProps_Init(&props);
+
+	props.dictSize = 1u << 21;
+	props.reduceSize = string.size();
+	props.lc = 3;
+	props.lp = 0;
+	props.pb = 2;
+	props.algo = 0;
+	props.btMode = 0;
+	props.fb = 8;
+	props.mc = 4;
+	props.numThreads = 1;
+
+	// LZMA grows data it cannot compress by a little
+	std::vector<u8> out(5 + 8 + string.size() + string.size() / 3 + 128);
+
+	SizeT size{ out.size() - (5 + 8) }, props_size{ 5 };
+
+	if (LzmaEncode(out.data() + 5 + 8, &size, (const u8*)string.data(), string.size(), &props, out.data(), &props_size, 0, nullptr,
+		&lzma_allocFuncs, &lzma_allocFuncs) != SZ_OK)
+		throw std::runtime_error("LZMA encode failed");
+
+	const u64 text_size{ string.size() };
+
+	memcpy(out.data() + 5, &text_size, 8);
+
+	out.resize(5 + 8 + size);
+
+	return out;
 }
 
 }
