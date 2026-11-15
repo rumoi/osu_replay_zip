@@ -1063,10 +1063,13 @@ namespace standard {
 	};
 
 	inline _positions position_streams(
-		const dspace::_model_info& m, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, orz_state& state,
+		const dspace::_model_info& model, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, orz_state& state,
 		size_t limit = SIZE_MAX, const autopilot::_params& ap = {},
 		const std::vector<autopilot::event>& moves = {}
 	) {
+
+		// coded as the decoder reads it: the axes' segments synced, then each axis's own again
+		const dspace::_model_info m{ dspace::as_written(model) };
 
 		_positions p{};
 

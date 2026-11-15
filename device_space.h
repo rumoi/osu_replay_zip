@@ -1464,11 +1464,12 @@ namespace dspace {
 		return true;
 	}
 
+	// y cloning x: a rational or text x, or a mouse x on a common window taking its y offset
 	inline bool y_from_x(const axis_params& x, axis_params& y) {
 
 		y = x;
 
-		if (x.device.kind == axis_mode::rational)
+		if (x.device.kind == axis_mode::rational || x.device.kind == axis_mode::text)
 			return true;
 
 		if (x.device.kind != axis_mode::mouse)
@@ -1484,33 +1485,49 @@ namespace dspace {
 		return true;
 	}
 
+	// where either axis's model changes; past MAX_SEGMENTS the last segment takes the rest
+	inline std::vector<u32> synced_starts(const _model_info& m) {
+
+		std::vector<u32> s;
+
+		for (const auto& ax : m.axis)
+			for (const auto& sg : ax.seg)
+				s.push_back(sg.start);
+
+		std::sort(s.begin(), s.end());
+
+		s.erase(std::unique(s.begin(), s.end()), s.end());
+		s.resize(std::min(s.size(), MAX_SEGMENTS));
+
+		return s;
+	}
+
 	inline void write_info(const _model_info& m, bit_stream& o) {
 
+		const auto s{ synced_starts(m) };
+
+		if (o.emplace_back(s.size() > 1))
+			o.write_bits<SEGMENT_COUNT_BITS>(s.size() - 2);
+
+		// the lengths, but for the last segment's (it runs to the end)
+		for (size_t k{ 1 }; k < s.size(); ++k)
+			o.write_length_bucket<4, 0>(s[k] - s[k - 1] - 1);
+
+		// every segment's x, then every segment's y: where x can be cloned, a set bit clones it
 		for (int a{}; a < 2; ++a) {
 
-			const auto& ax{ m.axis[a] };
+			size_t cur[2]{};
 
-			if (o.emplace_back(ax.seg.size() > 1))
-				o.write_bits<SEGMENT_COUNT_BITS>(ax.seg.size() - 2);
+			for (const u32 start : s) {
 
-			if (a == 1 && ax.seg.size() == 1 && m.axis[0].seg.size() == 1) {
+				const auto& p{ m.axis[a].at(start, cur[a]) };
 
-				axis_params y;
+				axis_params clone;
 
-				const bool same{ y_from_x(m.axis[0].seg[0].p, y) && y == ax.seg[0].p };
-
-				if (o.emplace_back(same))
+				if (a == 1 && y_from_x(m.axis[0].at(start, cur[0]), clone) && o.emplace_back(clone == p))
 					continue;
 
-			}
-
-			for (size_t k{}; k < ax.seg.size(); ++k) {
-
-				// its length, but for the last segment's (it runs to the end)
-				if (k + 1 < ax.seg.size())
-					o.write_length_bucket<4, 0>(ax.seg[k + 1].start - ax.seg[k].start - 1);
-
-				write_params(ax.seg[k].p, a, o);
+				write_params(p, a, o);
 
 			}
 
@@ -1521,31 +1538,31 @@ namespace dspace {
 	// from in's cursor, in ends past it
 	inline bool read_info(_bit_view& in, _model_info& out) {
 
+		const u32 n{ 1u + (in.read_bits<1>() ? 1u + (u32)in.read_bits<SEGMENT_COUNT_BITS>() : 0u) };
+
+		std::vector<u32> start(n);
+
+		for (u32 k{ 1 }; k < n; ++k)
+			start[k] = start[k - 1] + 1 + (u32)in.read_length_bucket<4, 0>();
+
 		_model_info m{};
 
+		// every segment's x, then every segment's y; each axis's own segments are where its model changes
 		for (int a{}; a < 2; ++a) {
 
-			auto& ax{ m.axis[a] };
+			size_t cur{};
 
-			const u32 n{ 1u + (in.read_bits<1>() ? 1u + (u32)in.read_bits<SEGMENT_COUNT_BITS>() : 0u) };
+			for (const u32 s : start) {
 
-			ax.seg.resize(n);
+				axis_params p;
 
-			if (a == 1 && n == 1 && m.axis[0].seg.size() == 1 && in.read_bits<1>()) {
+				const bool cloned{ a == 1 && y_from_x(m.axis[0].at(s, cur), p) && in.read_bits<1>() };
 
-				if (!y_from_x(m.axis[0].seg[0].p, ax.seg[0].p))
+				if (!cloned && !read_params(in, a, p))
 					return false;
 
-				continue;
-			}
-
-			for (size_t k{}; k < n; ++k) {
-
-				if (k + 1 < n)
-					ax.seg[k + 1].start = ax.seg[k].start + 1 + (u32)in.read_length_bucket<4, 0>();
-
-				if (!read_params(in, a, ax.seg[k].p))
-					return false;
+				if (m.axis[a].seg.empty() || m.axis[a].seg.back().p != p)
+					m.axis[a].seg.push_back({ s, p });
 
 			}
 
@@ -1554,6 +1571,19 @@ namespace dspace {
 		out = std::move(m);
 
 		return true;
+	}
+
+	// the model a decoder reads back from write_info
+	inline _model_info as_written(const _model_info& m) {
+
+		bit_stream o{};
+
+		write_info(m, o);
+
+		_bit_view in{ o };
+		_model_info r{};
+
+		return read_info(in, r) ? r : m;
 	}
 
 	struct move_predictor {

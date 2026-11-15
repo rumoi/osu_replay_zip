@@ -497,30 +497,31 @@ restated here (`device_space.h`, `orz_frames.h`).
 
 ### 6.3 Device models
 
-Each axis carries a list of segments, and each segment has one axis model. The count starts at 1, so every axis
-has a model: an encoder must provide one for each axis, and a decoder must handle every mode. This outline defines how
-a decoder turns a stored model into values, not how an encoder picks one (§12). Values a model does not reproduce are
-escaped (§6.4).
+The device model is a list of segments shared by both axes, and each segment stores the model for x and y: a device
+change always stores both. The segment count starts at 1, so every axis has a model: an encoder must provide one for
+each axis, and a decoder must handle every mode.\
+This outline defines how a decoder turns a stored model into values, not how an encoder picks one (§12).\
+Values a model does not reproduce are escaped (§6.4).
 
-**Text without device detection.** An encoder that does not detect devices can write each axis as one text segment
-(mode 3). Text needs no device information and has no parameters: `K` is the value's text ordinal (§4.1), so it
-fits any replay, and only negative zero and non-finite values are escaped. The whole model then
-costs 7 bits: x is a count bit of 0 and mode 3, and y is a count bit of 0, a "same as x" bit of 0 and mode 3. The moves
-are still predicted and coded, as steps between text ordinals. A device model makes those steps the device's own
-counts, which are smaller and more regular, so detecting one usually gives a smaller file, but text is always valid.
+First the segment count. It starts at 1, then you read 1 bit: if 0, the count stays as is; if 1, the next 5 bits are
+read and then added to the value, with an additional +1. So the count is from 1 to 33. Then:
 
-Per axis: the segment count. It starts at 1, then you read 1 bit: if 0, the count stays as is; if 1, the next 5 bits are read and
-then added to the value, with an additional +1. So the count is from 1 to 33. When both axes have one segment, y's count is
-followed by a "same as x" bit (§6.3.1); an encoder may always write it as 0. Axis x never has this bit, nor does y
-when either axis has more than one segment. Then, unless the bit is 1, each segment follows:
-
-1. **Its length**, except for the last segment. The segments split the axis's new positions (the frames that are not
+1. **The lengths**, one per segment except the last. The segments split the new positions (the frames that are not
    repeats, §6.2) into runs, one after the other: the first segment starts at new position 0 and each later one
    where the one before it ends. A length is at least 1 and is stored less 1 as `length_bucket<4,0>` (§2), so a
    reader adds 1 to what it reads. The last segment runs to the end. For example, segments of 250, 350 and 400 new
-   positions store 249 for the first, 349 for the second, and nothing for the third.
-2. **Its mode**: 2 bits, one of the four modes below. Every code is a valid mode.
-3. **The mode's parameters**, in the order below.
+   positions store 249, then 349, and nothing for the third.
+2. **x's model** for each segment.
+3. **y's model** for each segment: where x's model can be cloned, a "clone x" bit (§6.3.1); if the bit is 0 or
+   there is none, y's model follows.
+
+A model is its mode, 2 bits, one of the four modes below (every code is a valid mode), then the mode's parameters in
+the order below.
+
+**Each axis's own segments.** Consecutive segments in which an axis has the same model (every parameter identical)
+are one segment of that axis. So when only one axis changes, the other keeps its segment: a mouse axis is not
+re-seeded and a hold does not end. The segment rules below (a mouse segment's first position, the hold) mean these
+per-axis segments.
 
 The models turn the coded integer `K` of each new position into a float:
 
@@ -541,9 +542,10 @@ The shared parameter codings:
   sign bit. A reader rejects one that is 0, infinite or NaN.
 - **The window**: 1 bit; if 1, a 5-bit index into 24 common sizes (a reader rejects an index of 24 or more); if 0,
   the axis's scale and offset as two 32-bit floats. A reader rejects a scale that is not a positive normal float
-  (0, subnormal, negative, infinite or NaN) and an offset that is infinite or NaN. The sizes, in order: 1920x1080, 2560x1440, 1366x768, 1600x900, 1680x1050, 1024x768, 1440x900,
-  1280x800, 2560x1080, 1280x1024, 1920x1440, 1360x768, 1152x864, 800x600, 1280x960, 1920x1200, 3840x2160,
-  3440x1440, 1400x1050, 1600x1200, 2560x1600, 1600x1024, 1280x720, 1536x864.
+  (0, subnormal, negative, infinite or NaN) and an offset that is infinite or NaN. The sizes, in order: 1920x1080,
+  2560x1440, 1366x768, 1600x900, 1680x1050, 1024x768, 1440x900, 1280x800, 2560x1080, 1280x1024, 1920x1440, 1360x768,
+  1152x864, 800x600, 1280x960, 1920x1200, 3840x2160, 3440x1440, 1400x1050, 1600x1200, 2560x1600, 1600x1024, 1280x720,
+  1536x864.
 
 For an absolute axis, the mapping bit is 1 for window and 0 for desktop. The rounding-variant bit selects
 `product_rounded` for window mapping or `origin_unrounded` for desktop mapping, as defined in `device_space.h`.
@@ -579,17 +581,25 @@ reassociation change the result and must not be substituted for those steps (§1
 Rational, absolute and mouse axes **hold** after an escape: while that axis's integer step is zero, positions keep
 the escaped value. A new segment ends the hold.
 
-#### 6.3.1 Sharing x's model
+#### 6.3.1 Cloning x's model
 
-Sharing is optional for an encoder: writing the "same as x" bit as 0 and then y's segment in full is always valid.
-A decoder must handle the bit being 1.
+x's model can be cloned when y's could be the same: rational, text, and a mouse whose window is one of the common
+sizes (its scale and x offset are bit for bit that size's, however the window was stored). Only then does y have a
+"clone x" bit. If it is 1, y's model is a copy of x's in that segment, a mouse taking the common size's y offset.
+Cloning is optional for an encoder (write the bit as 0, then y's model in full), and a decoder must handle the bit
+being 1.
 
-When the bit is 1, y has no parameters of its own and its one segment is derived from x's:
+Other x models, such as a tablet, whose span, origin and window half-size always differ by axis, or a mouse with any
+other window, have no bit: y's model follows directly.
 
-- x rational: y is a copy of x's model;
-- x mouse with a common window: y is a copy of x's model, with that window's y offset.
+#### 6.3.2 Text without device detection
 
-A reader rejects the bit being 1 for any other x model.
+An encoder that does not detect devices can write each axis as one text segment (mode 3). Text needs no device
+information and has no parameters: `K` is the value's text ordinal (§4.1), so it fits any replay, and only negative
+zero and non-finite values are escaped. The whole model then costs 4 bits: a count bit of 0, mode 3 for x, and a
+"clone x" bit of 1 for y. The moves are still predicted and coded, as steps between text ordinals. A device model makes
+those steps the device's own counts, which are smaller and more regular, so detecting one usually gives a smaller
+file, but text is always valid.
 
 ### 6.4 Escape values
 
@@ -756,7 +766,7 @@ A decoder only reads what the encoder chose. The format leaves these choices fre
 
 - the compression priority;
 - the device model of each axis (one is required; text fits every replay, §6.3), its segments, the native grids, which
-  positions are escaped, the slack indexes, whether y shares x's model (§6.3.1), and whether autopilot is on
+  positions are escaped, the slack indexes, whether y clones x's model (§6.3.1), and whether autopilot is on
   (mode 7);
 - which deltas lead the delta table, its start and length and the order of the rest, and the time grid;
 - whether to use the fields form of §8 and the compact form of §9;
