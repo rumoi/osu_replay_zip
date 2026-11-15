@@ -2285,6 +2285,10 @@ namespace standard {
 
 			from = to;
 
+			// no new devices past MAX_SEGMENTS: the last segment takes the rest
+			if (m.seg.size() == dspace::MAX_SEGMENTS)
+				break;
+
 			misses_in_row = p.device.kind == dspace::axis_mode::none ? misses_in_row + 1 : 0;
 
 			if (give_up_early && misses_in_row >= SEGMENT_GIVE_UP && from < n) {

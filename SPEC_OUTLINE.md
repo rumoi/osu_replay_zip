@@ -67,6 +67,7 @@ The decoding order is:
   ```math
   \mathrm{zz}(v) = \begin{cases} 2v & v \ge 0 \\ -2v - 1 & v < 0 \end{cases}
   ```
+- **Floating point.** Decoding needs plain IEEE 754 arithmetic, so that every machine gives the same bits (§15).
 - **ULEB128**: the usual 7-bits-per-byte length used by `.osr` strings.
 - **Coded values** inside an arithmetic-coded body (§5) are binary decisions.
   - **Raw** bits are decisions at probability 1/2, most significant bit first.
@@ -117,16 +118,16 @@ know.
 
 | Tag | Container | Present when |
 |---|---|---|
-| 1 | `frames`: the frames stream (§6, §7) | `replay_verbatim` is clear |
+| 1 | `frames`: the frames stream (§6, §7) | `replay_verbatim` is 0 |
 | 2 | `osr_meta_data`: the `.osr` bytes around the replay data, and the life bar (§8, §9) | `has_osr_header` |
-| 3 | `osr_verbatim`: the original LZMA replay data (§10) | `replay_verbatim` is set |
+| 3 | `osr_verbatim`: the original LZMA replay data (§10) | `replay_verbatim` is 1 |
 
 The reference encoder omits empty standard containers, so a replay with no replay data has neither `frames` nor
 `osr_verbatim`.
 
 **Custom containers.**
 
-- 1 bit: whether there are any. If set, `bucket(4)` gives their count minus 1.
+- 1 bit: whether there are any. If 1, `bucket(4)` gives their count minus 1.
 - Per custom container:
   1. **name**: its length in 5 bits (at most 31 characters), then each character in 7 bits (ASCII);
   2. **size**: `bucket(16)`.
@@ -146,8 +147,8 @@ they are not read from the file one by one.
 | `replay_verbatim` | 1 bit | the replay data is stored as-is (§10) |
 | `text_shortest` | 1 bit | floats print as shortest round-trip text, as in osu!lazer; otherwise as 7 significant digits, as in osu!stable (§4) |
 
-A reader rejects priority 3, any bit set above these 10, a mode of 8 or above, and a verbatim file whose priority is
-not 0. An encoder writes a verbatim file with `trailing_comma` and `text_shortest` clear too.
+A reader rejects priority 3, any bit that is 1 above these 10, a mode of 8 or above, and a verbatim file whose priority is
+not 0. An encoder writes a verbatim file with `trailing_comma` and `text_shortest` 0 too.
 
 | Mode | Replay | Frames stream |
 |---|---|---|
@@ -199,10 +200,10 @@ meaning: cursor coordinates and a key bitmask for osu!, but held columns in x an
 `delta` and `keys` print as plain decimal integers. x and y print in one of two float styles, which applies to the
 whole replay:
 
-- **7 significant digits** (`text_shortest` clear), as .NET Framework's default formatting:
+- **7 significant digits** (`text_shortest` = 0), as .NET Framework's default formatting:
   - the digits are the float's exact binary value rounded half away from zero, with trailing zeros removed;
   - both 0 and −0 print as `0`.
-- **Shortest round-trip** (`text_shortest` set): the shortest digits that parse back to the same float; −0 prints as
+- **Shortest round-trip** (`text_shortest` = 1): the shortest digits that parse back to the same float; −0 prints as
   `-0`.
 
 Both styles share one layout, where `e` is the decimal exponent of the leading digit and a negative value starts
@@ -415,7 +416,7 @@ The tables start from these priors for each replay; decoding needs no state from
         - every delta from 0 to `s − 1` is an entry, apart from those that are leading entries, which the table
           already has;
         - `k` bits follow, one for each delta from `s` to `s + k − 1`, the first for `s`. Every delta whose bit is
-          set is an entry.
+          1 is an entry.
 
         A reader reads all `k` bits, and stops adding entries once the table has `n`.
      3. **The rest**, until the table has `n` entries: every other delta, the most used first. Each is a sign bit,
@@ -435,7 +436,7 @@ The tables start from these priors for each replay; decoding needs no state from
 3. **Device models** for x, then for y: §6.3.
 4. **Autopilot**, for mode 7 only: the game-speed index (`small<2>`: 0 = 1.0, 1 = 1.5, 2 = 0.75), then the screen
    width and height, each `bucket(4, 8, 16)` and from 1 to 32768 (§6.6).
-5. **Native grid** for x, then y: 1 bit. If set, a 48-bit step (not 0) and a 64-bit offset in 32.32 fixed point,
+5. **Native grid** for x, then y: 1 bit. If 1, a 48-bit step (not 0) and a 64-bit offset in 32.32 fixed point,
    with the sum wrapping as a signed 64-bit integer:
 
    ```math
@@ -443,7 +444,7 @@ The tables start from these priors for each replay; decoding needs no state from
    ```
 
    Every coded integer `j` of the axis is replaced by `value(j)` before its device model reads it.
-6. **std_default_pos**: 1 bit; if set, **std_default_time**: 1 bit.
+6. **std_default_pos**: 1 bit; if 1, **std_default_time**: 1 bit.
    - `std_default_pos`: frames 0 and 1 are at the usual starting position (256, −500).
    - `std_default_time`: their deltas are also 0 and −1, and are not coded.
 
@@ -456,7 +457,7 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
 1. **Keys**, folded so that K1 and K2 imply M1 and M2 (`k ^ ((k >> 2) & 3)`; unfolding is the same operation):
    - a "keys changed" decision;
    - if they changed: one flip decision for each of the 5 low key bits, from bit 0 up;
-   - then a "high bits flipped" decision, skipped (and taken as set) when no low bit flipped; if set, the flips of
+   - then a "high bits flipped" decision, skipped (and taken as 1) when no low bit flipped; if 1, the flips of
      the 27 bits above as raw bits.
 2. **Delta**: the index into the delta table.
    - A walk down a fixed binary tree of 64 nodes, one decision per node from the root: its 65 leaves are the indexes
@@ -464,7 +465,7 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
      decisions use that node's counter slot.
    - "64 or more" continues as `gamma(index − 63)`.
    - A reader takes an index past the table as its last entry.
-   - Nothing is coded for frames 0 and 1 when `std_default_time` is set.
+   - Nothing is coded for frames 0 and 1 when `std_default_time` is 1.
 3. **Repeat** (frames after the first): whether the position is bit-identical to the previous frame's.
 4. **For a new position** (not a repeat):
    - an autopilot event, for mode 7 (§6.6);
@@ -485,9 +486,10 @@ Each axis carries a list of segments, and each segment one axis model. Device mo
 defines how a decoder turns a stored model into values, not how an encoder picks one (§12). An axis with a single
 text segment fits any replay. Values a model does not reproduce are escaped (§6.4).
 
-Per axis: the segment count as `bucket(4, 8, 16)`, from 1 to 32. When both axes have one segment, y's count is
-followed by a "same as x" bit: if set, y has no parameters of its own, and x must be rational (y is a copy) or a
-mouse with a common window (y is a copy with that window's y offset). Otherwise, per segment: its distance from the
+Per axis: the segment count, from 1 to 32. First 1 bit: 0 for one segment; if 1, the count less 1 follows in
+5 bits, so a reader adds 1 to what it reads. When both axes have one segment, y's count is
+followed by a "same as x" bit (§6.3.1); an encoder may always write it as 0. Axis x never has this bit, nor does y
+when either axis has more than one segment. Then, unless the bit is 1, each segment follows: its distance from the
 previous segment in new positions (`bucket(4, 8, 16)`, not for the first), its mode as `bucket(2)`, and the mode's
 parameters.
 
@@ -503,23 +505,28 @@ The models turn the coded integer `K` of each new position into a float:
 
 A reader rejects a mode above 4. The shared parameter codings:
 
-- **A setting**: 1 bit; if clear, hundredths as `bucket(4, 8, 16)`; if set, the float's 32 bits.
+- **A setting**: 1 bit; if 0, hundredths as `bucket(4, 8, 16)`; if 1, the float's 32 bits. A reader rejects a
+  setting that is 0, negative, infinite or NaN.
 - **The polling rate**: 3 bits choosing from `{125, 250, 500, 1000, 2000, 4000, 8000}` Hz, or code 7 followed by the
-  rate in 16 bits. A reader rejects a rate above 8000.
-- **The play rate**: 2 bits choosing from `{1.0, 1.5, 0.75}`, or code 3 followed by 31 bits, a positive float
-  without its sign bit.
-- **The window**: 1 bit; if set, a 5-bit index into 24 common sizes; if clear, the axis's scale and offset as two
-  32-bit floats. The sizes, in order: 1920×1080, 2560×1440, 1366×768, 1600×900, 1680×1050, 1024×768, 1440×900,
-  1280×800, 2560×1080, 1280×1024, 1920×1440, 1360×768, 1152×864, 800×600, 1280×960, 1920×1200, 3840×2160,
-  3440×1440, 1400×1050, 1600×1200, 2560×1600, 1600×1024, 1280×720, 1536×864.
+  rate in whole Hz in 13 bits (0 to 8191).
+- **The play rate**: 2 bits choosing from `{1.0, 1.5, 0.75}`, or code 3 followed by 31 bits, a float without its
+  sign bit. A reader rejects one that is 0, infinite or NaN.
+- **The window**: 1 bit; if 1, a 5-bit index into 24 common sizes (a reader rejects an index of 24 or more); if 0,
+  the axis's scale and offset as two 32-bit floats. A reader rejects a scale that is not a positive normal float
+  (0, subnormal, negative, infinite or NaN) and an offset that is infinite or NaN. The sizes, in order: 1920x1080, 2560x1440, 1366x768, 1600x900, 1680x1050, 1024x768, 1440x900,
+  1280x800, 2560x1080, 1280x1024, 1920x1440, 1360x768, 1152x864, 800x600, 1280x960, 1920x1200, 3840x2160,
+  3440x1440, 1400x1050, 1600x1200, 2560x1600, 1600x1024, 1280x720, 1536x864.
 
 For an absolute axis, the mapping bit is 1 for window and 0 for desktop. The rounding-variant bit selects
 `product_rounded` for window mapping or `origin_unrounded` for desktop mapping, as defined in `device_space.h`.
 
+A reader also rejects a rational `D` of 0 and an absolute span of 0. With these rules and the ones above, no
+model computes a NaN from its parameters (§15).
+
 The arithmetic of each model replays the game's own, and its rounding at each step is part of the format
 (`device_space.h`). Its float values are binary32 and its double intermediates binary64. The variant named x87
 emulates the game's 53-bit precision; the stored variant bits select the rounding steps. Fused multiply-add and
-reassociation change the result and must not be substituted for those steps.
+reassociation change the result and must not be substituted for those steps (§15).
 
 **Window to playfield**: $`\text{field} = (\text{pixel} - \text{offset}) / \text{scale}`$.
 
@@ -554,6 +561,18 @@ Negative zero and non-finite values have no text ordinal and are escaped.
 Rational, absolute and mouse axes **hold** after an escape: while that axis's integer step is zero, positions keep
 the escaped value. A new segment ends the hold.
 
+#### 6.3.1 Sharing x's model
+
+Sharing is optional for an encoder: writing the "same as x" bit as 0 and then y's segment in full is always valid.
+A decoder must handle the bit being 1.
+
+When the bit is 1, y has no parameters of its own and its one segment is derived from x's:
+
+- x rational: y is a copy of x's model;
+- x mouse with a common window: y is a copy of x's model, with that window's y offset.
+
+A reader rejects the bit being 1 for any other x model.
+
 ### 6.4 Escape values
 
 An escape value is the true position where the model's value is wrong. It is coded against the model's prediction,
@@ -561,7 +580,7 @@ which mode none, text and a mouse segment's first position do not have:
 
 1. on an axis with a native grid, a decision for "one of the two lattice values next to the grid value", then which;
 2. without a prediction, 32 raw bits;
-3. otherwise a **near** decision, and 32 raw bits if it is clear. A near value is its distance from the prediction:
+3. otherwise a **near** decision, and 32 raw bits if it is 0. A near value is its distance from the prediction:
    in 7-digit mantissas at the same exponent, or in ulps with shortest text.
 
 ### 6.5 Rebuilding the frames
@@ -578,7 +597,7 @@ Mode 7 predicts cursor movement from a path generated by the game. Path predicti
 7-digit text and text axes. The path is a list of moves of two types: a straight line, or an in-out cubic ease
 sampled every `1000/60 · speed` ms. Each move may start with a wait.
 
-**A path event** is a decision at each new position after the first whose time is past the end of the path. If set,
+**A path event** is a decision at each new position after the first whose time is past the end of the path. If 1,
 the next move follows: its type, wait and duration, then per axis its start (an ulp offset, coded only when the move
 does not start at the path's last point) and its target (an integer offset, or an offset from a guess).
 
@@ -611,7 +630,7 @@ The path arithmetic is normative (`orz_autopilot.h`).
 | Mode | Coded keys | x | y | Escaped when |
 |---|---|---|---|---|
 | osu!taiko | the keys | 0 if keys 1 or 2 are held, else 640 if keys 4 or 8 are, else 320 | 9999 | x or y differs from that |
-| osu!catch | the keys | catcher position, coded as a text value | 9999 | y ≠ 9999, or x has its sign set or is not finite |
+| osu!catch | the keys | catcher position, coded as a text value | 9999 | y ≠ 9999, or x has its sign bit 1 or is not finite |
 | osu!mania | held columns (keys are always 0) | the columns as an integer | current scroll speed | the frame is at (256, −500) |
 
 **The catcher** is coded in three parts:
@@ -640,14 +659,14 @@ The container's first byte picks the form of the three parts:
 | client version | `bucket(18)` of `zz(version − 20200000)` |
 | player name | 1 bit for present; then its length as `bucket(4, 8)` and its bytes |
 | beatmap MD5 | 16 bytes |
-| replay MD5 | 1 bit; if set, a 6-bit index into 49 known formulas over the score fields; otherwise 16 bytes |
+| replay MD5 | 1 bit; if 1, a 6-bit index into 49 known formulas over the score fields; otherwise 16 bytes |
 | count of 300s | `bucket(9, 11)` |
 | counts of 100s, 50s, gekis, katus, misses | `bucket(5, 8)` each |
 | score | 32 bits |
 | combo | `bucket(9, 11)` |
 | perfect | 1 bit |
 | mods | `bucket(16)` |
-| timestamp | Unix seconds in 32 bits; 1 bit; if set, 24 bits of 100 ns ticks |
+| timestamp | Unix seconds in 32 bits; 1 bit; if 1, 24 bits of 100 ns ticks |
 | online score id | 2 bits: none, zero, 32 bits or 64 bits; then the id |
 | rest of the tail | its length as `bucket(4, 8)` and its bytes |
 
@@ -690,7 +709,7 @@ count of 0. The reference encoder uses it when any of these holds:
   first;
 - there are more than 2^22 frames, counting a closing seed frame;
 - outside osu!mania, some `abs(x)` exceeds 2^17; in any mode, some `abs(y)` exceeds 2^17, or a coordinate is NaN;
-- an osu!mania frame has keys set, or an x that is not a whole number from 0 to 2^18 − 1.
+- an osu!mania frame has keys other than 0, or an x that is not a whole number from 0 to 2^18 − 1.
 
 ## 11. Rebuilding the `.osr`
 
@@ -719,7 +738,8 @@ A decoder only reads what the encoder chose. The format leaves these choices fre
 
 - the compression priority;
 - the device model of each axis, if any (text fits every replay, §6.3), its segments, the native grids, which
-  positions are escaped, the slack indexes, and whether autopilot is on (mode 7);
+  positions are escaped, the slack indexes, whether y shares x's model (§6.3.1), and whether autopilot is on
+  (mode 7);
 - which deltas lead the delta table, its start and length and the order of the rest, and the time grid;
 - whether to use the fields form of §8 and the compact form of §9;
 - storing a replay verbatim when it need not be.
@@ -768,3 +788,25 @@ changing them changes how a file decodes, even if its header layout stays the sa
 | Other modes, catcher arithmetic and their model sizes | [`orz_modes.h`](orz_modes.h), [`orz_tables.h`](orz_tables.h) |
 | Metadata fields and replay-MD5 formulas | [`orz_parts.h`](orz_parts.h) |
 | Life-bar point coding, range coder and priors | [`orz_life.h`](orz_life.h), [`rc.h`](rc.h), [`life_prior.h`](life_prior.h) |
+
+## 15. Floating-point arithmetic
+
+The CRC (§3.4) covers the decoded frames' bits, so a decoder must give the same floats on every machine. IEEE 754
+defines `+`, `−`, `·`, `/`, comparisons and conversions exactly, and the models use nothing else. No maths library
+function (`pow`, `log`, …) is part of decoding, as their results differ between libraries.
+
+That holds only when the arithmetic is plain IEEE 754:
+
+- each operation is rounded once, to its own format: no 80-bit x87 intermediates;
+- rounding is to nearest, ties to even;
+- subnormals are kept: no flush-to-zero or denormals-are-zero mode;
+- nothing is contracted into a fused multiply-add, and nothing is reassociated.
+
+SSE2 on x86 and AArch64 give this. A C or C++ build must not use fast-math options, and GCC and Clang need
+`-ffp-contract=off`. A program hosting the decoder must not leave the processor in a flush-to-zero mode.
+
+**NaN.** A NaN's bits are not the same everywhere: an operation that makes a new NaN gives `0xFFC00000` on x86 and
+`0x7FC00000` on ARM. The reader's parameter rules (§6.3) keep every model away from 0 · ∞, ∞ − ∞ and 0 / 0, so a
+model's result can overflow to an infinity but never becomes a NaN. Escape values (§6.4) are the replay's own floats
+and are copied as stored. A stored NaN that seeds a mouse axis only passes through operations with one NaN input,
+which keep that NaN's bits (made quiet) on both.

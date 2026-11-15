@@ -98,14 +98,17 @@ namespace setup {
 
 		if (s.kind == input::mouse) {
 
+			if (!dspace::valid_setting(s.sens))
+				return q;
+
 			q.device.kind = dspace::axis_mode::mouse;
 			q.device.mouse.sens = s.sens;
-			q.device.mouse.poll = s.poll > 0.f ? s.poll : 1000.f;
+			q.device.mouse.poll = s.poll > 0.f && dspace::valid_poll(s.poll) ? s.poll : 1000.f;
 
 		} else if (s.kind == input::tablet && s.desktop[a]) {
 
 			q.device.kind = dspace::axis_mode::absolute;
-			q.device.absolute.speed = s.sens > 0.f ? s.sens : 1.f;
+			q.device.absolute.speed = dspace::valid_setting(s.sens) ? s.sens : 1.f;
 			q.game.window_half = (float)(s.window[a] / 2);
 			q.game.fp = s.x87[a] ? dspace::float_unit::x87 : dspace::float_unit::sse;
 

@@ -143,14 +143,18 @@ namespace dotnet {
 		return _digits{ m, e };
 	}
 
+	// exact literals, not std::pow (maths libraries differ between machines); a float's text bounds need 10^0 to 10^52
 	inline double pow10i(int k) {
 
-		static const double t[]{
+		static constexpr double t[]{
 			1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
-			1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+			1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23,
+			1e24, 1e25, 1e26, 1e27, 1e28, 1e29, 1e30, 1e31, 1e32, 1e33, 1e34, 1e35,
+			1e36, 1e37, 1e38, 1e39, 1e40, 1e41, 1e42, 1e43, 1e44, 1e45, 1e46, 1e47,
+			1e48, 1e49, 1e50, 1e51, 1e52
 		};
 
-		return (k >= 0 && k <= 22) ? t[k] : std::pow(10.0, k);
+		return (k >= 0 && k < (int)std::size(t)) ? t[k] : std::pow(10.0, k);
 	}
 
 	// the floats that print as a given text: G7 an interval, shortest text one bit pattern

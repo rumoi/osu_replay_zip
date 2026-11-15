@@ -153,6 +153,10 @@ namespace dspace {
 	// if setup changes mid play (window moved, input device swapped, etc) it can though
 	// a mouse segment starts with an escaped frame (re-seed)
 
+	// a "more than one" bit, then count - 1 in SEGMENT_COUNT_BITS bits: the reads bound the count
+	constexpr int SEGMENT_COUNT_BITS{ 5 };
+	constexpr size_t MAX_SEGMENTS{ 1u << SEGMENT_COUNT_BITS };
+
 	struct axis_segment {
 		u32 start;
 		axis_params p;
@@ -1241,6 +1245,11 @@ namespace dspace {
 		return in.read_float();
 	}
 
+	// stored floats that no model can turn into a NaN (its bits differ between processors)
+	inline bool valid_setting(float v) {
+		return v > 0.f && std::isfinite(v);
+	}
+
 	constexpr int WINDOW_BITS{ 5 };
 
 	static_assert(std::size(PM_RES) <= (1u << WINDOW_BITS));
@@ -1284,7 +1293,7 @@ namespace dspace {
 			f.scale = in.read_float();
 			f.off = in.read_float();
 
-			return true;
+			return f.scale > 0.f && std::isnormal(f.scale) && std::isfinite(f.off);
 		}
 
 		const int r{ (int)in.read_bits<WINDOW_BITS>() };
@@ -1304,6 +1313,13 @@ namespace dspace {
 
 	static_assert(std::size(POLL_RATES) == 7);
 
+	// a polling rate past the list: its whole Hz in POLL_BITS bits
+	constexpr int POLL_BITS{ 13 };
+
+	inline bool valid_poll(float poll) {
+		return poll >= 0.f && poll < (float)(1u << POLL_BITS) && poll == std::floor(poll);
+	}
+
 	// a mouse axis's play rate code past the game's three: the rate follows as float bits
 	constexpr u32 RATE_CUSTOM{ 3 };
 
@@ -1317,7 +1333,7 @@ namespace dspace {
 		o.write_bits<3>(k);
 
 		if (k == std::size(POLL_RATES))
-			o.write_bits<16>((u32)poll);
+			o.write_bits<POLL_BITS>((u32)poll);
 
 	}
 
@@ -1328,7 +1344,7 @@ namespace dspace {
 		if (k < std::size(POLL_RATES))
 			return (float)POLL_RATES[k];
 
-		return (float)in.read_bits<16>();
+		return (float)in.read_bits<POLL_BITS>();
 	}
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
@@ -1394,6 +1410,9 @@ namespace dspace {
 			p.device.rational.a = (int)read_u(in);
 			p.device.rational.b = (int)rc::unzz(read_u(in));
 
+			if (p.device.rational.D == 0)
+				return false;
+
 		}
 
 		if (p.device.kind == axis_mode::mouse) {
@@ -1401,7 +1420,7 @@ namespace dspace {
 			p.device.mouse.sens = read_setting(in);
 			p.device.mouse.poll = read_poll(in);
 
-			if (p.device.mouse.poll > 8000.f)
+			if (!valid_setting(p.device.mouse.sens))
 				return false;
 
 			constexpr float RATES[]{ 1.f, 1.5f, 0.75f };
@@ -1440,6 +1459,9 @@ namespace dspace {
 			p.game.window_half = (float)read_u(in);
 			p.device.absolute.speed = read_setting(in);
 
+			if (p.device.absolute.span == 0.f || !valid_setting(p.device.absolute.speed))
+				return false;
+
 			if (!read_field(in, axis, p.game))
 				return false;
 
@@ -1474,7 +1496,8 @@ namespace dspace {
 
 			const auto& ax{ m.axis[a] };
 
-			write_u((u32)ax.seg.size(), o);
+			if (o.emplace_back(ax.seg.size() > 1))
+				o.write_bits<SEGMENT_COUNT_BITS>(ax.seg.size() - 1);
 
 			if (a == 1 && ax.seg.size() == 1 && m.axis[0].seg.size() == 1) {
 
@@ -1509,10 +1532,7 @@ namespace dspace {
 
 			auto& ax{ m.axis[a] };
 
-			const u32 n{ read_u(in) };
-
-			if (n == 0 || n > 32)
-				return false;
+			const u32 n{ in.read_bits<1>() ? (u32)in.read_bits<SEGMENT_COUNT_BITS>() + 1 : 1u };
 
 			ax.seg.resize(n);
 
