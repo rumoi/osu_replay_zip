@@ -1306,10 +1306,13 @@ namespace standard {
 
 	}
 
-	// axis_mode::none marks what detection could not fit
+	// axis_mode::none marks what detection could not fit; every axis is written with at least one segment
 	inline dspace::_model_info text_filled(dspace::_model_info m) {
 
 		for (auto& ax : m.axis) {
+
+			if (ax.seg.empty())
+				ax.seg.emplace_back();
 
 			for (auto& sg : ax.seg) {
 

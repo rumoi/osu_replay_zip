@@ -372,11 +372,11 @@ chosen by the replay's mode:
 |---|---|
 | 0, 1, 2 | modes 0 and 7 whose device model (§6.3) is rational, mouse or absolute |
 | 3, 4, 5 | the same for modes 4 and 6 |
-| 6 | modes 4 and 6 without a device model |
-| 7 | modes 0 and 7 without a device model |
+| 6 | modes 4 and 6 whose device is text |
+| 7 | modes 0 and 7 whose device is text |
 | 8, 9, 10 | osu!taiko (modes 1 and 5), osu!catch, osu!mania |
 
-The device is the higher axis mode (§6.3) of the two axes' first segments. Text counts as no device model.
+The device is the higher axis mode (§6.3) of the two axes' first segments.
 
 A set lists its models in the order of the §5.5 table for the osu!standard form (12 models). For the other form
 they are the first four, then the four catcher models.
@@ -482,11 +482,17 @@ restated here (`device_space.h`, `orz_frames.h`).
 
 ### 6.3 Device models
 
-Each axis carries a list of segments, and each segment has one axis model.\
-For the decoder, Device models are required to be handled if the file says it has one.\
-For the encoder, Device models are optional: this outline
-defines how a decoder turns a stored model into values, not how an encoder picks one (§12). An axis with a single
-text segment fits any replay. Values a model does not reproduce are escaped (§6.4).
+Each axis carries a list of segments, and each segment has one axis model. The count starts at 1, so every axis
+has a model: an encoder must provide one for each axis, and a decoder must handle every mode. This outline defines how
+a decoder turns a stored model into values, not how an encoder picks one (§12). Values a model does not reproduce are
+escaped (§6.4).
+
+**Text without device detection.** An encoder that does not detect devices can write each axis as one text segment
+(mode 3). Text needs no device information and has no parameters: `K` is the float's place in the order of printable
+values, so it fits any replay, and only negative zero and non-finite values are escaped. The whole model then
+costs 7 bits: x is a count bit of 0 and mode 3, and y is a count bit of 0, a "same as x" bit of 0 and mode 3. The moves
+are still predicted and coded, as steps between text ordinals. A device model makes those steps the device's own
+counts, which are smaller and more regular, so detecting one usually gives a smaller file, but text is always valid.
 
 Per axis: the segment count. It starts at 1, then you read 1 bit: if 0, the count stays as is; if 1, the next 5 bits are read and
 then added to the value, with an additional +1. So the count is from 1 to 33. When both axes have one segment, y's count is
@@ -744,7 +750,7 @@ or resample frames and changes the output text; the exact-preservation guarantee
 A decoder only reads what the encoder chose. The format leaves these choices free:
 
 - the compression priority;
-- the device model of each axis, if any (text fits every replay, §6.3), its segments, the native grids, which
+- the device model of each axis (one is required; text fits every replay, §6.3), its segments, the native grids, which
   positions are escaped, the slack indexes, whether y shares x's model (§6.3.1), and whether autopilot is on
   (mode 7);
 - which deltas lead the delta table, its start and length and the order of the rest, and the time grid;
