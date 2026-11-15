@@ -981,7 +981,9 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 
 	memcpy(&text_size, data + 5, 4);
 
-	if (text_size > ORZ_MAX_STREAM)
+	constexpr u64 LZMA_MAX_RATIO{ 1 << 14 };
+
+	if (text_size > ORZ_MAX_STREAM || text_size / LZMA_MAX_RATIO > size)
 		return false;
 
 	out.resize(text_size);

@@ -111,7 +111,11 @@ namespace life {
 		size_t prev_frame{};
 		i64 prev_time{};
 
-		size_t start(size_t k, size_t count) const {
+		// frames the guesses may step over in all: a real life bar steps over its frames about once, a crafted one could
+		// step over them once per point
+		size_t steps{ 32 * times.size() + (1 << 20) };
+
+		size_t start(size_t k, size_t count) {
 
 			if (k == 0)
 				return 0;
@@ -121,7 +125,7 @@ namespace life {
 
 			size_t s{ prev_frame };
 
-			while (s < times.size() && times[s] <= prev_time + GAP)
+			for (; s < times.size() && times[s] <= prev_time + GAP && steps; --steps)
 				++s;
 
 			return s;
@@ -160,6 +164,9 @@ namespace life {
 
 		int prev_value{ 100 };
 
+		// frames the search for the points' frames may step over in all, as the cursor's
+		size_t search{ cursor.steps };
+
 		m.count.encode(e, 0, pts.size());
 
 		for (size_t k{}; k < pts.size(); ++k) {
@@ -169,10 +176,11 @@ namespace life {
 
 			size_t f{ s };
 
-			while (f < times.size() && times[f] != p.time)
+			for (; f < times.size() && times[f] != p.time && search; --search)
 				++f;
 
-			if (f < times.size()) {
+			// a point not found within the search's cap is escaped
+			if (f < times.size() && times[f] == p.time) {
 
 				m.frame.encode(e, _frame_cursor::cls(k, pts.size()), f - s + 1);
 				cursor.prev_frame = f;

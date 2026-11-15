@@ -716,6 +716,8 @@ The life bar follows the parts in the `osr_meta_data` container (§8). Its first
   - Each time is coded as the frame it falls on (counted from a guess) or as an escaped difference. Frame times
     are cumulative frame deltas: the decoded frames including the closing seed frame, or the frames parsed from
     verbatim replay text (§14).
+  - The guesses step over at most `32 · frames + 2^20` frames in all (`_frame_cursor::steps`); once that is used up,
+    a guess stops where it is, and later guesses are the last found point's frame.
   - Each value is coded in hundredths.
   - The decoder prints each point as `time|value,`, with the value as `0`, `1`, or `0.d` / `0.dd`.
 
@@ -730,8 +732,9 @@ range coder with its frequency models, and their priors are normative for this f
 Verbatim storage keeps the original LZMA bytes in `osr_verbatim`, with no `frames` container, no seed and a frame
 count of 0. The reference encoder uses it when any of these holds:
 
-- the replay data is 13 bytes or shorter, the low 32 bits of its declared text size exceed 2^28, or decompression
-  produces a different number of bytes than that low-32-bit size (see the LZMA validation limitation in §13);
+- the replay data is 13 bytes or shorter, the low 32 bits of its declared text size exceed 2^28 or 2^14 times the
+  replay data's size (LZMA cannot expand that far), or decompression produces a different number of bytes than that
+  low-32-bit size (see the LZMA validation limitation in §13);
 - the replay text is empty;
 - neither float style reprints the text exactly (§4), after removing one trailing `,`. The 7-digit style is tried
   first;
