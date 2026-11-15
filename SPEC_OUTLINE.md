@@ -482,7 +482,9 @@ restated here (`device_space.h`, `orz_frames.h`).
 
 ### 6.3 Device models
 
-Each axis carries a list of segments, and each segment one axis model. Device models are optional: this outline
+Each axis carries a list of segments, and each segment has one axis model.\
+For the decoder, Device models are required to be handled if the file says it has one.\
+For the encoder, Device models are optional: this outline
 defines how a decoder turns a stored model into values, not how an encoder picks one (§12). An axis with a single
 text segment fits any replay. Values a model does not reproduce are escaped (§6.4).
 
