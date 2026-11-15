@@ -489,7 +489,7 @@ defines how a decoder turns a stored model into values, not how an encoder picks
 text segment fits any replay. Values a model does not reproduce are escaped (§6.4).
 
 Per axis: the segment count. It starts at 1, then you read 1 bit: if 0, the count stays as is; if 1, the next 5 bits are read and
-then added to the value, with an additional +1. So the count is from 1 to 33, and each count has exactly one coding. When both axes have one segment, y's count is
+then added to the value, with an additional +1. So the count is from 1 to 33. When both axes have one segment, y's count is
 followed by a "same as x" bit (§6.3.1); an encoder may always write it as 0. Axis x never has this bit, nor does y
 when either axis has more than one segment. Then, unless the bit is 1, each segment follows: its distance from the
 previous segment in new positions (`bucket(4, 8, 16)`, not for the first), its mode as `bucket(2)`, and the mode's
