@@ -153,9 +153,9 @@ namespace dspace {
 	// if setup changes mid play (window moved, input device swapped, etc) it can though
 	// a mouse segment starts with an escaped frame (re-seed)
 
-	// a "more than one" bit, then count - 1 in SEGMENT_COUNT_BITS bits: the reads bound the count
+	// the count starts at 1; a set bit adds 1 + the next SEGMENT_COUNT_BITS bits, so every count has one coding
 	constexpr int SEGMENT_COUNT_BITS{ 5 };
-	constexpr size_t MAX_SEGMENTS{ 1u << SEGMENT_COUNT_BITS };
+	constexpr size_t MAX_SEGMENTS{ 1 + 1 + ((1u << SEGMENT_COUNT_BITS) - 1) };
 
 	struct axis_segment {
 		u32 start;
@@ -1497,7 +1497,7 @@ namespace dspace {
 			const auto& ax{ m.axis[a] };
 
 			if (o.emplace_back(ax.seg.size() > 1))
-				o.write_bits<SEGMENT_COUNT_BITS>(ax.seg.size() - 1);
+				o.write_bits<SEGMENT_COUNT_BITS>(ax.seg.size() - 2);
 
 			if (a == 1 && ax.seg.size() == 1 && m.axis[0].seg.size() == 1) {
 
@@ -1532,7 +1532,7 @@ namespace dspace {
 
 			auto& ax{ m.axis[a] };
 
-			const u32 n{ in.read_bits<1>() ? (u32)in.read_bits<SEGMENT_COUNT_BITS>() + 1 : 1u };
+			const u32 n{ 1u + (in.read_bits<1>() ? 1u + (u32)in.read_bits<SEGMENT_COUNT_BITS>() : 0u) };
 
 			ax.seg.resize(n);
 
