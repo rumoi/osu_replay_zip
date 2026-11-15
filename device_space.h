@@ -415,7 +415,7 @@ namespace dspace {
 
 		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
-	
+
 	FORCEINLINE bool in_window(const _axis& a, float X, float Y) {
 
 		const float size{ a.window };
@@ -430,7 +430,7 @@ namespace dspace {
 			return X;
 
 		const i64 n{ std::abs(dk) }, sgn{ dk < 0 ? -1 : 1 };
-		
+
 		const double step[2]{
 			(double)(sgn * (n / m)) * (double)a.param.device.mouse.sens,
 			(double)(sgn * (n / m + 1)) * (double)a.param.device.mouse.sens
@@ -1511,7 +1511,7 @@ namespace dspace {
 
 			const u32 n{ read_u(in) };
 
-			if (n == 0 || n > 100000)
+			if (n == 0 || n > 32)
 				return false;
 
 			ax.seg.resize(n);

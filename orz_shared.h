@@ -105,7 +105,7 @@ enum class e_mode : u32 {
 
 };
 
-// the encode info as a file stores it: e_mode, replay flags, then the two-bit compression priority
+// the encode info as a file stores it: e_mode, two replay flags, the two-bit compression priority, two more flags
 enum ORZ_ENCODE_INFO : u32 {
 
 	e_mode_bits = 15,
@@ -114,18 +114,18 @@ enum ORZ_ENCODE_INFO : u32 {
 
 	trailing_comma = 1 << 5,
 
-	replay_verbatim = 1 << 6,
+	compression_priority_mask = 3 << 6, // 0 = size, 1 = balanced, 2 = speed; 3 is reserved
+	compression_priority_size = 0 << 6,
+	compression_priority_balanced = 1 << 6,
+	compression_priority_speed = 2 << 6,
 
-	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
+	replay_verbatim = 1 << 8,
 
-	compression_priority_mask = 3 << 8, // 0 = size, 1 = balanced, 2 = speed; 3 is reserved
-	compression_priority_size = 0 << 8,
-	compression_priority_balanced = 1 << 8,
-	compression_priority_speed = 2 << 8,
+	text_shortest = 1 << 9, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
 };
 
-constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 }; // first bucket width, with overflow for higher flags
+constexpr u32 ORZ_ENCODE_INFO_LENGTH_BITS{ 4 }; // its bit length in this many bits, then the bits under its leading 1
 
 FORCEINLINE e_mode get_e_mode(u32 encode_info) {
 	return (e_mode)(encode_info & ORZ_ENCODE_INFO::e_mode_bits);
@@ -474,6 +474,10 @@ struct bit_stream {
 
 		push_back(0);
 
+		// MAX_VALUE is the only value its length holds that is not written directly: it needs no bits after
+		if (value == MAX_VALUE)
+			return;
+
 		for (int i{}; i < in; ++i)
 			push_back((value >> i) & 1);
 
@@ -628,6 +632,9 @@ struct _bit_view {
 		while (read_bits<1>())
 			++bit_count;
 
+		if (bit_count == BIT_WRITE - 1)
+			return MAX_VALUE;
+
 		bit_count = std::min(bit_count, 31u);
 
 		return (1u << bit_count) | (u32)read_bits(bit_count);
@@ -696,7 +703,7 @@ struct _orz_file {
 	u32 frame_count;
 
 	_frame_profile frame_profile() const {
-		return (_frame_profile)((encode_info & compression_priority_mask) >> 8);
+		return (_frame_profile)((encode_info & compression_priority_mask) >> 6);
 	}
 
 	struct _container {
@@ -742,10 +749,10 @@ struct _orz_file {
 
 		CRC = bs.read_bits<32>();
 
-		encode_info = bs.read_bucket<ORZ_ENCODE_INFO_BITS>();
+		encode_info = (u32)bs.read_length_bucket<ORZ_ENCODE_INFO_LENGTH_BITS, 0>();
 
 		constexpr u32 known_info{ e_mode_bits | has_osr_header | trailing_comma | replay_verbatim | text_shortest | compression_priority_mask };
-		const u32 priority{ (encode_info & compression_priority_mask) >> 8 };
+		const u32 priority{ (encode_info & compression_priority_mask) >> 6 };
 
 		if ((encode_info & ~known_info) || get_e_mode(encode_info) >= e_mode::e_mode_max ||
 			priority == 3 || (priority != 0 && (encode_info & replay_verbatim)))
@@ -862,7 +869,7 @@ struct _orz_file {
 
 		bs.write_bits<32>(CRC);
 
-		bs.write_bucket(encode_info, ORZ_ENCODE_INFO_BITS);
+		bs.write_length_bucket<ORZ_ENCODE_INFO_LENGTH_BITS, 0>(encode_info);
 		
 		if (bs.emplace_back(seeded))
 			bs.write_length_bucket<3, ORZ_SEED_LENGTH>(seed);
