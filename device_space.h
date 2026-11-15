@@ -51,20 +51,22 @@ namespace dspace {
 	}
 
 	enum class axis_mode : u8 {
-		none = 0,
 
 		// mostly can be used when raw input is turned off, maps to the windows (OS) cursor lattice
 		// can map to any absolute device too though
-		rational = 1,
+		rational = 0,
 
 		// any device that moves by a delta
-		mouse = 2,
+		mouse = 1,
 
 		// tablets, touch devices - etc
-		absolute = 3,
+		absolute = 2,
 
 		// fall back - value ordinals when nothing else maps
-		text = 4,
+		text = 3,
+
+		// encoder only: what detection could not fit, made text before a model is written
+		none = 4,
 	};
 
 	enum class tablet_mapping : u8 { desktop, window };  // window is stable's sAbsoluteToOsuWindow
@@ -99,7 +101,7 @@ namespace dspace {
 
 	struct _input_device_model {
 
-		axis_mode kind;
+		axis_mode kind{ axis_mode::none };
 
 		rational_params rational;
 
@@ -1148,13 +1150,6 @@ namespace dspace {
 			if (p.device.kind == axis_mode::mouse && dk != 0 && (budget -= mouse_reports(p, dk, dt[i])) < 0)
 				return false;
 
-			if (p.device.kind == axis_mode::none) {
-
-				out[i] = escape_value(NAN);
-
-				continue;
-			}
-
 			if (p.device.kind == axis_mode::text) {
 
 				out[i] = escaped ? escape_value(NAN) : dotnet::from_text_ord(K[i], exact_text);
@@ -1349,7 +1344,9 @@ namespace dspace {
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
-		o.write_bucket((u32)p.device.kind, 2);
+		// the four stored modes in 2 bits (none is never written)
+		o.write_bits<2>((u32)p.device.kind);
+
 
 		if (p.device.kind == axis_mode::rational) {
 
@@ -1399,10 +1396,7 @@ namespace dspace {
 
 		p = {};
 
-		p.device.kind = (axis_mode)in.read_bucket<2>();
-
-		if (p.device.kind > axis_mode::text)
-			return false; // no detector produces these
+		p.device.kind = (axis_mode)in.read_bits<2>();
 
 		if (p.device.kind == axis_mode::rational) {
 
@@ -1512,8 +1506,9 @@ namespace dspace {
 
 			for (size_t k{}; k < ax.seg.size(); ++k) {
 
-				if (k)
-					write_u(ax.seg[k].start - ax.seg[k - 1].start, o);
+				// its length, but for the last segment's (it runs to the end)
+				if (k + 1 < ax.seg.size())
+					o.write_length_bucket<4, 0>(ax.seg[k + 1].start - ax.seg[k].start - 1);
 
 				write_params(ax.seg[k].p, a, o);
 
@@ -1546,7 +1541,8 @@ namespace dspace {
 
 			for (size_t k{}; k < n; ++k) {
 
-				ax.seg[k].start = k ? ax.seg[k - 1].start + read_u(in) : 0;
+				if (k + 1 < n)
+					ax.seg[k + 1].start = ax.seg[k].start + 1 + (u32)in.read_length_bucket<4, 0>();
 
 				if (!read_params(in, a, ax.seg[k].p))
 					return false;

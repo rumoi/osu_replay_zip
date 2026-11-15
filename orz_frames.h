@@ -1093,16 +1093,16 @@ namespace frames {
 	inline u32 prior_set(const _side& side) {
 
 		// the higher mode of the axes' first segments
-		auto device{ dspace::axis_mode::none };
+		int device{ -1 };
 
 		for (int a{}; a < 2; ++a)
 			if (!side.axis[a].seg.empty())
-				device = std::max(device, side.axis[a].seg[0].p.device.kind);
+				device = std::max(device, (int)side.axis[a].seg[0].p.device.kind);
 
-		if (device < dspace::axis_mode::rational || device > dspace::axis_mode::absolute)
+		if (device < 0 || device > (int)dspace::axis_mode::absolute)
 			return is_relax(side.mode) ? set_relax_other : set_no_device;
 
-		return (is_relax(side.mode) ? set_relax_rational : set_rational) + (u32)device - (u32)dspace::axis_mode::rational;
+		return (is_relax(side.mode) ? set_relax_rational : set_rational) + (u32)device;
 	}
 
 	// a starting state: counters by context hash (p | confidence << 16 | slot << 24), then per model the mixer weights

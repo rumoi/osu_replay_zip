@@ -376,7 +376,7 @@ chosen by the replay's mode:
 | 7 | modes 0 and 7 without a device model |
 | 8, 9, 10 | osu!taiko (modes 1 and 5), osu!catch, osu!mania |
 
-The device is the higher axis mode (§6.3) of the two axes' first segments. Text and none count as no device model.
+The device is the higher axis mode (§6.3) of the two axes' first segments. Text counts as no device model.
 
 A set lists its models in the order of the §5.5 table for the osu!standard form (12 models). For the other form
 they are the first four, then the four catcher models.
@@ -491,21 +491,26 @@ text segment fits any replay. Values a model does not reproduce are escaped (§6
 Per axis: the segment count. It starts at 1, then you read 1 bit: if 0, the count stays as is; if 1, the next 5 bits are read and
 then added to the value, with an additional +1. So the count is from 1 to 33. When both axes have one segment, y's count is
 followed by a "same as x" bit (§6.3.1); an encoder may always write it as 0. Axis x never has this bit, nor does y
-when either axis has more than one segment. Then, unless the bit is 1, each segment follows: its distance from the
-previous segment in new positions (`bucket(4, 8, 16)`, not for the first), its mode as `bucket(2)`, and the mode's
-parameters.
+when either axis has more than one segment. Then, unless the bit is 1, each segment follows:
+
+1. **Its length**, except for the last segment. The segments split the axis's new positions (the frames that are not
+   repeats, §6.2) into runs, one after the other: the first segment starts at new position 0 and each later one
+   where the one before it ends. A length is at least 1 and is stored less 1 as `length_bucket<4,0>` (§2), so a
+   reader adds 1 to what it reads. The last segment runs to the end. For example, segments of 250, 350 and 400 new
+   positions store 249 for the first, 349 for the second, and nothing for the third.
+2. **Its mode**: 2 bits, one of the four modes below. Every code is a valid mode.
+3. **The mode's parameters**, in the order below.
 
 The models turn the coded integer `K` of each new position into a float:
 
 | Mode | Value | Parameters, in order |
 |---|---|---|
-| 0, none | every position is escaped | |
-| 1, rational | $`(a K + b) / D`$, in double, rounded to float | `D`, `a`: `bucket(4, 8, 16)`; `b`: zigzag `bucket(4, 8, 16)` |
-| 2, mouse | window pixels move by `counts · sensitivity` per input report, then map to the playfield | sensitivity (a setting); polling rate; play rate; unrounded subtraction (1 bit); the window |
-| 3, absolute | a tablet coordinate `K` maps to the window, then to the playfield | mapping (1 bit: to the window, or to the desktop); x87 (1 bit); unrounded subtraction (1 bit); a rounding variant (1 bit); span: `bucket(4, 8, 16)`; origin: zigzag `bucket(4, 8, 16)`; window half-size: `bucket(4, 8, 16)`; area speed (a setting); the window |
-| 4, text | `K` is the float's place in the order of printable values (§4) | |
+| 0, rational | $`(a K + b) / D`$, in double, rounded to float | `D`, `a`: `bucket(4, 8, 16)`; `b`: zigzag `bucket(4, 8, 16)` |
+| 1, mouse | window pixels move by `counts · sensitivity` per input report, then map to the playfield | sensitivity (a setting); polling rate; play rate; unrounded subtraction (1 bit); the window |
+| 2, absolute | a tablet coordinate `K` maps to the window, then to the playfield | mapping (1 bit: to the window, or to the desktop); x87 (1 bit); unrounded subtraction (1 bit); a rounding variant (1 bit); span: `bucket(4, 8, 16)`; origin: zigzag `bucket(4, 8, 16)`; window half-size: `bucket(4, 8, 16)`; area speed (a setting); the window |
+| 3, text | `K` is the float's place in the order of printable values (§4) | |
 
-A reader rejects a mode above 4. The shared parameter codings:
+The shared parameter codings:
 
 - **A setting**: 1 bit; if 0, hundredths as `bucket(4, 8, 16)`; if 1, the float's 32 bits. A reader rejects a
   setting that is 0, negative, infinite or NaN.
@@ -578,7 +583,7 @@ A reader rejects the bit being 1 for any other x model.
 ### 6.4 Escape values
 
 An escape value is the true position where the model's value is wrong. It is coded against the model's prediction,
-which mode none, text and a mouse segment's first position do not have:
+which text and a mouse segment's first position do not have:
 
 1. on an axis with a native grid, a decision for "one of the two lattice values next to the grid value", then which;
 2. without a prediction, 32 raw bits;
