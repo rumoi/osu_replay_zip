@@ -1574,7 +1574,8 @@ namespace standard {
 
 				for (size_t i{}; i < abs.size() && !clean; ++i) {
 
-					for (u8 fp : { 0, 1 }) {
+					// a rounded product only differs from the plain one on x87
+					for (u8 fp{ abs[i].game.product_rounded }; fp < 2; ++fp) {
 
 						auto q{ abs[i] };
 
@@ -1652,7 +1653,8 @@ namespace standard {
 
 				for (size_t i{}; i < n_std; ++i) {
 
-					for (u8 fp : { 0, 1 }) {
+					// a rounded product only differs from the plain one on x87
+					for (u8 fp{ abs[i].game.product_rounded }; fp < 2; ++fp) {
 
 						auto q{ abs[i] };
 
