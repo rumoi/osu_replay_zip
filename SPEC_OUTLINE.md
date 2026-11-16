@@ -27,13 +27,78 @@ print the same 7 significant digits.
 A file may also hold custom containers (§3.2): named blobs outside the format, such as a tool's own metadata.
 Decoding the replay ignores them.
 
-The decoding order is:
+### 1.1 Decoding Overview
 
-1. Read the header and locate its containers (§3).
-2. Decode the frames for the stored mode and compression priority (§5–§7), or parse the verbatim replay data (§10).
-3. For frame-coded data, append the closing seed frame when present (§3.5); then check the CRC (§3.4).
-4. Decode the metadata and life bar (§8–§9), using the frame times for a compact life bar.
-5. Rebuild the original kind of output (§11), copying verbatim data or printing and recompressing frames (§4).
+
+**Header** (§3)
+
+1. Byte 0 is the magic `0xE6`; reject any other.
+
+2. The header bit field (§3.1): version (reject future versions), crc, encode info, seeded and seed, frame count
+   (reject more than 2^22).
+
+3. Read the encode info fields (§3.3). Reject priority 3, a set bit above bit 9, a mode of 8 or above, and
+   a verbatim file whose priority is not 0.
+
+4. The standard containers, then the custom ones (§3.2). Reject a tag above 255 and a custom count the file cannot
+   hold. The header ends at the next byte boundary; reject a header that ends past the end of the file.
+
+5. The containers' data, in list order. Reject a size above 2^28 or data past the end of the file. Ignore unknown
+   tags and custom containers.
+
+**Frames**: only one of steps 6, 7 and 8 applies. A file with `replay_verbatim` set takes step 6.
+Otherwise the mode picks step 7 or 8.
+
+6. **Verbatim** (§10), any mode: decompress `osr_verbatim` and parse its text into frames (§14). No data, or data that does not
+   decompress, gives no frames.
+   Afterwards go to 10.
+
+7. **osu!standard form**, modes 0, 4, 6 and 7 (§6). Needs: frame count, mode, priority, `text_shortest`.
+   1. The head (§6.1): delta table, time grid, device models (§6.3), the autopilot fields for mode 7, the native
+      grid of x then y, `std_default_pos` and `std_default_time`. Reject as each item says.
+   2. Set up the models: the priority's rule (§5.4), table sizes from the frame count (§5.5), and the prior set from
+      the mode and the first segment's device (§5.6).
+   3. Start the arithmetic decoder at the byte after the head (§5.1).
+   4. The body (§6.2), one pass over the frame count's frames: keys, delta (by the delta table), repeat, and for a
+      new position the autopilot event and each axis's residual, escape decision and slack index. This gives each
+      axis its coded integers `K` (§6.3.1), not yet its positions.
+   5. Per axis, x then y: apply the native grid to `K`, then run the axis's segments over its new positions
+      (§6.3). At each escaped position, decode its escape value (§6.4) against the model's value there; it is the
+      position, and it seeds a mouse axis and starts a hold.
+   6. Rebuild the frames (§6.5): positions, deltas, unfolded keys, then `std_default_pos`.
+
+8. **Other form**, modes 1, 2, 3 and 5 (§7). Needs: frame count, mode, priority, `text_shortest`.
+   1. The head: delta table and time grid (§6.1, items 1 and 2).
+   2. Start the arithmetic decoder at the byte after the head. Read the escaped frames, then for osu!mania the
+      column count and the scroll-speed changes. Reject an escaped frame past the last frame.
+   3. Set up the models as in 7.2 (prior sets 8 to 10), then decode each frame: keys, delta, and for osu!catch the
+      catcher (§7).
+
+9. **Seed frame**: when seeded and not verbatim, append `{−12345, 0, 0, seed}` (§3.5).
+
+10. **CRC** (§3.4): over the frames from 6 to 9, then `osr_meta_data` and `osr_verbatim`, then the encode info.
+    Reject a mismatch.
+
+**Metadata and output**
+
+11. `osr_meta_data` (§8): its form byte, then the header, timestamp and tail.
+12. The life bar (§9), after them in the same container. The compact form needs the frame times of 6 to 9,
+    including the seed frame.
+13. Write the output (§11): the frames printed as replay text (§4) and compressed as LZMA again (or, for a verbatim
+    file, the stored bytes), inside the rebuilt `.osr` when `has_osr_header`.
+
+What later steps need from earlier ones:
+
+| From | Used by |
+|---|---|
+| frame count | the body's length (7.4, 8.3), table sizes (§5.5), the life bar's step cap (§9) |
+| priority | the probability rule (§5.4) and the prior file (§5.6) |
+| mode | the frames form, the autopilot head fields, time contexts (§5.5), the prior set (§5.6) |
+| `text_shortest` | text ordinals (§4.1), near escape values (§6.4), printing (§4) |
+| delta table | every frame's delta (§6.2) |
+| device models | the prior set (§5.6), positions (§6.3) |
+| native grids | positions (§6.3.1), escape values (§6.4) |
+| frames and seed | the CRC (§3.4), the life bar's times (§9) |
 
 ## 2. Conventions
 
@@ -84,18 +149,18 @@ byte 1..   header, a bit field padded to a byte boundary
 then       the containers' data, back to back, in the order the header lists them
 ```
 
-Bytes after the last container are ignored.
+A reader rejects a first byte other than `0xE6`. Bytes after the last container are ignored.
 
 ### 3.1 Header (in order)
 
 | Field | Coding | Notes |
 |---|---|---|
-| version | `bucket(4, 8)` | 0. A reader rejects any other version before reading on. |
+| version | `bucket(4, 8)` | A reader rejects a later version before reading on. |
 | crc | 32 bits | §3.4 |
 | encode info | `length_bucket<4,0>` | §3.3 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | §3.5 |
-| frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; at most 2^22 |
+| frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; a reader rejects more than 2^22 |
 | standard containers | §3.2 | |
 | custom containers | §3.2 | |
 
@@ -127,7 +192,8 @@ The reference encoder omits empty standard containers, so a replay with no repla
 
 **Custom containers.**
 
-- 1 bit: whether there are any. If 1, `bucket(4)` gives their count minus 1.
+- 1 bit: whether there are any. If 1, `bucket(4)` gives their count minus 1. A reader rejects a count above the
+  file's size in bytes · 8 / 21, more than its bits could hold.
 - Per custom container:
   1. **name**: its length in 5 bits (at most 31 characters), then each character in 7 bits (ASCII);
   2. **size**: `bucket(16)`.
@@ -163,7 +229,8 @@ not 0. An encoder writes a verbatim file with `trailing_comma` and `text_shortes
 
 - For an `.osr`, the mode is its game mode (0 to 3), plus 4 when its mods have relax (bit 7). osu!mania has no relax.
   For bare replay data, the mode is given with it.
-- Modes 4 and 6 select the relax prior sets (§5.6) and time contexts (§5.5); mode 5 is coded exactly as mode 1.
+- Modes 4 and 6 select the relax prior sets (§5.6), and §5.5 lists the modes with extra time contexts; mode 5 is
+  coded exactly as mode 1.
 - Mode 7 requires the autopilot head fields (§6.1) and path model (§6.6). The reference encoder selects it by
   fitting the frames of a mode 0 replay; passing mode 7 directly has a known limitation (§13).
 
@@ -254,9 +321,10 @@ scaled to 16 bits):
 - `y = 1` keeps the low part (`x2 = xmid`), `y = 0` the high part (`x1 = xmid + 1`);
 - while the top bytes of `x1` and `x2` are equal, output that byte and shift: `x1 <<= 8`, `x2 = (x2 << 8) | 255`.
 
-The encoder ends by writing the 4 bytes of `x1`, most significant first. The decoder reads 4 bytes into `x` and
-decodes `y = (x ≤ xmid)`. It shifts input in the same way. A valid stream supplies every byte needed. The reference
-decoder reads 0 past the end and periodically checks whether it has read more than 16 bytes past it.
+The encoder ends by writing the 4 bytes of `x1`, most significant first. The decoder reads 4 bytes into `x`, most
+significant first, and decodes `y = (x ≤ xmid)`. It shifts input in the same way. A valid stream supplies every byte
+needed. The reference decoder reads 0 past the end and periodically checks whether it has read more than 16 bytes
+past it.
 
 A decision with a fixed probability (a raw bit) is coded at `p = 32768`.
 
@@ -285,8 +353,8 @@ Each kind of decision has a model:
 Binding a decision's `N` contexts (`N` ≤ 7) gives `N + 1` inputs, each with a line. Input `i`'s line is
 `hash(salt · 8 + i, context_i)` for `i < N`. The last input is the **fallback**: its line is `hash(salt · 8 + 7, 0)`
 whatever the contexts are. The **salt** is 0 for every bind but one: the move residual's bit-length decisions from 12
-up bind with salt 1 (`move_residual` in `orz_frames.h`). A decision names a counter slot and a weight set, and uses the counter at that slot in
-each bound line. `hash(a, b)` works on `u64`:
+up bind with salt 1 (`move_residual` in `orz_frames.h`). A decision names a counter slot and a weight set, and uses
+the counter at that slot in each bound line. `hash(a, b)` works on `u64`:
 
 ```
 h = (a + 1) · 0x9E3779B97F4A7C15 ^ b · 0xD6E8FEB86659FD93
@@ -397,9 +465,9 @@ The device is the higher of x's and y's mode numbers in the first segment (0 rat
 A set lists its models in the order of the §5.5 table for the osu!standard form (12 models). For the other form
 they are the first four, then the four catcher models.
 
-- **SIZE and BALANCED** take counters from `frames_prior.h`. Each entry is the low 32 bits of a context hash, which
-  selects the line under the replay's table size, and a value: the probability in bits 0–15, a confidence in bits
-  16–23 and the slot in bits 24–31. Entries are applied in stored order, so a later one replaces an earlier one on
+- **SIZE and BALANCED** take counters from `frames_prior.h`. Each entry is a key, the low 32 bits of a context hash,
+  which selects the line under the replay's table size, and a value: the probability in bits 0–15, a confidence in
+  bits 16–23 and the slot in bits 24–31. Entries are applied in stored order, so a later one replaces an earlier one on
   the same counter.
 - **SIZE** then copies each model's mixer weights from the same file.
 - **SPEED** takes counters from `frames_fallback_prior.h`: the same value layout with the counter's index
@@ -461,7 +529,8 @@ The tables start from these priors for each replay; decoding needs no state from
 
    The axis's device model then reads `value(K)` in place of each coded integer `K` (§6.3.1).
 6. **std_default_pos**: 1 bit; if 1, **std_default_time**: 1 bit.
-   - `std_default_pos`: frames 0 and 1 are at the usual starting position (256, −500).
+   - `std_default_pos`: frames 0 and 1 are at the usual starting position (256, −500). Their positions are still
+     coded (the reference encoder codes frame 2's), and §6.5 replaces them.
    - `std_default_time`: their deltas are also 0 and −1, and are not coded.
 
 The coded body starts at the next byte boundary.
@@ -469,10 +538,10 @@ The coded body starts at the next byte boundary.
 ### 6.2 Coded body
 
 Two raw bits come first: whether axis x has escapes (positions its model gets wrong, §6.4), then whether axis y
-does. Then, for each frame:
+does. Then, for each of the header's frame count of frames:
 
 1. **Keys**, folded so that K1 and K2 imply M1 and M2 (`k ^ ((k >> 2) & 3)`; unfolding is the same operation):
-   - a "keys changed" decision;
+   - a "keys changed" decision, against the previous frame's folded keys (0 before frame 0);
    - if they changed: one flip decision for each of the 5 low key bits, from bit 0 up;
    - then a "high bits flipped" decision, skipped (and taken as 1) when no low bit flipped; if 1, the flips of
      the 27 bits above as raw bits.
@@ -493,7 +562,8 @@ does. Then, for each frame:
      2. an escape decision, if the axis has escapes;
      3. the slack index (§6.3), for an axis whose current segment is mouse, that moved and was not escaped.
 
-After all frames come the escape values: every escaped position on axis x in order, then axis y (§6.4).
+The frames give each axis its coded integers, not yet its positions. After all frames come the escape values: every
+escaped position on axis x in order, then axis y. They are read while each axis's model runs (§6.4).
 
 The move predictor, which makes the predicted step, and how the residual and the slack index are split into
 decisions, are normative and not restated here (`move_predictor` in `device_space.h`, `orz_frames.h`).
@@ -506,14 +576,15 @@ each axis, and a decoder must handle every mode.\
 This outline defines how a decoder turns a stored model into values, not how an encoder picks one (§12).\
 Values a model does not reproduce are escaped (§6.4).
 
-First the segment count. It starts at 1, then you read 1 bit: if 0, the count stays as is; if 1, the next 5 bits are
-read and then added to the value, with an additional +1. So the count is from 1 to 33. Then:
+First the segment count: 1 bit; if 0, one segment; if 1, 5 bits `c` follow and the count is `c + 2`. So the count is
+from 1 to 33. Then:
 
 1. **The lengths**, one per segment except the last. The segments split the new positions (the frames that are not
    repeats, §6.2) into runs, one after the other: the first segment starts at new position 0 and each later one
    where the one before it ends. A length is at least 1 and is stored less 1 as `length_bucket<4,0>` (§2), so a
    reader adds 1 to what it reads. The last segment runs to the end. For example, segments of 250, 350 and 400 new
-   positions store 249, then 349, and nothing for the third.
+   positions store 249, then 349, and nothing for the third. A segment that starts past the last new position is
+   never used.
 2. **x's model** for each segment.
 3. **y's model** for each segment: where x's model can be cloned, a "clone x" bit (§6.3.2); if the bit is 0 or
    there is none, y's model follows.
@@ -572,10 +643,11 @@ reassociation change the result and must not be substituted for those steps (§1
   ```
 - Each report carries `⌊|ΔK| / m⌋` counts, and the first `|ΔK| mod m` reports one more. The pixel position is
   advanced in double and rounded to float after each report, and is clamped to the window when the move starts or
-  ends outside it.
+  ends outside it (the exact rule is `device_space.h`'s).
 - Report splits and float rounding can leave several candidate floats. A slack index chooses one: 0 is the value
-  above, then the values of the neighbouring report counts (`m − 1`, `m + 1`, … `m − 8`, `m + 8`), skipping invalid
-  counts and bit-identical duplicates; then values +1, −1, +2, −2, … ulps from candidate 0. The index is at most 48.
+  above, then the values of the neighbouring report counts (`m − 1`, `m + 1`, … `m − 8`, `m + 8`), skipping counts
+  outside 1 to `min(|ΔK|, 2^16)` and bit-identical duplicates; then values +1, −1, +2, −2, … ulps from candidate 0.
+  The index is at most 48.
 - An escaped position seeds the pixel position from its true value. The first position of a segment has no
   prediction.
 - A reader may reject an axis whose reports, counting those of the slack candidates it builds, pass 2^27. Real
@@ -621,13 +693,22 @@ file, but text is always valid.
 
 ### 6.4 Escape values
 
-An escape value is the true position where the model's value is wrong. It is coded against the model's prediction,
-which text and a mouse segment's first position do not have:
+An escape value is the true position where the model's value is wrong. The values are read per axis, x then y, as
+that axis's model runs over its new positions (§6.3): at each escaped position the model's value there is the
+prediction, and the decoded value is the position, which then seeds a mouse axis and starts a hold. Text and a
+mouse segment's first position have no prediction.
 
-1. on an axis with a native grid, a decision for "one of the two lattice values next to the grid value", then which;
-2. without a prediction, 32 raw bits;
-3. otherwise a **near** decision, and 32 raw bits if it is 0. A near value is its distance from the prediction:
-   in 7-digit mantissas at the same exponent, or in ulps with shortest text.
+Each value is coded in these steps, stopping at the first that gives it:
+
+1. On an axis with a native grid, a decision for "next to the grid value". If 1, a second decision picks the
+   model's value at `value(K) − 1` (0) or `value(K) + 1` (1). These two values always use the axis's first
+   segment's model.
+2. Without a prediction, 32 raw bits.
+3. A **near** decision; if 0, 32 raw bits. If 1, the distance from the prediction: in 7-digit mantissas at the same
+   exponent, or in ulps with shortest text. With `v = zz(distance) + 1`, `floor(log2 v)` is coded in unary decisions
+   (at most 33), then the bits of `v` below its leading 1 as raw bits. A reader clamps the distance to ±2^31.
+
+The decisions' contexts and slots are normative (`escape_value` in `orz_frames.h`).
 
 ### 6.5 Rebuilding the frames
 
@@ -655,13 +736,15 @@ The path arithmetic is normative (`orz_autopilot.h`).
 
 ## 7. The frames stream: osu!taiko, osu!catch and osu!mania form
 
-**Head**: the delta table and time grid as in §6.1. The coded body starts at the next byte boundary.
+**Head**: the delta table and time grid, items 1 and 2 of §6.1. The coded body starts at the next byte boundary.
 
 **Coded body**, in order:
 
 1. **Escaped frames**: `gamma(count + 1) − 1`. Then, per escaped frame:
    - its gap from the frame after the previous escaped frame (from frame 0 for the first), as `gamma(gap + 1) − 1`;
    - a raw bit for "at (256, −500)", or else its x and y as 32 raw bits each.
+
+   A reader rejects a count above the frame count, and a gap that passes the last frame.
 2. **osu!mania only**:
    - the column count, `gamma(columns)`, from 1 to 18 (the reader clamps larger counts to 18);
    - the scroll-speed changes: `gamma(count + 1) − 1`, then per change its frame, as `gamma(gap + 1) − 1` from the
@@ -818,8 +901,9 @@ The exact-preservation guarantees have these known implementation limitations:
 - **A life bar marker byte other than `0x00` or `0x0b`** comes back as an empty life bar (`0x0b 0x00`). A non-minimal
   ULEB128 length comes back minimal.
 - **LZMA input validation** reads only the low 32 bits of the eight-byte text size, checks those against 2^28 and
-  2^14 times the data's size, and checks the number of output bytes. It ignores the high 32 bits, the LZMA decoder's return code and status, and
-  unused input bytes. A malformed stream can therefore be accepted as frame input instead of preserved verbatim.
+  2^14 times the data's size, and checks the number of output bytes. It ignores the high 32 bits, the LZMA decoder's
+  return code and status, and unused input bytes. A malformed stream can therefore be accepted as frame input
+  instead of preserved verbatim.
 
 ## 14. Normative data and arithmetic
 
