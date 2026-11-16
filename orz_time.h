@@ -502,11 +502,11 @@ namespace frame_time {
 		return (float)(sum / (double)count / (1000. / 60.));
 	}
 
-	// How fast audio time ran against real time, 0 where the replay does not show it. play_rate is the rate the replay's
-	// mods state (0: unknown); grid_ms is the period of the grid the times are coded on, 0 for none.
-	inline float clock_rate(const _osr& r, float play_rate, double grid_ms) {
+	// How fast audio time ran against real time, 0 where the replay does not show it. tick: tick_rate of the frames;
+	// play_rate is the rate the replay's mods state (0: unknown); grid_ms is the period of the grid the times are coded on, 0 for none.
+	inline float clock_rate(const float tick, const float play_rate, const double grid_ms) {
 
-		float rate{ tick_rate(r) };
+		float rate{ tick };
 
 		// the ticks' mean spacing reads up to a few percent short where other frames fall between them: the grid the
 		// times are coded on is their exact period where the two agree

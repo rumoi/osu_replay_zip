@@ -76,6 +76,7 @@ namespace standard {
 		std::vector<int> table;
 		u32 grid{};
 		frame_time::_grid_period custom{}; // the period when grid is GRID_CUSTOM
+		float tick_rate{}; // frame_time::tick_rate
 		bool std_default_pos{};
 		bool std_default_time{};
 
@@ -115,9 +116,11 @@ namespace standard {
 		sh.grid = frame_time::pick_grid(sh.delta);
 
 		// a game clock off the usual play rates has its ticks on none of the listed grids: one of their own period
-		if (const float rate{ frame_time::tick_rate(r) }; rate > 0.f) {
+		sh.tick_rate = frame_time::tick_rate(r);
 
-			sh.custom = frame_time::custom_grid(sh.delta, (double)rate * (1000. / 60.), sh.grid);
+		if (sh.tick_rate > 0.f) {
+
+			sh.custom = frame_time::custom_grid(sh.delta, (double)sh.tick_rate * (1000. / 60.), sh.grid);
 
 			if (sh.custom.num)
 				sh.grid = frame_time::GRID_CUSTOM;
@@ -1785,7 +1788,7 @@ namespace standard {
 			missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
 
 		state.setup = setup::of(info, best.fitted, missed);
-		state.clock_rate = frame_time::clock_rate(r, state.header_rate, (double)shared.period().num / (double)shared.period().den);
+		state.clock_rate = frame_time::clock_rate(shared.tick_rate, state.header_rate, (double)shared.period().num / (double)shared.period().den);
 
 		write_orz(r, best, shared, state);
 
