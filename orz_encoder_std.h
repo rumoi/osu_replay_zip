@@ -1309,7 +1309,7 @@ namespace standard {
 
 	}
 
-	// axis_mode::none marks what detection could not fit; every axis is written with at least one segment
+	// axis_mode::internal_none marks what detection could not fit; every axis is written with at least one segment
 	inline dspace::_model_info text_filled(dspace::_model_info m) {
 
 		for (auto& ax : m.axis) {
@@ -1319,7 +1319,7 @@ namespace standard {
 
 			for (auto& sg : ax.seg) {
 
-				if (sg.p.device.kind == dspace::axis_mode::none) {
+				if (sg.p.device.kind == dspace::axis_mode::internal_none) {
 
 					sg.p = {};
 					sg.p.device.kind = dspace::axis_mode::text;
@@ -1500,7 +1500,7 @@ namespace standard {
 
 			const int a{ 1 - m };
 
-			if (p[m]->device.kind != dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::none)
+			if (p[m]->device.kind != dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::internal_none)
 				continue;
 
 			size_t best{ axis_cost(ws[a], samples[a].dt, a, state.exact_text()) };
@@ -1543,7 +1543,7 @@ namespace standard {
 
 			dspace::axis_params q[2]{ setup::device(h, 0), setup::device(h, 1) };
 
-			if (!h.force || q[0].device.kind == dspace::axis_mode::none || q[1].device.kind == dspace::axis_mode::none)
+			if (!h.force || q[0].device.kind == dspace::axis_mode::internal_none || q[1].device.kind == dspace::axis_mode::internal_none)
 				continue;
 
 			for (int a{}; a < 2; ++a) {
@@ -1573,7 +1573,7 @@ namespace standard {
 			px = detect_axis_model(state, samples[0], 0, nullptr, ws[0]);
 
 			// y's own search only when x's device does not fit it (not osu!catch, whose y is the catcher's fixed height)
-			if (px.device.kind != dspace::axis_mode::none) {
+			if (px.device.kind != dspace::axis_mode::internal_none) {
 
 				if (game_mode(state.mode()) == 2 || !device_from_x(state, samples[1], px, py, ws[1]))
 					py = detect_axis_model(state, samples[1], 1, &px, ws[1]);
@@ -1588,7 +1588,7 @@ namespace standard {
 
 			}
 
-			if (px.device.kind != dspace::axis_mode::none || py.device.kind != dspace::axis_mode::none)
+			if (px.device.kind != dspace::axis_mode::internal_none || py.device.kind != dspace::axis_mode::internal_none)
 				refine_window(state, samples, px, py, ws);
 
 			try_other_mouse(state, samples, px, py, ws);

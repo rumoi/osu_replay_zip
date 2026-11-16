@@ -1987,11 +1987,11 @@ namespace standard {
 		}
 
 		// we are escaping often, the step may be a neighbouring lattice
-		if (!refine && s > 0. && (chosen.device.kind == dspace::axis_mode::none || best_streams.escapes.size() * 100 > vals.size())) {
+		if (!refine && s > 0. && (chosen.device.kind == dspace::axis_mode::internal_none || best_streams.escapes.size() * 100 > vals.size())) {
 
 			dspace::axis_streams rs;
 
-			if (const auto r{ detect_axis_model(state, samples, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::none) {
+			if (const auto r{ detect_axis_model(state, samples, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::internal_none) {
 
 				if (const size_t cost{ device_cost(state, r, rs, dt, axis) }; cost < chosen_cost) {
 
@@ -2247,7 +2247,7 @@ namespace standard {
 				to = n;
 
 			const bool reuse{
-				!m.seg.empty() && m.seg.back().p.device.kind != dspace::axis_mode::none &&
+				!m.seg.empty() && m.seg.back().p.device.kind != dspace::axis_mode::internal_none &&
 				escapes_of(m.seg.back().p, samples, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
 			};
 
@@ -2260,7 +2260,7 @@ namespace standard {
 			};
 
 			// if we find a new device, we should check to see if this device is a better fit on the previous segments.
-			if (p.device.kind != dspace::axis_mode::none) {
+			if (p.device.kind != dspace::axis_mode::internal_none) {
 
 				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
 
@@ -2289,7 +2289,7 @@ namespace standard {
 			if (m.seg.size() == dspace::MAX_SEGMENTS)
 				break;
 
-			misses_in_row = p.device.kind == dspace::axis_mode::none ? misses_in_row + 1 : 0;
+			misses_in_row = p.device.kind == dspace::axis_mode::internal_none ? misses_in_row + 1 : 0;
 
 			if (give_up_early && misses_in_row >= SEGMENT_GIVE_UP && from < n) {
 
@@ -2310,14 +2310,14 @@ namespace standard {
 
 			for (size_t k{}; k < m.seg.size(); ++k) {
 
-				if (m.seg[k].p.device.kind != dspace::axis_mode::none)
+				if (m.seg[k].p.device.kind != dspace::axis_mode::internal_none)
 					continue;
 
 				const size_t from{ m.seg[k].start }, to{ seg_end(k) };
 
 				for (const size_t nb : { k - 1, k + 1 }) {
 
-					if (nb >= m.seg.size() || m.seg[nb].p.device.kind == dspace::axis_mode::none)
+					if (nb >= m.seg.size() || m.seg[nb].p.device.kind == dspace::axis_mode::internal_none)
 						continue;
 
 					if (escapes_of(m.seg[nb].p, samples, from, to, state.exact_text()) * 2 < to - from) {

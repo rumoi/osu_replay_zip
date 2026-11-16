@@ -65,8 +65,8 @@ namespace dspace {
 		// fall back - value ordinals when nothing else maps
 		text = 3,
 
-		// encoder only: what detection could not fit, made text before a model is written
-		none = 4,
+		// encoder internal state only - not defined to write
+		internal_none = 4,
 	};
 
 	enum class tablet_mapping : u8 { desktop, window };  // window is stable's sAbsoluteToOsuWindow
@@ -101,7 +101,7 @@ namespace dspace {
 
 	struct _input_device_model {
 
-		axis_mode kind{ axis_mode::none };
+		axis_mode kind{ axis_mode::internal_none };
 
 		rational_params rational;
 
@@ -182,7 +182,7 @@ namespace dspace {
 		bool any_none() const {
 
 			for (const auto& s : seg)
-				if (s.p.device.kind == axis_mode::none)
+				if (s.p.device.kind == axis_mode::internal_none)
 					return true;
 
 			return seg.empty();
@@ -191,7 +191,7 @@ namespace dspace {
 		bool all_none() const {
 
 			for (const auto& s : seg)
-				if (s.p.device.kind != axis_mode::none)
+				if (s.p.device.kind != axis_mode::internal_none)
 					return false;
 
 			return true;
@@ -908,7 +908,7 @@ namespace dspace {
 			return false;
 		};
 
-		if (p.device.kind == axis_mode::none) {
+		if (p.device.kind == axis_mode::internal_none) {
 
 			for (size_t i{}; i < vals.size(); ++i)
 				escape(i, NAN);
@@ -1349,7 +1349,14 @@ namespace dspace {
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
-		// the four stored modes in 2 bits (none is never written)
+		// the four stored modes in 2 bits; internal_none is written as text (no parameters), never cut to rational.
+		// Encoders code from as_written, so they take the text ordinals too
+		if (p.device.kind == axis_mode::internal_none) {
+
+			o.write_bits<2>((u32)axis_mode::text);
+			return;
+		}
+
 		o.write_bits<2>((u32)p.device.kind);
 
 
