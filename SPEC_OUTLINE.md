@@ -575,6 +575,8 @@ reassociation change the result and must not be substituted for those steps (§1
   counts and bit-identical duplicates; then values +1, −1, +2, −2, … ulps from candidate 0. The index is at most 48.
 - An escaped position seeds the pixel position from its true value. The first position of a segment has no
   prediction.
+- A reader may reject an axis whose reports, counting those of the slack candidates it builds, pass 2^27. Real
+  replays stay under 1% of that.
 
 **text**: `K` is the value's text ordinal (§4.1). Values without one are escaped.
 

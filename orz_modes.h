@@ -147,11 +147,13 @@ namespace modes {
 
 		for (auto& [at, v] : speeds) {
 
-			f += frames::gamma(c, at - f + 1) - 1;
+			const u64 gap{ frames::gamma(c, at - f + 1) - 1 };
 
-			if (f >= n)
+			// checked before it is added, a damaged gap cannot wrap past 2^64
+			if (gap >= n - f)
 				return false;
 
+			f += gap;
 			at = (u32)f;
 			v = float_from_bits((u32)frames::raw(c, std::bit_cast<u32>(v), 32));
 

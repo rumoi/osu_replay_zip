@@ -522,6 +522,7 @@ namespace dspace {
 		i64 dk, n, m;
 		float list[20];
 		int count{}, next_split{};
+		i64 reports{};
 
 		_mouse_candidates(const _axis& a_, float X_, i64 dk_, int dt, float first) : a{ a_ }, X{ X_ }, dk{ dk_ } {
 
@@ -556,8 +557,12 @@ namespace dspace {
 
 					const i64 t{ m + OFFSETS[next_split++] };
 
-					if (t >= 1 && t <= n && t <= MOUSE_MAX_REPORTS)
+					if (t >= 1 && t <= n && t <= MOUSE_MAX_REPORTS) {
+
 						r[got++] = t;
+						reports += t;
+
+					}
 
 				}
 
@@ -1194,7 +1199,7 @@ namespace dspace {
 
 				_mouse_candidates cand{ a, X, dk, dt[i], Y0 };
 
-				if (!cand.get(s < slack.size() ? slack[s++] : 0, X))
+				if (!cand.get(s < slack.size() ? slack[s++] : 0, X) || (budget -= cand.reports) < 0)
 					return false;
 
 			} else
