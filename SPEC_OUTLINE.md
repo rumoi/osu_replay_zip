@@ -284,7 +284,8 @@ Each kind of decision has a model:
 
 Binding a decision's `N` contexts (`N` ≤ 7) gives `N + 1` inputs, each with a line. Input `i`'s line is
 `hash(salt · 8 + i, context_i)` for `i < N`. The last input is the **fallback**: its line is `hash(salt · 8 + 7, 0)`
-whatever the contexts are. A decision names a counter slot and a weight set, and uses the counter at that slot in
+whatever the contexts are. The **salt** is 0 for every bind but one: the move residual's bit-length decisions from 12
+up bind with salt 1 (`move_residual` in `orz_frames.h`). A decision names a counter slot and a weight set, and uses the counter at that slot in
 each bound line. `hash(a, b)` works on `u64`:
 
 ```
@@ -345,8 +346,7 @@ The coded probability is the context counter's `p` when its `n ≥ 8`, otherwise
 If the two inputs select the same counter, it is updated twice.
 
 **SPEED** uses only the fallback counter: `p` clamped to `[32, 65504]`, and one update. A model's table is two lines
-of `width` counters, indexed directly by the salt (0 or 1), so its size does not depend on the frame count. Only the
-long move-residual lengths (§6.2) use salt 1.
+of `width` counters, indexed directly by the salt (0 or 1, §5.3), so its size does not depend on the frame count.
 
 ### 5.5 Table sizes
 
@@ -391,7 +391,8 @@ chosen by the replay's mode:
 | 7 | modes 0 and 7 whose device is text |
 | 8, 9, 10 | osu!taiko (modes 1 and 5), osu!catch, osu!mania |
 
-The device is the higher axis mode (§6.3) of the two axes' first segments.
+The device is the higher of x's and y's mode numbers in the first segment (0 rational, 1 mouse, 2 absolute, 3 text,
+§6.3).
 
 A set lists its models in the order of the §5.5 table for the osu!standard form (12 models). For the other form
 they are the first four, then the four catcher models.
@@ -448,7 +449,7 @@ The tables start from these priors for each replay; decoding needs no state from
    custom period of `num / den` ms (other play rates), followed by `num − 1` as `bucket(7)` and `den − 1` as
    `bucket(3)`. Each is stored less 1, so a reader adds 1 to what it reads and neither can be 0. A reader rejects
    code 7. The grid is only used as context.
-3. **Device models** for x, then for y: §6.3.
+3. **Device models** (§6.3).
 4. **Autopilot**, for mode 7 only: the game-speed index (`small<2>`: 0 = 1.0, 1 = 1.5, 2 = 0.75), then the screen
    width and height, each `bucket(4, 8, 16)` and from 1 to 32768 (§6.6).
 5. **Native grid** for x, then y: 1 bit. If 1, a 48-bit step (not 0) and a 64-bit offset in 32.32 fixed point,
@@ -458,7 +459,7 @@ The tables start from these priors for each replay; decoding needs no state from
    \mathrm{value}(j) = \left\lfloor \frac{\text{step} \cdot j + \text{offset}}{2^{32}} \right\rfloor
    ```
 
-   Every coded integer `j` of the axis is replaced by `value(j)` before its device model reads it.
+   The axis's device model then reads `value(K)` in place of each coded integer `K` (§6.3.1).
 6. **std_default_pos**: 1 bit; if 1, **std_default_time**: 1 bit.
    - `std_default_pos`: frames 0 and 1 are at the usual starting position (256, −500).
    - `std_default_time`: their deltas are also 0 and −1, and are not coded.
@@ -467,7 +468,8 @@ The coded body starts at the next byte boundary.
 
 ### 6.2 Coded body
 
-Two raw bits come first: whether axis x has escapes, then whether axis y does. Then, for each frame:
+Two raw bits come first: whether axis x has escapes (positions its model gets wrong, §6.4), then whether axis y
+does. Then, for each frame:
 
 1. **Keys**, folded so that K1 and K2 imply M1 and M2 (`k ^ ((k >> 2) & 3)`; unfolding is the same operation):
    - a "keys changed" decision;
@@ -484,16 +486,17 @@ Two raw bits come first: whether axis x has escapes, then whether axis y does. T
 3. **Repeat** (frames after the first): whether the position is bit-identical to the previous frame's.
 4. **For a new position** (not a repeat):
    - an autopilot event, for mode 7 (§6.6);
-   - then **each axis**, y first when the absolute value of the move predictor's window term is larger for y;
-     ties put x first:
-     1. the move residual: the coded integer's step minus the predicted step;
+   - then **each axis**, y first when the absolute value of its window term is larger than x's; ties put x first.
+     The window term (`move_predictor::window` in `device_space.h`) is the axis's recent steps, averaged over about
+     its last 8 ms and scaled to this frame's delta. For each axis:
+     1. the move residual: the step of the coded integer `K` (§6.3.1) minus the predicted step;
      2. an escape decision, if the axis has escapes;
      3. the slack index (§6.3), for an axis whose current segment is mouse, that moved and was not escaped.
 
 After all frames come the escape values: every escaped position on axis x in order, then axis y (§6.4).
 
-The move predictor, and how the residual and the slack index are split into decisions, are normative and not
-restated here (`device_space.h`, `orz_frames.h`).
+The move predictor, which makes the predicted step, and how the residual and the slack index are split into
+decisions, are normative and not restated here (`move_predictor` in `device_space.h`, `orz_frames.h`).
 
 ### 6.3 Device models
 
@@ -512,18 +515,18 @@ read and then added to the value, with an additional +1. So the count is from 1 
    reader adds 1 to what it reads. The last segment runs to the end. For example, segments of 250, 350 and 400 new
    positions store 249, then 349, and nothing for the third.
 2. **x's model** for each segment.
-3. **y's model** for each segment: where x's model can be cloned, a "clone x" bit (§6.3.1); if the bit is 0 or
+3. **y's model** for each segment: where x's model can be cloned, a "clone x" bit (§6.3.2); if the bit is 0 or
    there is none, y's model follows.
 
 A model is its mode, 2 bits, one of the four modes below (every code is a valid mode), then the mode's parameters in
 the order below.
 
 **Each axis's own segments.** Consecutive segments in which an axis has the same model (every parameter identical)
-are one segment of that axis. So when only one axis changes, the other keeps its segment: a mouse axis is not
-re-seeded and a hold does not end. The segment rules below (a mouse segment's first position, the hold) mean these
-per-axis segments.
+count as one segment of that axis, and the rules below that say "segment" mean this one. Two of them depend on it:
+the first position of a mouse segment has no prediction, and a new segment ends a hold. So when only y's model
+changes, x's mouse keeps its prediction and x's hold goes on.
 
-The models turn the coded integer `K` of each new position into a float:
+The models turn the coded integer `K` (§6.3.1) of each new position into a float:
 
 | Mode | Value | Parameters, in order |
 |---|---|---|
@@ -583,7 +586,20 @@ reassociation change the result and must not be substituted for those steps (§1
 Rational, absolute and mouse axes **hold** after an escape: while that axis's integer step is zero, positions keep
 the escaped value. A new segment ends the hold.
 
-#### 6.3.1 Cloning x's model
+#### 6.3.1 The coded integer
+
+Each axis has one integer per new position, its **coded integer** `K`. It is what the frames code (§6.2) and what the
+axis's device model turns into a value:
+
+- `K` starts at 0, before the first new position.
+- Each new position adds its step to the previous `K`: the move predictor's step plus the move residual (§6.2). The
+  step is clamped to ±2^40 and `K` to ±2^50.
+- On an axis with a native grid (§6.1), the model reads `value(K)` in place of `K`.
+
+What `K` counts depends on the mode: the `K` of a rational value, a mouse's counts, a tablet coordinate, or a text
+ordinal.
+
+#### 6.3.2 Cloning x's model
 
 x's model can be cloned when y's could be the same: rational, text, and a mouse whose window is one of the common
 sizes (its scale and x offset are bit for bit that size's, however the window was stored). Only then does y have a
@@ -594,7 +610,7 @@ being 1.
 Other x models, such as a tablet, whose span, origin and window half-size always differ by axis, or a mouse with any
 other window, have no bit: y's model follows directly.
 
-#### 6.3.2 Text without device detection
+#### 6.3.3 Text without device detection
 
 An encoder that does not detect devices can write each axis as one text segment (mode 3). Text needs no device
 information and has no parameters: `K` is the value's text ordinal (§4.1), so it fits any replay, and only negative
@@ -718,6 +734,10 @@ The life bar follows the parts in the `osr_meta_data` container (§8). Its first
   - Each time is coded as the frame it falls on (counted from a guess) or as an escaped difference. Frame times
     are cumulative frame deltas: the decoded frames including the closing seed frame, or the frames parsed from
     verbatim replay text (§14).
+  - The guess is a frame index. The first point's guess is frame 0, and the last point's is the frame of the last
+    point found on a frame (frame 0 if none). Any other point's guess starts there and steps over every frame whose
+    time is at most the previous point's time + 2000 ms: the game records a point only more than 2000 ms after the
+    one before.
   - The guesses step over at most `32 · frames + 2^20` frames in all (`_frame_cursor::steps`); once that is used up,
     a guess stops where it is, and later guesses are the last found point's frame.
   - Each value is coded in hundredths.
@@ -771,7 +791,7 @@ A decoder only reads what the encoder chose. The format leaves these choices fre
 
 - the compression priority;
 - the device model of each axis (one is required; text fits every replay, §6.3), its segments, the native grids, which
-  positions are escaped, the slack indexes, whether y clones x's model (§6.3.1), and whether autopilot is on
+  positions are escaped, the slack indexes, whether y clones x's model (§6.3.2), and whether autopilot is on
   (mode 7);
 - which deltas lead the delta table, its start and length and the order of the rest, and the time grid;
 - whether to use the fields form of §8 and the compact form of §9;
@@ -798,7 +818,7 @@ The exact-preservation guarantees have these known implementation limitations:
 - **A life bar marker byte other than `0x00` or `0x0b`** comes back as an empty life bar (`0x0b 0x00`). A non-minimal
   ULEB128 length comes back minimal.
 - **LZMA input validation** reads only the low 32 bits of the eight-byte text size, checks those against 2^28 and
-  checks the number of output bytes. It ignores the high 32 bits, the LZMA decoder's return code and status, and
+  2^14 times the data's size, and checks the number of output bytes. It ignores the high 32 bits, the LZMA decoder's return code and status, and
   unused input bytes. A malformed stream can therefore be accepted as frame input instead of preserved verbatim.
 
 ## 14. Normative data and arithmetic
