@@ -2281,7 +2281,9 @@ namespace standard {
 
 			}
 
-			m.seg.push_back({ (u32)from, p });
+			// a chunk with the previous chunk's model extends its segment
+			if (m.seg.empty() || m.seg.back().p != p)
+				m.seg.push_back({ (u32)from, p });
 
 			from = to;
 
