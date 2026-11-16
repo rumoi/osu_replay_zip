@@ -570,21 +570,19 @@ decisions, are normative and not restated here (`move_predictor` in `device_spac
 
 ### 6.3 Device models
 
-The device model is a list of segments shared by both axes, and each segment stores the model for x and y: a device
-change always stores both. The segment count starts at 1, so every axis has a model: an encoder must provide one for
-each axis, and a decoder must handle every mode.\
+The device model is a list of segments shared by both axes, and each segment stores the model for x and y. The
+segment count starts at 1, so every axis has a model: an encoder must provide one for each axis, and a decoder must
+handle every mode.\
 This outline defines how a decoder turns a stored model into values, not how an encoder picks one (§12).\
 Values a model does not reproduce are escaped (§6.4).
 
 First the segment count: 1 bit; if 0, one segment; if 1, 5 bits `c` follow and the count is `c + 2`. So the count is
 from 1 to 33. Then:
 
-1. **The lengths**, one per segment except the last. The segments split the new positions (the frames that are not
-   repeats, §6.2) into runs, one after the other: the first segment starts at new position 0 and each later one
-   where the one before it ends. A length is at least 1 and is stored less 1 as `length_bucket<4,0>` (§2), so a
-   reader adds 1 to what it reads. The last segment runs to the end. For example, segments of 250, 350 and 400 new
-   positions store 249, then 349, and nothing for the third. A segment that starts past the last new position is
-   never used.
+1. **The lengths**, in new positions (the frames that are not repeats, §6.2), one per segment except the last. A
+   length is at least 1 and is stored less 1 as `length_bucket<4,0>` (§2), so a reader adds 1 to what it reads. The
+   last segment runs to the end. For example, segments of 250, 350 and 400 new positions store 249, then 349, and
+   nothing for the third. A segment that starts past the last new position is never used.
 2. **x's model** for each segment.
 3. **y's model** for each segment: where x's model can be cloned, a "clone x" bit (§6.3.2); if the bit is 0 or
    there is none, y's model follows.
