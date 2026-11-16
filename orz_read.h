@@ -134,7 +134,7 @@ std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file,
 			case e_mode::osu:
 				return orz_text::minify_std_frames_text(
 				    // Encode unimportant frames at 40fps
-					(mods & OSR_MOD_DOUBLE_TIME) ? 38 : (mods & OSR_MOD_HALF_TIME) ? 17 : 25
+					(mods & OSR_MOD_DOUBLE_TIME) ? 38 : (mods & OSR_MOD_HALF_TIME) ? 19 : 25
 					, R);
 
 			case e_mode::taiko:

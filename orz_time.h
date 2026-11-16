@@ -228,63 +228,7 @@ namespace frame_time {
 		return table;
 	}
 
-	inline u32 pick_grid(std::span<const int> delta) {
-
-		constexpr int SYM{ 48 };
-
-		u32 counts[GRID_PERIOD_COUNT][GRID_BINS][SYM]{};
-
-		_time_grid grids[GRID_PERIOD_COUNT];
-
-		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
-			grids[g] = _time_grid{ g };
-
-		i64 now{};
-
-		for (const int d : delta) {
-
-			const int s{ std::clamp(d, 0, SYM - 1) };
-
-			for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
-				++counts[g][grids[g].bin(now)][s];
-
-			now += d;
-
-		}
-
-		u32 best{};
-		double best_bits{ std::numeric_limits<double>::max() };
-
-		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g) {
-
-			double bits{};
-
-			for (const auto& row : counts[g]) {
-
-				u32 total{};
-
-				for (const u32 c : row)
-					total += c;
-
-				for (const u32 c : row)
-					if (c)
-						bits += c * std::log2((double)total / c) + 0.5 * std::log2((double)total);
-
-			}
-
-			if (bits < best_bits) {
-
-				best_bits = bits;
-				best = g;
-
-			}
-
-		}
-
-		return best;
-	}
-
-	// pick_grid's estimate for one grid: the bits the deltas take with its phase as their only context
+	// the bits the deltas take with the grid's phase as their only context
 	inline double grid_bits(std::span<const int> delta, const _time_grid& grid) {
 
 		constexpr int SYM{ 48 };
@@ -316,6 +260,26 @@ namespace frame_time {
 		}
 
 		return bits;
+	}
+
+	// the listed grid whose phase codes the deltas in the fewest bits
+	inline u32 pick_grid(std::span<const int> delta) {
+
+		u32 best{};
+		double best_bits{ std::numeric_limits<double>::max() };
+
+		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g) {
+
+			if (const double bits{ grid_bits(delta, _time_grid{ g }) }; bits < best_bits) {
+
+				best_bits = bits;
+				best = g;
+
+			}
+
+		}
+
+		return best;
 	}
 
 	// A grid for ticks about `period` ms apart when that is none of the listed periods: a game clock off the usual play
