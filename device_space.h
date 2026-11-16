@@ -729,6 +729,8 @@ namespace dspace {
 
 		size_t repeats{};
 
+		// mouse reports decode_axis replays, against MOUSE_DECODE_BUDGET
+		i64 reports{};
 
 		void clear() {
 
@@ -739,6 +741,7 @@ namespace dspace {
 			decoded.clear();
 
 			repeats = 0;
+			reports = 0;
 
 		}
 
@@ -1018,6 +1021,9 @@ namespace dspace {
 
 			const i64 dk{ escaped ? 0 : mouse_dk(p, x, X) };
 
+			if (dk != 0)
+				o.reports += mouse_reports(p, dk, dt[i]);
+
 			float pred{ NAN };
 
 			if (!escaped && held && dk == 0) {
@@ -1045,8 +1051,12 @@ namespace dspace {
 					if (decoded && dk != 0 && i + 1 < vals.size())
 						mouse_finalize(cand, b, vals[i + 1], bounds[i + 1], dt[i + 1], k, Y);
 
-					if (dk != 0)
+					if (dk != 0) {
+
 						o.slack.push_back(k);
+						o.reports += cand.reports;
+
+					}
 
 					X = Y;
 
@@ -1099,6 +1109,7 @@ namespace dspace {
 
 			o.slack.insert(o.slack.end(), part.slack.begin(), part.slack.end());
 			o.repeats += part.repeats;
+			o.reports += part.reports;
 
 			for (size_t j{}; j < part.escapes.size(); ++j) {
 
@@ -1152,7 +1163,7 @@ namespace dspace {
 			const i64 dk{ K[i] - prevK };
 			prevK = K[i];
 
-			if (p.device.kind == axis_mode::mouse && dk != 0 && (budget -= mouse_reports(p, dk, dt[i])) < 0)
+			if (p.device.kind == axis_mode::mouse && dk != 0 && !segment_start && (budget -= mouse_reports(p, dk, dt[i])) < 0)
 				return false;
 
 			if (p.device.kind == axis_mode::text) {
@@ -1476,12 +1487,12 @@ namespace dspace {
 		return true;
 	}
 
-	// y cloning x: a rational or text x, or a mouse x on a common window taking its y offset
+	// y cloning x: a rational or text (or internal_none, written as text) x, or a mouse x on a common window taking its y offset
 	inline bool y_from_x(const axis_params& x, axis_params& y) {
 
 		y = x;
 
-		if (x.device.kind == axis_mode::rational || x.device.kind == axis_mode::text)
+		if (x.device.kind == axis_mode::rational || x.device.kind == axis_mode::text || x.device.kind == axis_mode::internal_none)
 			return true;
 
 		if (x.device.kind != axis_mode::mouse)
@@ -1585,17 +1596,16 @@ namespace dspace {
 		return true;
 	}
 
-	// the model a decoder reads back from write_info
-	inline _model_info as_written(const _model_info& m) {
+	// the model a decoder reads back from write_info; false if a decoder would reject it
+	inline bool as_written(const _model_info& m, _model_info& out) {
 
 		bit_stream o{};
 
 		write_info(m, o);
 
 		_bit_view in{ o };
-		_model_info r{};
 
-		return read_info(in, r) ? r : m;
+		return read_info(in, out);
 	}
 
 	struct move_predictor {

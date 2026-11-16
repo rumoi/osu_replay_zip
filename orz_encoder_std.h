@@ -1062,6 +1062,20 @@ namespace standard {
 
 	};
 
+	inline dspace::_model_info all_text() {
+
+		dspace::axis_params p{};
+
+		p.device.kind = dspace::axis_mode::text;
+
+		dspace::_model_info m{};
+
+		m.axis[0] = dspace::axis_model{ p };
+		m.axis[1] = dspace::axis_model{ p };
+
+		return m;
+	}
+
 	inline _positions position_streams(
 		const dspace::_model_info& model, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, orz_state& state,
 		size_t limit = SIZE_MAX, const autopilot::_params& ap = {},
@@ -1069,7 +1083,10 @@ namespace standard {
 	) {
 
 		// coded as the decoder reads it: the axes' segments synced, then each axis's own again
-		const dspace::_model_info m{ dspace::as_written(model) };
+		dspace::_model_info m;
+
+		if (!dspace::as_written(model, m))
+			return position_streams(all_text(), samples, shared, state, limit, ap, moves);
 
 		_positions p{};
 
@@ -1077,6 +1094,10 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a)
 			p.st[a] = dspace::encode_axis_model(m.axis[a], samples[a], state.exact_text());
+
+		// a mouse replay past the decoder's budget is coded as text, this should never happen for real replays.
+		if (p.st[0].reports > dspace::MOUSE_DECODE_BUDGET || p.st[1].reports > dspace::MOUSE_DECODE_BUDGET)
+			return position_streams(all_text(), samples, shared, state, limit, ap, moves);
 
 		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream model_head{};
@@ -1329,20 +1350,6 @@ namespace standard {
 			}
 
 		}
-
-		return m;
-	}
-
-	inline dspace::_model_info all_text() {
-
-		dspace::axis_params p{};
-
-		p.device.kind = dspace::axis_mode::text;
-
-		dspace::_model_info m{};
-
-		m.axis[0] = dspace::axis_model{ p };
-		m.axis[1] = dspace::axis_model{ p };
 
 		return m;
 	}
