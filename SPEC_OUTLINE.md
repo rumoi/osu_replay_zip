@@ -336,9 +336,10 @@ A counter is 16 bits: an 11-bit probability `q` in the high bits and a 5-bit cou
 - move `q` toward the bit, by a rate that falls as `n` grows:
 
   ```math
-  q \leftarrow q + \left\lfloor \frac{(2047\,y - q)\cdot \mathrm{RATE}[n]}{2^{16}} \right\rfloor,
+  q \leftarrow q + \left\lfloor \frac{(2047\,y - q)\cdot \mathrm{RATE}[n] + 2^{15}}{2^{16}} \right\rfloor,
   \qquad \mathrm{RATE}[n] = \left\lfloor \frac{131072}{2n + 3} \right\rfloor
   ```
+  rounded to nearest, so `q` moves toward 0 and toward 2047 alike (at `n = 31` it stops 16 short of either);
 - then `n` increases by 1 if it is below 31.
 
 ### 5.3 Models

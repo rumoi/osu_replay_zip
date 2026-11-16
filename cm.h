@@ -128,7 +128,7 @@ namespace cm {
 		const i64 target{ y ? 2047 : 0 }, p{ c.v >> 5 };
 		const u32 n{ c.n() };
 
-		c.v = (u16)(((p + (((target - p) * RATE[n]) >> 16)) << 5) | (n < COUNTER_LIMIT ? n + 1 : n));
+		c.v = (u16)(((p + (((target - p) * RATE[n] + 32768) >> 16)) << 5) | (n < COUNTER_LIMIT ? n + 1 : n));
 
 	}
 
