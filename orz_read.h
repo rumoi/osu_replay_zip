@@ -166,7 +166,7 @@ static void write_osr(const _orz_file& file, const std::vector<_osr_frame>& R, c
 
 	const u32 info{ file.encode_info };
 	
-	const auto parts{ osr_parts::decode(container_data(file, orz_tag::osr_meta_data)) };
+	const auto parts{ osr_parts::decode(container_data(file, orz_tag::osr_meta_data), !(options & ORZ_OPTION::DECODE_MINIFY)) };
 
 	const auto verbatim{ container_data(file, orz_tag::osr_verbatim) };
 
@@ -193,8 +193,7 @@ static void write_osr(const _orz_file& file, const std::vector<_osr_frame>& R, c
 
 			final_file_output.insert(final_file_output.end(), text.begin(), text.end());
 
-		} else
-			final_file_output.push_back(0x00);
+		} else final_file_output.push_back(0x00);
 
 		add_to_u8(final_file_output, parts.after_life);
 

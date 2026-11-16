@@ -864,7 +864,8 @@ uses the LZMA SDK's fast encoder (`compress_osr_string` in `orz_shared.h`); the 
 match the original stream.
 
 **Minified output.** `DECODE_MINIFY` is a reference-decoder option (`orz_minify.h`), not a file flag. It can discard
-or resample frames and changes the output text; the exact-preservation guarantees of §1 do not apply to it.
+or resample frames and changes the output text; the exact-preservation guarantees of §1 do not apply to it. It also
+writes a replay MD5 stored as a formula index (§8) as an empty string instead of computing it.
 
 ## 12. What the encoder chooses
 

@@ -455,7 +455,7 @@ namespace osr_parts {
 		return out;
 	}
 
-	inline _parts decode_fields(_bit_view s, size_t& used) {
+	inline _parts decode_fields(_bit_view s, size_t& used, bool derive_md5 = true) {
 
 		_parts p{};
 		_fields f{};
@@ -490,7 +490,7 @@ namespace osr_parts {
 		f.perfect = (u8)s.read_bits(1);
 		f.mods = s.read_bucket<16>();
 
-		if (derived)
+		if (derived && derive_md5)
 			f.replay = formula_md5(f, std::min(formula, FORMULAS - 1));
 
 		auto& h{ p.header };
@@ -499,7 +499,7 @@ namespace osr_parts {
 		put(h, f.version);
 		put_string(h, true, f.beatmap_md5);
 		put_string(h, f.has_name, f.name);
-		put_string(h, true, to_hex(f.replay));
+		put_string(h, true, derived && !derive_md5 ? std::string{} : to_hex(f.replay));
 
 		for (const u16 c : f.count)
 			put(h, c);
@@ -576,14 +576,14 @@ namespace osr_parts {
 	}
 
 	// empty when absent or damaged
-	inline _parts decode(std::span<const u8> data) {
+	inline _parts decode(std::span<const u8> data, bool derive_md5 = true) {
 
 		if (data.empty())
 			return {};
 
 		size_t used{};
 
-		auto p{ data[0] == format_fields ? decode_fields(_bit_view{ data.subspan(1) }, used) : decode_raw(data.subspan(1), used) };
+		auto p{ data[0] == format_fields ? decode_fields(_bit_view{ data.subspan(1) }, used, derive_md5) : decode_raw(data.subspan(1), used) };
 
 		if (1 + used < data.size())
 			p.life.assign(data.begin() + 1 + used, data.end());
