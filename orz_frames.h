@@ -1129,7 +1129,8 @@ namespace frames {
 			if (!md || md->table.t.empty())
 				continue;
 
-			for (u32 j{ prior.start[m] }; j < prior.start[m + 1]; ++j) {
+			// last to first: where two land on one counter, the earlier (worth more) is kept
+			for (u32 j{ prior.start[m + 1] }; j-- > prior.start[m];) {
 
 				const u32 value{ prior.values[j] };
 

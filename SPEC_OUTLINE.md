@@ -468,8 +468,8 @@ they are the first four, then the four catcher models.
 
 - **SIZE and BALANCED** take counters from `frames_prior.h`. Each entry is a key, the low 32 bits of a context hash,
   which selects the line under the replay's table size, and a value: the probability in bits 0–15, a confidence in
-  bits 16–23 and the slot in bits 24–31. Entries are applied in stored order, so a later one replaces an earlier one on
-  the same counter.
+  bits 16–23 and the slot in bits 24–31. Entries are applied last to first, so where two land on the same counter
+  the earlier entry is kept.
 - **SIZE** then copies each model's mixer weights from the same file.
 - **SPEED** takes counters from `frames_fallback_prior.h`: the same value layout with the counter's index
   (`salt · width + slot`) in bits 24–31, and no keys.
