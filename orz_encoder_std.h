@@ -1784,6 +1784,43 @@ namespace standard {
 		return found;
 	}
 
+	inline bool repeats_its_path(const std::vector<float> (&vals)[2]) {
+
+		constexpr size_t W{ 32 };
+
+		const size_t n{ vals[0].size() };
+
+		const auto at = [&](size_t i) {
+
+			return (((u64)std::bit_cast<u32>(vals[0][i]) << 32) | std::bit_cast<u32>(vals[1][i])) * 0x9E3779B97F4A7C15ull;
+		};
+
+		std::vector<u64> runs;
+
+		for (size_t i{}; i + W <= n; ++i) {
+
+			if ((at(i) >> 60) != 0)
+				continue;
+
+			u64 h{};
+
+			for (size_t k{}; k < W; ++k)
+				h = (h ^ at(i + k)) * 0x100000001b3ull;
+
+			runs.push_back(h);
+
+		}
+
+		if (runs.size() < 16)
+			return false;
+
+		std::sort(runs.begin(), runs.end());
+
+		const size_t distinct{ (size_t)(std::unique(runs.begin(), runs.end()) - runs.begin()) };
+
+		return (runs.size() - distinct) * 4 > runs.size();
+	}
+
 	inline void encode(const _osr& original, orz_state& state) {
 
 		const bool std_default_pos{ std_default_pos_of(original) };
@@ -1860,7 +1897,10 @@ namespace standard {
 			if (forced)
 				best = position_streams(info, samples, shared, state);
 
-			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, samples, shared, info, best)) };
+			// osu!'s cursor only: other modes' positions repeat by nature
+			const bool search{ dt.size() >= 64 && !(game_mode(state.mode()) == 0 && repeats_its_path(vals)) };
+
+			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && search && detect_device_model(state, samples, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {

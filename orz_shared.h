@@ -92,7 +92,7 @@ inline void no_FMA_check() {
 constexpr u32 ORZ_VERSION{ 0 }; // unreleased format; the compression priority selects the frame model
 
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
-constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
+constexpr size_t ORZ_MAX_FRAMES{ 1u << 20 }; // (~4.85 hours at 60 fps)
 constexpr size_t ORZ_MAX_FRAMES_PER_BYTE{ 8 }; // of the input's LZMA data (1 bit a frame): real replays stay under 5
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 

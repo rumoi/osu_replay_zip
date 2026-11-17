@@ -2508,6 +2508,35 @@ namespace standard {
 
 		}
 
+		{ // a segment that does not pay for itself: a neighbour's device over both codes smaller (one pass, left to right)
+
+			const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
+
+				return device_cost(state, q, dspace::encode_axis(q, samples.sub(a, b - a), state.exact_text()), dt.subspan(a, b - a), axis);
+			};
+
+			for (size_t k{ 1 }; k < m.seg.size(); ) {
+
+				const size_t a{ m.seg[k - 1].start }, b{ m.seg[k].start }, e{ seg_end(k) };
+				const auto A{ m.seg[k - 1].p }, B{ m.seg[k].p };
+
+				const size_t apart{ cost(A, a, b) + cost(B, b, e) };
+				const size_t with_a{ cost(A, a, e) }, with_b{ cost(B, a, e) };
+
+				if (std::min(with_a, with_b) >= apart) {
+
+					++k;
+
+					continue;
+				}
+
+				m.seg[k - 1].p = with_a <= with_b ? A : B;
+				m.seg.erase(m.seg.begin() + k);
+
+			}
+
+		}
+
 		for (size_t k{ 1 }; k < m.seg.size(); ++k) {
 
 			const auto& A{ m.seg[k - 1].p };

@@ -35,7 +35,7 @@ Decoding the replay ignores them.
 1. Byte 0 is the magic `0xE6`; reject any other.
 
 2. The header bit field (§3.1): version (reject future versions), crc, encode info, seeded and seed, frame count
-   (reject more than 2^22).
+   (reject more than 2^20).
 
 3. Read the encode info fields (§3.3). Reject priority 3, a set bit above bit 9, a mode of 8 or above, and
    a verbatim file whose priority is not 0.
@@ -160,7 +160,7 @@ A reader rejects a first byte other than `0xE6`. Bytes after the last container 
 | encode info | `length_bucket<4,0>` | §3.3 |
 | seeded | 1 bit | the replay ended with a closing seed frame (§3.5) |
 | seed | `length_bucket<3,18>`, if seeded | §3.5 |
-| frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; a reader rejects more than 2^22 |
+| frame count | `bucket(16)` | frames held by the frames stream, without the seed frame; a reader rejects more than 2^20 |
 | standard containers | §3.2 | |
 | custom containers | §3.2 | |
 
@@ -841,7 +841,7 @@ count of 0. The reference encoder uses it when any of these holds:
 - the replay text is empty;
 - neither float style reprints the text exactly (§4), after removing one trailing `,`. The 7-digit style is tried
   first;
-- there are more than 2^22 frames, counting a closing seed frame;
+- there are more than 2^20 frames, or more than 8 frames per byte of replay data, counting a closing seed frame;
 - outside osu!mania, some `abs(x)` exceeds 2^17; in any mode, some `abs(y)` exceeds 2^17, or a coordinate is NaN;
 - an osu!mania frame has keys other than 0, or an x that is not a whole number from 0 to 2^18 − 1.
 

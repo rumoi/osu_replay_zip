@@ -7,31 +7,57 @@
 
 Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view
 
-Sizes are totals over the whole set: the .osr replay data (LZMA) in, the .orz out, in bytes.
+Sizes are totals over the whole set, in bytes:
+
+- **raw**: the frames as the raw required binary, 16 bytes each (int delta, float x, float y, u32 keys)
+- **.osr**: the replay data inside the .osr (the frames as text, LZMA compressed)
+- **.orz**: the replay data as .orz
 
 # osu!
-27.386% of the original size (4,163 replays)
+4,163 replays, 45,036,306 frames
 
-226,602,499 -> 62,057,134
+| | bytes | of raw | of .osr |
+|---|---:|---:|---:|
+| raw | 720,580,896 | 100% | |
+| .osr | 226,602,499 | 31.45% | 100% |
+| .orz | 61,921,830 | **8.59%** | **27.33%** |
+
+128 bits a frame raw, 40.3 as .osr, 11.0 as .orz.
 
 ![box_whisk](./graph.png)
 
 # taiko
-44.402% of the original size (457 replays)
+457 replays, 4,064,380 frames
 
-2,794,463 -> 1,240,803
+| | bytes | of raw | of .osr |
+|---|---:|---:|---:|
+| raw | 65,030,080 | 100% | |
+| .osr | 2,794,463 | 4.30% | 100% |
+| .orz | 1,237,109 | **1.90%** | **44.27%** |
 
 # mania
-45.711% of the original size (1,562 replays)
+1,562 replays, 16,344,692 frames
 
-14,573,760 -> 6,661,779
+| | bytes | of raw | of .osr |
+|---|---:|---:|---:|
+| raw | 261,515,072 | 100% | |
+| .osr | 14,573,760 | 5.57% | 100% |
+| .orz | 6,643,539 | **2.54%** | **45.59%** |
 
 # fruit
-44.714% of the original size (373 replays)
+373 replays, 3,292,540 frames
 
-10,419,674 -> 4,659,070
+| | bytes | of raw | of .osr |
+|---|---:|---:|---:|
+| raw | 52,680,640 | 100% | |
+| .osr | 10,419,674 | 19.78% | 100% |
+| .orz | 4,650,899 | **8.83%** | **44.64%** |
 
 # Total
-29.332% of the original size (6,555 replays)
+6,555 replays, 68,737,918 frames
 
-254,390,396 -> 74,618,786
+| | bytes | of raw | of .osr |
+|---|---:|---:|---:|
+| raw | 1,099,806,688 | 100% | |
+| .osr | 254,390,396 | 23.13% | 100% |
+| .orz | 74,453,377 | **6.77%** | **29.27%** |
