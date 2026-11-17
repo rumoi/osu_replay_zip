@@ -288,8 +288,9 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 
 	state.input = replay_stream;
 
-	if (replay_stream.size() > ORZ_MAX_FRAMES)
-		replay_stream.clear(); // format can not store this many frames
+	// more frames than the format stores, or than the input's size can hold without repetition: stored as is
+	if (replay_stream.size() > ORZ_MAX_FRAMES || replay_stream.size() > lzma.size() * ORZ_MAX_FRAMES_PER_BYTE)
+		replay_stream.clear();
 
 	// only trust the frames if the text writer gives back this exact text, else the replay data is stored as is
 	bool verbatim{};

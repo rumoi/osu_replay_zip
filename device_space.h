@@ -413,6 +413,9 @@ namespace dspace {
 
 	constexpr i64 MOUSE_MAX_REPORTS{ 1ll << 16 };
 
+	// mouse reports a decode may simulate, guards damaged files
+	constexpr i64 MOUSE_DECODE_BUDGET{ 1ll << 27 };
+
 	inline i64 mouse_reports(const axis_params& p, i64 dk, int dt) {
 
 		const i64 n{ std::abs(dk) };
@@ -1016,6 +1019,19 @@ namespace dspace {
 			if (o.escapes.size() > max_escapes)
 				return o;
 
+			// past the decoder's budget no more reports are simulated: the rest escapes (bounds crafted files' encode time)
+			if (o.reports > MOUSE_DECODE_BUDGET) {
+
+				for (; i < vals.size() && o.escapes.size() <= max_escapes; ++i) {
+
+					o.K[i] = K;
+					escape(i, NAN);
+
+				}
+
+				return o;
+			}
+
 			const float x{ vals[i] };
 			const dotnet::text_bounds b{ bounds[i] };
 
@@ -1124,9 +1140,6 @@ namespace dspace {
 
 		return o;
 	}
-
-	// mouse reports a decode may simulate, guards damaged files
-	constexpr i64 MOUSE_DECODE_BUDGET{ 1ll << 27 };
 
 	// escapes: escaped positions, ascending; escape_value(pred): the next escaped value. false if damaged
 	template<typename Value>
