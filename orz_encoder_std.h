@@ -347,29 +347,34 @@ namespace standard {
 
 				double lo;
 
-				for (int it{}; it < 3; ++it) {
+				std::vector<double> v(d.size());
+				std::vector<double> t;
 
-					std::vector<std::pair<double, size_t>> t(d.size());
-					std::vector<i64> jd(d.size());
+				std::vector<i64> jd(d.size());
+
+				for (int it{}; it < 3; ++it) {
 
 					for (size_t i{}; i < d.size(); ++i) {
 
 						jd[i] = dspace::round_i64(((double)(d[i] - d.front()) - phase) / s);
-						t[i] = { (double)(d[i] - d.front()) - (double)jd[i] * s, i };
+						v[i] = (double)(d[i] - d.front()) - (double)jd[i] * s;
 
 					}
 
-					size_t count{ d.size() }, at{};
+					double last{ std::numeric_limits<float>::infinity() };
+					double first{ -last };
 
 					if (!exact) {
 
+						t = v;
+
 						std::sort(t.begin(), t.end());
 
-						count = 0;
+						size_t count{}, at{};
 
 						for (size_t e{}, b{}; e < t.size(); ++e) {
 
-							while (t[e].first - t[b].first >= 1.)
+							while (t[e] - t[b] >= 1.)
 								++b;
 
 							if (e - b + 1 > count) {
@@ -381,13 +386,10 @@ namespace standard {
 
 						}
 
+						first = t[at];
+						last = t[at + count - 1];
+
 					}
-
-					// the window's values, in their own order
-					std::vector<u8> pick(d.size());
-
-					for (size_t k{ at }; k < at + count; ++k)
-						pick[t[k].second] = 1;
 
 					on.clear();
 					j.clear();
@@ -396,7 +398,7 @@ namespace standard {
 
 					for (size_t i{}; i < d.size(); ++i) {
 
-						if (!pick[i])
+						if (!(v[i] >= first && v[i] <= last))
 							continue;
 
 						if (on.empty())
