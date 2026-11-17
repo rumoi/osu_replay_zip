@@ -880,13 +880,28 @@ namespace standard {
 		3840, 3440, 1536, 1152, 1400, 1080, 768, 900, 720, 1050, 1200, 600, 2160, 864, 960
 	};
 
-	static bool fit_origin_residue(std::span<const float> pick, double A, double B, int span, i64& residue, i64& period) {
+	// distinct samples spread over an axis that vote on a desktop origin's class
+	static size_t spread_picks(std::span<const float> p, float (&pick)[8]) {
+
+		size_t picks{};
+
+		for (size_t i{}; picks < 8 && i < p.size(); i += std::max<size_t>(1, p.size() / 64))
+			if (std::find(pick, pick + picks, p[i]) == pick + picks)
+				pick[picks++] = p[i];
+
+		return picks;
+	}
+
+	// fine: any period, votes within period / 128 of each other agreeing (the samples' own rounding spreads them); shift
+	// moves the voted class that far
+	static bool fit_origin_residue(std::span<const float> pick, double A, double B, int span, i64& residue, i64& period,
+		bool fine = false, i64 shift = 0) {
 
 		const int z{ std::countr_zero((unsigned)span) };
 
 		period = span >> z;
 
-		if (period >= 128 || z > 16 || pick.empty())
+		if ((period >= 128 && !fine) || z > 16 || pick.empty())
 			return false;
 
 		i64 votes[8];
@@ -902,11 +917,22 @@ namespace standard {
 
 		}
 
+		const i64 w{ fine ? period / 128 : 0 };
+
+		const auto near = [&](i64 x, i64 y) {
+
+			const i64 e{ std::abs(x - y) };
+
+			return std::min(e, period - e) <= w;
+		};
+
 		size_t best{};
 		i64 t{};
 
 		for (size_t i{}; i < nv; ++i)
-			if (const size_t m{ (size_t)std::count(votes, votes + nv, votes[i]) }; m > best) {
+			if (const size_t m{
+					(size_t)std::count_if(votes, votes + nv, [&](i64 y) { return near(votes[i], y); })
+				}; m > best) {
 
 				best = m;
 				t = votes[i];
@@ -916,7 +942,7 @@ namespace standard {
 		if (best * 2 <= pick.size())
 			return false;
 
-		u32 h{ (u32)t };
+		u32 h{ (u32)(((t + shift) % period + period) % period) };
 
 		for (int k{ z }; k < 16; ++k)
 			h = (h + ((u32)period & (0u - (h & 1)))) >> 1;
@@ -1466,13 +1492,8 @@ namespace standard {
 
 		}
 
-		// distinct samples spread over the axis that vote on a desktop origin's class
 		float pick[8];
-		size_t picks{};
-
-		for (size_t i{}; picks < 8 && i < p.size(); i += std::max<size_t>(1, p.size() / 64))
-			if (std::find(pick, pick + picks, p[i]) == pick + picks)
-				pick[picks++] = p[i];
+		const size_t picks{ spread_picks(p, pick) };
 
 		for (const auto& g : get_axis_game_candidates(axis)) {
 

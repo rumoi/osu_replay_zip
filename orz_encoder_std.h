@@ -1578,6 +1578,115 @@ namespace standard {
 		return false;
 	}
 
+	// An axis on a tablet missing at most 0.1% of its samples is the device: the other, missing more than 1%, is tried on
+	// the same tablet at its speed, in the same window, on a desktop of any span near its own step's
+	inline void fit_from_clean(orz_state& state, const dspace::_axis_samples (&samples)[2], dspace::axis_params& px, dspace::axis_params& py,
+		dspace::axis_streams ws[2]) {
+
+		dspace::axis_params* pa[2]{ &px, &py };
+
+		const size_t n{ samples[0].size() };
+
+		for (int good{}; good < 2; ++good) {
+
+			const int bad{ 1 - good };
+			const auto& q{ *pa[good] };
+
+			double fs, fc;
+
+			if (q.device.kind != dspace::axis_mode::absolute || (ws[good].escapes.size() + ws[good].repeats) * 1000 > n ||
+				(ws[bad].escapes.size() + ws[bad].repeats) * 100 <= n || !fit_axis_step(samples[bad].vals.subspan(2), fs, fc))
+				continue;
+
+			const auto pre{ samples[bad].first(std::min<size_t>(2000, n)) };
+
+			float pick[8];
+			const std::span<const float> picks{ pick, spread_picks(pre.vals.subspan(2), pick) };
+
+			dspace::axis_params best{};
+			size_t cap{ pre.size() / 50 + 1 };
+
+			for (const auto& [W, H] : PM_RES) {
+
+				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+				if (ratio != q.game.scale || (float)(good ? H / 2 : W / 2) != q.game.window_half)
+					continue;
+
+				auto r{ q };
+
+				r.game.off = bad ? oy : ox;
+				r.game.window_half = (float)(bad ? H / 2 : W / 2);
+				r.game.product_rounded = false;
+				r.device.absolute.mapping = dspace::tablet_mapping::desktop;
+
+				const double sp{ q.device.absolute.speed }, est{ fs * ratio * 65536. / sp };
+
+				std::vector<int> spans(std::begin(SPANS), std::end(SPANS));
+
+				for (int span{ (int)(est * 0.97) }; span <= (int)(est * 1.03) + 1; ++span)
+					spans.push_back(span);
+
+				for (const int span : spans) {
+
+					const double A{ ratio / sp * 65536. / span }, B{ ((r.game.off - r.game.window_half) / sp + r.game.window_half) * 65536. / span };
+
+					i64 residue, period;
+
+					if (span < 100 || !fit_origin_residue(picks, A, B, span, residue, period, true))
+						continue;
+
+					// the voted class and its neighbours within period / 128, at the 4 origins of each nearest 0
+					for (i64 d{ -period / 128 }; d <= period / 128; ++d) {
+
+						fit_origin_residue(picks, A, B, span, residue, period, true, d);
+
+						const i64 k0{ dspace::round_i64(-(double)residue / (double)period) };
+
+						for (i64 j{}; j < 4; ++j) {
+
+							r.device.absolute.span = (float)span;
+							r.game.origin = (float)(residue + (k0 + (j & 1 ? -(j + 1) / 2 : j / 2)) * period);
+
+							for (const auto fp : { dspace::float_unit::sse, dspace::float_unit::x87 }) {
+
+								r.game.fp = fp;
+
+								const auto st{ dspace::encode_axis(r, pre, state.exact_text(), cap) };
+
+								if (const size_t e{ st.escapes.size() + st.repeats }; e < cap) {
+
+									cap = e;
+									best = r;
+
+								}
+
+							}
+
+						}
+
+					}
+
+				}
+
+			}
+
+			if (best.device.kind != dspace::axis_mode::absolute)
+				continue;
+
+			auto st{ dspace::encode_axis(best, samples[bad], state.exact_text(), n / 2) };
+
+			if (device_cost(state, best, st, samples[bad].dt, bad) < device_cost(state, *pa[bad], ws[bad], samples[bad].dt, bad)) {
+
+				*pa[bad] = best;
+				ws[bad] = std::move(st);
+
+			}
+
+		}
+
+	}
+
 	inline bool detect_device_model(orz_state& state, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
 		// whole replay, one model per axis
@@ -1612,6 +1721,7 @@ namespace standard {
 
 			try_other_mouse(state, samples, px, py, ws);
 			share_mouse(state, samples, px, py, ws);
+			fit_from_clean(state, samples, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
