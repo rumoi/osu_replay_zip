@@ -2035,6 +2035,41 @@ namespace standard {
 		for (const auto& [q, variant] : finals)
 			consider(q, variant);
 
+		// refine origin selection
+		if (chosen.device.kind == dspace::axis_mode::absolute) {
+
+			const auto q{ chosen };
+			const double U{ (double)q.device.absolute.span * q.device.absolute.speed };
+
+			for (const int m : { 2, 3 }) {
+
+				for (const bool window : { true, false }) {
+
+					auto r{ q };
+
+					if (window) {
+
+						r.device.absolute.mapping = dspace::tablet_mapping::window;
+						r.device.absolute.span = 2.f * q.game.window_half;
+						r.game.origin = 0.f;
+						r.game.origin_unrounded = false;
+
+					}
+
+					const double sp{ m * U / r.device.absolute.span }, h{ std::round(sp * 100.) };
+
+					if (std::abs(sp * 100. - h) > 1e-3 || h < 5. || h > 1000.)
+						continue;
+
+					r.device.absolute.speed = (float)(h / 100.);
+					consider(r, true);
+
+				}
+
+			}
+
+		}
+
 		if (refine && chosen_cost != SIZE_MAX && (chosen.device.kind == dspace::axis_mode::mouse || chosen.device.kind == dspace::axis_mode::absolute)) {
 
 			const auto setting = [](dspace::axis_params& q) -> float& {
