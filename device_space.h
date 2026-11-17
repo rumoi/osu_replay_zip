@@ -376,6 +376,8 @@ namespace dspace {
 
 	inline float to_field(const _axis& a, float pos) {
 
+		// these divisions are okay to be precomputed and shared, not sure if I want to though
+
 		const axis_params& p{ a.param };
 
 		if (p.game.unrounded_sub && (p.device.kind == axis_mode::mouse || p.device.kind == axis_mode::absolute))

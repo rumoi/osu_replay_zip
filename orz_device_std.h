@@ -880,10 +880,72 @@ namespace standard {
 		3840, 3440, 1536, 1152, 1400, 1080, 768, 900, 720, 1050, 1200, 600, 2160, 864, 960
 	};
 
+	static bool fit_origin_residue(std::span<const float> pick, double A, double B, int span, i64& residue, i64& period) {
+
+		const int z{ std::countr_zero((unsigned)span) };
+
+		period = span >> z;
+
+		if (period >= 128 || z > 16 || pick.empty())
+			return false;
+
+		i64 votes[8];
+		size_t nv{};
+
+		for (const float v : pick) {
+
+			const double f{ ((double)v * A + B) * (double)period };
+			const i64 k{ dspace::round_i64(f) };
+
+			if (std::abs(f - (double)k) <= 0.03 * (double)period)
+				votes[nv++] = (k % period + period) % period;
+
+		}
+
+		size_t best{};
+		i64 t{};
+
+		for (size_t i{}; i < nv; ++i)
+			if (const size_t m{ (size_t)std::count(votes, votes + nv, votes[i]) }; m > best) {
+
+				best = m;
+				t = votes[i];
+
+			}
+
+		if (best * 2 <= pick.size())
+			return false;
+
+		u32 h{ (u32)t };
+
+		for (int k{ z }; k < 16; ++k)
+			h = (h + ((u32)period & (0u - (h & 1)))) >> 1;
+
+		residue = h;
+
+		return true;
+	}
+
 	static void tablet_candidates(const _game_candidate& g, double s, double c, const step_list& steps,
-		const dspace::axis_params* other, bool refine, std::vector<dspace::axis_params>& abs) {
+		const dspace::axis_params* other, bool refine, std::vector<dspace::axis_params>& abs, std::span<const float> pick) {
 
 		const float ratio{ g.game.scale };
+
+		// a desktop of this span at this speed: the n origins of its class nearest 0
+		const auto desktop_origins = [&](double sp, int span, double off, double half, size_t n, std::vector<int>& out) {
+
+			i64 residue, period;
+
+			if (!fit_origin_residue(pick, ratio / sp * 65536. / span, ((off - half) / sp + half) * 65536. / span, span, residue, period))
+				return false;
+
+			const i64 k0{ dspace::round_i64(-(double)residue / (double)period) };
+
+			for (i64 j{}; out.size() < n; ++j)
+				out.push_back((int)(residue + (k0 + (j & 1 ? -(j + 1) / 2 : j / 2)) * period));
+
+			return true;
+		};
 
 		if (other && other->device.kind == dspace::axis_mode::absolute && other->game.scale == ratio) {
 
@@ -907,6 +969,20 @@ namespace standard {
 					r.game.origin = 0.f;
 
 					abs.push_back(r);
+					// at the other axis's speed: the origins of this span's class
+					std::vector<int> origins;
+
+					desktop_origins(q.device.absolute.speed, span, q.game.off, q.game.window_half, 2, origins);
+
+					for (const int o : origins) {
+
+						if (o == 0)
+							continue;
+
+						r.game.origin = (float)o;
+						abs.push_back(r);
+
+					}
 
 				}
 
@@ -936,9 +1012,17 @@ namespace standard {
 					const double base{ (pos_c - q.game.window_half) / sp + q.game.window_half };
 					const double step{ (double)span / 65536. };
 
-					int found{};
+					std::vector<int> origins;
 
-					for (int k{}; found < 4 && k <= 8000; ++k) {
+					if (desktop_origins(sp, span, q.game.off, q.game.window_half, 4, origins))
+						for (const int o : origins) {
+
+							r.game.origin = (float)o;
+							abs.push_back(r);
+
+						}
+
+					for (int k{}, found{ origins.empty() ? 0 : 4 }; found < 4 && k <= 8000; ++k) {
 
 						const int o{ k & 1 ? -(k + 1) / 2 : k / 2 };
 
@@ -1030,20 +1114,24 @@ namespace standard {
 
 					const size_t max_origins{ refine && si + 1 == nsp ? 1u : 4u };
 
-					const double r{ base / step }, d{ 65536. / span };
-					const int period{ span >> std::countr_zero((unsigned)span) };
-					bool any{ period > 4000 };
+					if (!desktop_origins(sp, span, t.game.off, t.game.window_half, max_origins, origins)) {
 
-					for (int o{}; o < period && !any; ++o)
-						any = near_grid(r - o * d, 1., 0.031);
+						const double r{ base / step }, d{ 65536. / span };
+						const int period{ span >> std::countr_zero((unsigned)span) };
+						bool any{ period > 4000 };
 
-					for (int o{}; any && origins.size() < max_origins && o <= 4000; ++o) {
+						for (int o{}; o < period && !any; ++o)
+							any = near_grid(r - o * d, 1., 0.031);
 
-						if (near_grid(r - o * d, 1., 0.03))
-							origins.push_back(o);
+						for (int o{}; any && origins.size() < max_origins && o <= 4000; ++o) {
 
-						if (o && origins.size() < max_origins && near_grid(r + o * d, 1., 0.03))
-							origins.push_back(-o);
+							if (near_grid(r - o * d, 1., 0.03))
+								origins.push_back(o);
+
+							if (o && origins.size() < max_origins && near_grid(r + o * d, 1., 0.03))
+								origins.push_back(-o);
+
+						}
 
 					}
 
@@ -1378,10 +1466,18 @@ namespace standard {
 
 		}
 
+		// distinct samples spread over the axis that vote on a desktop origin's class
+		float pick[8];
+		size_t picks{};
+
+		for (size_t i{}; picks < 8 && i < p.size(); i += std::max<size_t>(1, p.size() / 64))
+			if (std::find(pick, pick + picks, p[i]) == pick + picks)
+				pick[picks++] = p[i];
+
 		for (const auto& g : get_axis_game_candidates(axis)) {
 
 			mouse_candidates(g, steps, other, refine, mouse);
-			tablet_candidates(g, s, c, steps, other, refine, abs);
+			tablet_candidates(g, s, c, steps, other, refine, abs, std::span<const float>{ pick, picks });
 
 		}
 
