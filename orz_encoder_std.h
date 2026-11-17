@@ -272,7 +272,7 @@ namespace standard {
 
 						const double f{ x * N };
 
-						++hist[std::min(BINS - 1, (int)((f - std::floor(f)) * BINS))];
+						++hist[std::min(BINS - 1, (int)((f - (double)(i64)f) * BINS))]; // f >= 0: the cast is floor
 
 					}
 
@@ -354,7 +354,7 @@ namespace standard {
 
 					for (size_t i{}; i < d.size(); ++i) {
 
-						jd[i] = std::llround(((double)(d[i] - d.front()) - phase) / s);
+						jd[i] = dspace::round_i64(((double)(d[i] - d.front()) - phase) / s);
 						t[i] = { (double)(d[i] - d.front()) - (double)jd[i] * s, i };
 
 					}
@@ -381,22 +381,29 @@ namespace standard {
 
 						}
 
-						std::sort(t.begin() + at, t.begin() + at + count, [](const auto& x, const auto& y) {
-
-							return x.second < y.second;
-						});
-
 					}
+
+					// the window's values, in their own order
+					std::vector<u8> pick(d.size());
+
+					for (size_t k{ at }; k < at + count; ++k)
+						pick[t[k].second] = 1;
 
 					on.clear();
 					j.clear();
 
-					const i64 low{ jd[t[at].second] };
+					i64 low{};
 
-					for (size_t k{ at }; k < at + count; ++k) {
+					for (size_t i{}; i < d.size(); ++i) {
 
-						on.push_back(d[t[k].second]);
-						j.push_back(jd[t[k].second] - low);
+						if (!pick[i])
+							continue;
+
+						if (on.empty())
+							low = jd[i];
+
+						on.push_back(d[i]);
+						j.push_back(jd[i] - low);
 
 					}
 
@@ -436,7 +443,7 @@ namespace standard {
 					i64 n{};
 
 					for (size_t i{ 1 }; i < d.size(); ++i)
-						n += std::max<i64>(1, std::llround((double)(d[i] - d[i - 1]) / s));
+						n += std::max<i64>(1, dspace::round_i64((double)(d[i] - d[i - 1]) / s));
 
 					const double s1{ span / (double)n };
 

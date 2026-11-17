@@ -1030,12 +1030,19 @@ namespace standard {
 
 					const size_t max_origins{ refine && si + 1 == nsp ? 1u : 4u };
 
-					for (int o{}; origins.size() < max_origins && o <= 4000; ++o) {
+					const double r{ base / step }, d{ 65536. / span };
+					const int period{ span >> std::countr_zero((unsigned)span) };
+					bool any{ period > 4000 };
 
-						if (near_grid(base - o, step, 0.03))
+					for (int o{}; o < period && !any; ++o)
+						any = near_grid(r - o * d, 1., 0.031);
+
+					for (int o{}; any && origins.size() < max_origins && o <= 4000; ++o) {
+
+						if (near_grid(r - o * d, 1., 0.03))
 							origins.push_back(o);
 
-						if (o && origins.size() < max_origins && near_grid(base + o, step, 0.03))
+						if (o && origins.size() < max_origins && near_grid(r + o * d, 1., 0.03))
 							origins.push_back(-o);
 
 					}

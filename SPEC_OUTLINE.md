@@ -649,8 +649,7 @@ reassociation change the result and must not be substituted for those steps (§1
   The index is at most 48.
 - An escaped position seeds the pixel position from its true value. The first position of a segment has no
   prediction.
-- A reader may reject an axis whose reports, counting those of the slack candidates it builds, pass 2^27. Real
-  replays stay under 1% of that.
+- **Budget.** A file whose mouse axis needs more than 2^27 reports to decode (slack candidates included) is still valid, but a reader may refuse it. Encoders are suggested to code such a replay as text instead, as the reference encoder does. Though real replays stay well below the limit.
 
 **text**: `K` is the value's text ordinal (§4.1). Values without one are escaped.
 
