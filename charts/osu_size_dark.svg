@@ -28,7 +28,7 @@
 <rect x="141" y="64.9" width="449.0" height="20.7" fill="#3b6ea8"/>
 <path d="M140 109.8h-5" stroke="#8c959f" stroke-width="2"/>
 <text x="130" y="109.8" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">.orz (size)</text>
-<rect x="141" y="99.4" width="122.0" height="20.7" fill="#3b6ea8"/>
+<rect x="141" y="99.4" width="121.9" height="20.7" fill="#3b6ea8"/>
 <path d="M140 144.2h-5" stroke="#8c959f" stroke-width="2"/>
 <text x="130" y="144.2" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">.orz (balanced)</text>
 <rect x="141" y="133.9" width="133.0" height="20.7" fill="#3b6ea8"/>
