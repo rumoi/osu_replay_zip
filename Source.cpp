@@ -116,7 +116,7 @@ static int run(const int param_count, char** param) {
 
 			std::vector<orz::_osr_frame> frames;
 
-			state.options = orz::DECODE_SKIP_CRC;
+			//state.options = orz::DECODE_SKIP_CRC;
 
 			if (orz::is_newer_orz(data))
 				fprintf(stderr, "error: %s was made by a newer version of orz\n", in_s.c_str());
