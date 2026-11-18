@@ -59,13 +59,23 @@ static int run(const int param_count, char** param) {
 		return 1;
 	};
 
+	orz::u32 encode_compression_priority{ orz::ENCODE_COMPRESSION_PRIORITY_SIZE };
+
 	std::filesystem::path in, out;
 
 	for (int i{ 1 }; i < param_count; ++i) {
 
 		const std::string_view a{ param[i] };
 
-		if (a == "-o") {
+		if (a == "-speed") {
+
+			encode_compression_priority = orz::ENCODE_COMPRESSION_PRIORITY_SPEED;
+
+		}else if (a == "-balanced") {
+
+			encode_compression_priority = orz::ENCODE_COMPRESSION_PRIORITY_BALANCED;
+
+		} else if (a == "-o") {
 
 			if (i + 1 >= param_count || !out.empty())
 				return usage();
@@ -131,6 +141,8 @@ static int run(const int param_count, char** param) {
 	} else {
 
 		orz::orz_state state{};
+
+		state.options = encode_compression_priority;
 
 		if (!orz::osr_to_orz(data, result, state)) {
 
