@@ -1,21 +1,34 @@
-# ORZ format
+# IN PROGRESS
 
-.orz is a lossless compression format to store osu replay frames. [SPEC_OUTLINE.md](SPEC_OUTLINE.md) outlines the format.
+.orz is a feature complete replacement for the .osr format.
 
-**The format is specified, but V0 is not pinned quite yet.**\
-**The priors are still being trained, once they are finished the format is ready.**
+Offering stronger correctness, guarantees and safety.
 
-Replay set: https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view
+[SPEC_OUTLINE.md](SPEC_OUTLINE.md)
 
+- 100% lossless
+- Text accurate encoding from .osr to .orz then back to .osr
+- ~3.6x smaller osu!std replays.
+- Expandable custom tags built into the format.
+- Full support for all the main 4 osu! gamemodes.
+- Full support for side modes like osu!relax and osu!autopilot.
+<br>
 Sizes are totals over the whole set, in bytes:
 
-- **raw**: the frames as the raw required binary, 16 bytes each (int delta, float x, float y, u32 keys)
-- **.osr**: the replay data inside the .osr (the frames as text, LZMA compressed)
-- **.orz**: the replay data as .orz, at each compression priority (SIZE, the default; BALANCED; SPEED)
-- **encode / decode**: the time from the frame values and back to them, summed over the replays (one process pinned to
-  core 0). Each replay runs all four formats interleaved, in a rotating order, the best of 3 each. .osr: the replay text
-  written and LZMA compressed with osu!'s settings, then decompressed and parsed; .orz: the encoder from the frames, the
-  decoder to the frames (no text either way)
+- **raw**: the frames as the raw required binary, 16 bytes each (int delta, float x, float y, u32 keys).
+- **.osr**: the replay data inside the .osr (the frames as text, LZMA compressed).
+- **.orz**: the replay data as .orz, at each compression priority (SIZE, BALANCED, SPEED).
+- **encode / decode**: the time from the frame values and back to them, on my i7 9700k, summed over the replays.
+
+Each replay runs all four formats interleaved, in a rotating order, the best of 3 each is used.
+  
+.osr> the replay text written and LZMA compressed with osu!'s settings, then decompressed and parsed;
+  
+.orz> the encoder from the frames, the decoder to the frames (no text either way)
+
+A best effort was made to use the latest LZMA vendor with generally optimized c++ code for the .osr side, much faster than the official encoder. 
+
+<a href="https://drive.google.com/file/d/1i2oe929loEzhvCfRYG-DeZZQ_YouaBYD/view">Replay corpus used</a>
 
 # osu!
 4,163 replays, 45,036,306 frames
