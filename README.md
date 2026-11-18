@@ -30,7 +30,20 @@ Sizes are totals over the whole set, in bytes:
 
 128 bits a frame raw, 40.3 as .osr, 11.0 as .orz-SIZE, 12.0 as .orz-BALANCED, 13.5 as .orz-SPEED.
 
-![box_whisk](./graph.png)
+<p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/osu_size_dark.svg">
+  <img alt="osu! size, % of .osr" src="charts/osu_size_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/osu_encode_dark.svg">
+  <img alt="osu! encode, ms per replay" src="charts/osu_encode_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/osu_decode_dark.svg">
+  <img alt="osu! decode, ms per replay" src="charts/osu_decode_light.svg" width="600">
+</picture>
+</p>
 
 # taiko
 457 replays, 4,064,380 frames
@@ -43,6 +56,21 @@ Sizes are totals over the whole set, in bytes:
 | .orz-BALANCED | 1,617,479 | 2.49% | 57.88% | 0.73 s (1.6 ms) | 0.64 s (1.40 ms) |
 | .orz-SPEED | 2,086,189 | 3.21% | 74.65% | 0.40 s (0.9 ms) | 0.26 s (0.56 ms) |
 
+<p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/taiko_size_dark.svg">
+  <img alt="taiko size, % of .osr" src="charts/taiko_size_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/taiko_encode_dark.svg">
+  <img alt="taiko encode, ms per replay" src="charts/taiko_encode_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/taiko_decode_dark.svg">
+  <img alt="taiko decode, ms per replay" src="charts/taiko_decode_light.svg" width="600">
+</picture>
+</p>
+
 # mania
 1,562 replays, 16,344,692 frames
 
@@ -53,6 +81,21 @@ Sizes are totals over the whole set, in bytes:
 | .orz-SIZE | 6,643,539 | **2.54%** | **45.59%** | 5.61 s (3.6 ms) | 5.21 s (3.33 ms) |
 | .orz-BALANCED | 8,185,006 | 3.13% | 56.16% | 3.18 s (2.0 ms) | 2.75 s (1.76 ms) |
 | .orz-SPEED | 9,588,713 | 3.67% | 65.79% | 1.78 s (1.1 ms) | 1.12 s (0.72 ms) |
+
+<p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/mania_size_dark.svg">
+  <img alt="mania size, % of .osr" src="charts/mania_size_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/mania_encode_dark.svg">
+  <img alt="mania encode, ms per replay" src="charts/mania_encode_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/mania_decode_dark.svg">
+  <img alt="mania decode, ms per replay" src="charts/mania_decode_light.svg" width="600">
+</picture>
+</p>
 
 # fruit
 373 replays, 3,292,540 frames
@@ -65,6 +108,21 @@ Sizes are totals over the whole set, in bytes:
 | .orz-BALANCED | 4,951,605 | 9.40% | 47.52% | 1.84 s (4.9 ms) | 1.46 s (3.92 ms) |
 | .orz-SPEED | 5,503,868 | 10.45% | 52.82% | 1.16 s (3.1 ms) | 0.73 s (1.97 ms) |
 
+<p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/fruit_size_dark.svg">
+  <img alt="fruit size, % of .osr" src="charts/fruit_size_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/fruit_encode_dark.svg">
+  <img alt="fruit encode, ms per replay" src="charts/fruit_encode_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/fruit_decode_dark.svg">
+  <img alt="fruit decode, ms per replay" src="charts/fruit_decode_light.svg" width="600">
+</picture>
+</p>
+
 # Total
 6,555 replays, 68,737,918 frames
 
@@ -75,3 +133,18 @@ Sizes are totals over the whole set, in bytes:
 | .orz-SIZE | 74,453,377 | **6.77%** | **29.27%** | 134.81 s (20.6 ms) | 64.18 s (9.79 ms) |
 | .orz-BALANCED | 82,215,758 | 7.48% | 32.32% | 108.71 s (16.6 ms) | 36.88 s (5.63 ms) |
 | .orz-SPEED | 92,908,767 | 8.45% | 36.52% | 92.03 s (14.0 ms) | 20.06 s (3.06 ms) |
+
+<p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/total_size_dark.svg">
+  <img alt="Total size, % of .osr" src="charts/total_size_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/total_encode_dark.svg">
+  <img alt="Total encode, ms per replay" src="charts/total_encode_light.svg" width="600">
+</picture><br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="charts/total_decode_dark.svg">
+  <img alt="Total decode, ms per replay" src="charts/total_decode_light.svg" width="600">
+</picture>
+</p>
