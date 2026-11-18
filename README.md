@@ -11,7 +11,7 @@ Offering stronger correctness, guarantees and safety.
 
 .orz's foundation is built around reconstructing the original input environment, including the device and configuration used by the player.
 
-Its compression core uses predictive, context-based modelling feed through an adaptive range coder.
+Its compression core uses predictive, context-based modelling feed through a binary arithmetic coder.
 
 [SPEC_OUTLINE.md](SPEC_OUTLINE.md) (not yet final)
 
