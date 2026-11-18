@@ -3,8 +3,13 @@
 .orz is a feature complete replacement for the .osr format.
 
 Offering stronger correctness, guarantees and safety.
+<br>
+<br>
+.orz's foundation is built around reconstructing the original input environment, including the device and configuration used by the player.
 
-[SPEC_OUTLINE.md](SPEC_OUTLINE.md)
+Its compression core uses predictive, context-based modelling feed through an adaptive range coder.
+
+[SPEC_OUTLINE.md](SPEC_OUTLINE.md) (not yet final)
 
 - 100% lossless
 - Text accurate encoding from .osr to .orz then back to .osr
