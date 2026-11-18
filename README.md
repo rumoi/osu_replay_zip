@@ -46,9 +46,9 @@ A best effort was made to use the latest LZMA vendor with generally optimized c+
 |---|---:|---:|---:|---:|---:|
 | raw | 720,580,896 | 100% | | | |
 | .osr | 226,602,499 | 31.45% | 100% | 258.42 s (62.1 ms) | 14.83 s (3.56 ms) |
-| .orz-SIZE | 61,921,830 | **8.59%** | **27.33%** | 115.70 s (27.8 ms) | 50.27 s (12.07 ms) |
-| .orz-BALANCED | 67,461,668 | 9.36% | 29.77% | 96.39 s (23.2 ms) | 29.81 s (7.16 ms) |
-| .orz-SPEED | 75,729,997 | 10.51% | 33.42% | 84.97 s (20.4 ms) | 17.71 s (4.25 ms) |
+| .orz-SIZE | 61,917,174 | **8.59%** | **27.32%** | 115.70 s (27.8 ms) | 50.27 s (12.07 ms) |
+| .orz-BALANCED | 67,457,616 | 9.36% | 29.77% | 96.39 s (23.2 ms) | 29.81 s (7.16 ms) |
+| .orz-SPEED | 75,726,876 | 10.51% | 33.42% | 84.97 s (20.4 ms) | 17.71 s (4.25 ms) |
 
 128 bits a frame raw, 40.3 as .osr, 11.0 as .orz-SIZE, 12.0 as .orz-BALANCED, 13.5 as .orz-SPEED.
 
@@ -72,9 +72,9 @@ A best effort was made to use the latest LZMA vendor with generally optimized c+
 |---|---:|---:|---:|---:|---:|
 | raw | 65,030,080 | 100% | | | |
 | .osr | 2,794,463 | 4.30% | 100% | 25.08 s (54.9 ms) | 0.39 s (0.85 ms) |
-| .orz-SIZE | 1,237,109 | **1.90%** | **44.27%** | 1.40 s (3.1 ms) | 1.32 s (2.90 ms) |
-| .orz-BALANCED | 1,617,479 | 2.49% | 57.88% | 0.73 s (1.6 ms) | 0.64 s (1.40 ms) |
-| .orz-SPEED | 2,086,189 | 3.21% | 74.65% | 0.40 s (0.9 ms) | 0.26 s (0.56 ms) |
+| .orz-SIZE | 1,236,703 | **1.90%** | **44.26%** | 1.40 s (3.1 ms) | 1.32 s (2.90 ms) |
+| .orz-BALANCED | 1,617,576 | 2.49% | 57.89% | 0.73 s (1.6 ms) | 0.64 s (1.40 ms) |
+| .orz-SPEED | 2,086,157 | 3.21% | 74.65% | 0.40 s (0.9 ms) | 0.26 s (0.56 ms) |
 
 <p>
   <img alt="taiko size, % of .osr" src="charts/taiko_size_light.svg#gh-light-mode-only" width="600">
@@ -96,9 +96,9 @@ A best effort was made to use the latest LZMA vendor with generally optimized c+
 |---|---:|---:|---:|---:|---:|
 | raw | 261,515,072 | 100% | | | |
 | .osr | 14,573,760 | 5.57% | 100% | 100.58 s (64.4 ms) | 2.31 s (1.48 ms) |
-| .orz-SIZE | 6,643,539 | **2.54%** | **45.59%** | 5.33 s (3.4 ms) | 4.91 s (3.14 ms) |
-| .orz-BALANCED | 8,185,006 | 3.13% | 56.16% | 2.99 s (1.9 ms) | 2.57 s (1.65 ms) |
-| .orz-SPEED | 9,588,713 | 3.67% | 65.79% | 1.74 s (1.1 ms) | 1.10 s (0.70 ms) |
+| .orz-SIZE | 6,640,437 | **2.54%** | **45.56%** | 5.33 s (3.4 ms) | 4.91 s (3.14 ms) |
+| .orz-BALANCED | 8,187,197 | 3.13% | 56.18% | 2.99 s (1.9 ms) | 2.57 s (1.65 ms) |
+| .orz-SPEED | 9,588,716 | 3.67% | 65.79% | 1.74 s (1.1 ms) | 1.10 s (0.70 ms) |
 
 <p>
   <img alt="mania size, % of .osr" src="charts/mania_size_light.svg#gh-light-mode-only" width="600">
@@ -120,9 +120,9 @@ A best effort was made to use the latest LZMA vendor with generally optimized c+
 |---|---:|---:|---:|---:|---:|
 | raw | 52,680,640 | 100% | | | |
 | .osr | 10,419,674 | 19.78% | 100% | 16.95 s (45.4 ms) | 0.87 s (2.32 ms) |
-| .orz-SIZE | 4,650,899 | **8.83%** | **44.64%** | 2.44 s (6.5 ms) | 2.15 s (5.75 ms) |
-| .orz-BALANCED | 4,951,605 | 9.40% | 47.52% | 1.61 s (4.3 ms) | 1.25 s (3.35 ms) |
-| .orz-SPEED | 5,503,868 | 10.45% | 52.82% | 1.09 s (2.9 ms) | 0.70 s (1.87 ms) |
+| .orz-SIZE | 4,650,545 | **8.83%** | **44.63%** | 2.44 s (6.5 ms) | 2.15 s (5.75 ms) |
+| .orz-BALANCED | 4,950,962 | 9.40% | 47.52% | 1.61 s (4.3 ms) | 1.25 s (3.35 ms) |
+| .orz-SPEED | 5,503,175 | 10.45% | 52.82% | 1.09 s (2.9 ms) | 0.70 s (1.87 ms) |
 
 <p>
   <img alt="fruit size, % of .osr" src="charts/fruit_size_light.svg#gh-light-mode-only" width="600">
@@ -144,9 +144,9 @@ A best effort was made to use the latest LZMA vendor with generally optimized c+
 |---|---:|---:|---:|---:|---:|
 | raw | 1,099,806,688 | 100% | | | |
 | .osr | 254,390,396 | 23.13% | 100% | 401.02 s (61.2 ms) | 18.39 s (2.81 ms) |
-| .orz-SIZE | 74,453,377 | **6.77%** | **29.27%** | 124.87 s (19.1 ms) | 58.64 s (8.95 ms) |
-| .orz-BALANCED | 82,215,758 | 7.48% | 32.32% | 101.72 s (15.5 ms) | 34.27 s (5.23 ms) |
-| .orz-SPEED | 92,908,767 | 8.45% | 36.52% | 88.20 s (13.5 ms) | 19.77 s (3.02 ms) |
+| .orz-SIZE | 74,444,859 | **6.77%** | **29.26%** | 124.87 s (19.1 ms) | 58.64 s (8.95 ms) |
+| .orz-BALANCED | 82,213,351 | 7.48% | 32.32% | 101.72 s (15.5 ms) | 34.27 s (5.23 ms) |
+| .orz-SPEED | 92,904,924 | 8.45% | 36.52% | 88.20 s (13.5 ms) | 19.77 s (3.02 ms) |
 
 <p>
   <img alt="Total size, % of .osr" src="charts/total_size_light.svg#gh-light-mode-only" width="600">
