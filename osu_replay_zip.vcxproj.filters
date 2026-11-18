@@ -27,6 +27,23 @@
     <ClCompile Include="Lib\LzmaDec.c">
       <Filter>Source Files\7z</Filter>
     </ClCompile>
+    <ClCompile Include="Lib\LzmaEnc.c">
+      <Filter>Source Files\7z</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\LzFind.c">
+      <Filter>Source Files\7z</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\LzFindOpt.c">
+      <Filter>Source Files\7z</Filter>
+    </ClCompile>
+    <ClCompile Include="Lib\CpuArch.c">
+      <Filter>Source Files\7z</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <MASM Include="Lib\LzmaDecOpt.asm">
+      <Filter>Source Files\7z</Filter>
+    </MASM>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Lib\7zTypes.h">
@@ -41,8 +58,20 @@
     <ClInclude Include="Lib\Precomp.h">
       <Filter>Header Files\zip</Filter>
     </ClInclude>
-    <ClInclude Include="osu_lzma.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Lib\LzmaEnc.h">
+      <Filter>Header Files\zip</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\LzFind.h">
+      <Filter>Header Files\zip</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\LzHash.h">
+      <Filter>Header Files\zip</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\CpuArch.h">
+      <Filter>Header Files\zip</Filter>
+    </ClInclude>
+    <ClInclude Include="Lib\7zWindows.h">
+      <Filter>Header Files\zip</Filter>
     </ClInclude>
     <ClInclude Include="rc.h">
       <Filter>Header Files</Filter>
@@ -63,6 +92,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="orz_types.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="orz_setup.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="orz_shared.h">

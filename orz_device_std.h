@@ -7,11 +7,13 @@
 #include <numeric>
 #include <set>
 #include <span>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
 #include "orz_state.h"
 #include "device_space.h"
+#include "orz_setup.h"
 
 namespace orz {
 
@@ -457,12 +459,12 @@ namespace standard {
 		return bound < 40.0 * 1e15 ? (size_t)(bound / 40.0) : SIZE_MAX;
 	}
 
-	static prefix_result prefix_eval(const orz_state& state, const dspace::axis_params& p, std::span<const float> vals,
-		std::span<const int> dt, std::span<const dotnet::text_bounds> bounds, size_t n, size_t max_escapes = SIZE_MAX) {
+	static prefix_result prefix_eval(const orz_state& state, const dspace::axis_params& p, const dspace::_axis_samples& samples, size_t n,
+		size_t max_escapes = SIZE_MAX) {
 
-		n = std::min(n, vals.size());
+		n = std::min(n, samples.size());
 
-		const auto o{ dspace::encode_axis(p, vals.first(n), dt.first(n), state.exact_text(), bounds.first(n), max_escapes) };
+		const auto o{ dspace::encode_axis(p, samples.first(n), state.exact_text(), max_escapes) };
 
 		if (o.escapes.size() > max_escapes)
 			return { INFINITY, o.escapes.size() };
@@ -534,9 +536,9 @@ namespace standard {
 	}
 
 	// the score if below bound, else infinity
-	static double prefix_score(const orz_state& state, const dspace::axis_params& p, std::span<const float> vals,
-		std::span<const int> dt, std::span<const dotnet::text_bounds> bounds, size_t n, double bound = INFINITY) {
-		return prefix_eval(state, p, vals, dt, bounds, n, escape_cap(bound)).score;
+	static double prefix_score(const orz_state& state, const dspace::axis_params& p, const dspace::_axis_samples& samples, size_t n,
+		double bound = INFINITY) {
+		return prefix_eval(state, p, samples, n, escape_cap(bound)).score;
 	}
 
 	FORCEINLINE bool near_grid(const double v, const double step, const double tol) {
@@ -780,35 +782,35 @@ namespace standard {
 		int win;
 	};
 
+	// a window's game mapping on an axis, added to a list that does not hold it yet
+	static void add_game(std::vector<_game_candidate>& games, int W, int H, int axis) {
+
+		const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+		_game_candidate c{};
+
+		c.game.scale = ratio;
+		c.game.off = axis ? oy : ox;
+		c.win = axis ? H : W;
+		c.game.window_half = (float)(c.win / 2);
+
+		const bool seen{ std::any_of(games.begin(), games.end(), [&c](const _game_candidate& e) {
+
+			return e.game == c.game && e.win == c.win;
+		}) };
+
+		if (!seen)
+			games.push_back(c);
+
+	}
 
 	static const auto GAMES_AXIS_TABLE = [] {
 
 		std::array<std::vector<_game_candidate>, 2> g{}; // make std::array with span later
 
-		for (int a{}; a < 2; ++a) {
-
-			for (const auto& [W, H] : PM_RES) {
-
-				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
-
-				_game_candidate c{};
-
-				c.game.scale = ratio;
-				c.game.off = a ? oy : ox;
-				c.win = a ? H : W;
-				c.game.window_half = (float)(c.win / 2);
-
-				const bool seen{ std::any_of(g[a].begin(), g[a].end(), [&c](const _game_candidate& e) {
-
-					return e.game == c.game && e.win == c.win;
-				}) };
-
-				if (!seen)
-					g[a].push_back(c);
-
-			}
-
-		}
+		for (int a{}; a < 2; ++a)
+			for (const auto& [W, H] : PM_RES)
+				add_game(g[a], W, H, a);
 
 		return g;
 	}();
@@ -878,10 +880,98 @@ namespace standard {
 		3840, 3440, 1536, 1152, 1400, 1080, 768, 900, 720, 1050, 1200, 600, 2160, 864, 960
 	};
 
+	// distinct samples spread over an axis that vote on a desktop origin's class
+	static size_t spread_picks(std::span<const float> p, float (&pick)[8]) {
+
+		size_t picks{};
+
+		for (size_t i{}; picks < 8 && i < p.size(); i += std::max<size_t>(1, p.size() / 64))
+			if (std::find(pick, pick + picks, p[i]) == pick + picks)
+				pick[picks++] = p[i];
+
+		return picks;
+	}
+
+	// fine: any period, votes within period / 128 of each other agreeing (the samples' own rounding spreads them); shift
+	// moves the voted class that far
+	static bool fit_origin_residue(std::span<const float> pick, double A, double B, int span, i64& residue, i64& period,
+		bool fine = false, i64 shift = 0) {
+
+		const int z{ std::countr_zero((unsigned)span) };
+
+		period = span >> z;
+
+		if ((period >= 128 && !fine) || z > 16 || pick.empty())
+			return false;
+
+		i64 votes[8];
+		size_t nv{};
+
+		for (const float v : pick) {
+
+			const double f{ ((double)v * A + B) * (double)period };
+			const i64 k{ dspace::round_i64(f) };
+
+			if (std::abs(f - (double)k) <= 0.03 * (double)period)
+				votes[nv++] = (k % period + period) % period;
+
+		}
+
+		const i64 w{ fine ? period / 128 : 0 };
+
+		const auto near = [&](i64 x, i64 y) {
+
+			const i64 e{ std::abs(x - y) };
+
+			return std::min(e, period - e) <= w;
+		};
+
+		size_t best{};
+		i64 t{};
+
+		for (size_t i{}; i < nv; ++i)
+			if (const size_t m{
+					(size_t)std::count_if(votes, votes + nv, [&](i64 y) { return near(votes[i], y); })
+				}; m > best) {
+
+				best = m;
+				t = votes[i];
+
+			}
+
+		if (best * 2 <= pick.size())
+			return false;
+
+		u32 h{ (u32)(((t + shift) % period + period) % period) };
+
+		for (int k{ z }; k < 16; ++k)
+			h = (h + ((u32)period & (0u - (h & 1)))) >> 1;
+
+		residue = h;
+
+		return true;
+	}
+
 	static void tablet_candidates(const _game_candidate& g, double s, double c, const step_list& steps,
-		const dspace::axis_params* other, bool refine, std::vector<dspace::axis_params>& abs) {
+		const dspace::axis_params* other, bool refine, std::vector<dspace::axis_params>& abs, std::span<const float> pick) {
 
 		const float ratio{ g.game.scale };
+
+		// a desktop of this span at this speed: the n origins of its class nearest 0
+		const auto desktop_origins = [&](double sp, int span, double off, double half, size_t n, std::vector<int>& out) {
+
+			i64 residue, period;
+
+			if (!fit_origin_residue(pick, ratio / sp * 65536. / span, ((off - half) / sp + half) * 65536. / span, span, residue, period))
+				return false;
+
+			const i64 k0{ dspace::round_i64(-(double)residue / (double)period) };
+
+			for (i64 j{}; out.size() < n; ++j)
+				out.push_back((int)(residue + (k0 + (j & 1 ? -(j + 1) / 2 : j / 2)) * period));
+
+			return true;
+		};
 
 		if (other && other->device.kind == dspace::axis_mode::absolute && other->game.scale == ratio) {
 
@@ -905,6 +995,20 @@ namespace standard {
 					r.game.origin = 0.f;
 
 					abs.push_back(r);
+					// at the other axis's speed: the origins of this span's class
+					std::vector<int> origins;
+
+					desktop_origins(q.device.absolute.speed, span, q.game.off, q.game.window_half, 2, origins);
+
+					for (const int o : origins) {
+
+						if (o == 0)
+							continue;
+
+						r.game.origin = (float)o;
+						abs.push_back(r);
+
+					}
 
 				}
 
@@ -934,9 +1038,17 @@ namespace standard {
 					const double base{ (pos_c - q.game.window_half) / sp + q.game.window_half };
 					const double step{ (double)span / 65536. };
 
-					int found{};
+					std::vector<int> origins;
 
-					for (int k{}; found < 4 && k <= 8000; ++k) {
+					if (desktop_origins(sp, span, q.game.off, q.game.window_half, 4, origins))
+						for (const int o : origins) {
+
+							r.game.origin = (float)o;
+							abs.push_back(r);
+
+						}
+
+					for (int k{}, found{ origins.empty() ? 0 : 4 }; found < 4 && k <= 8000; ++k) {
 
 						const int o{ k & 1 ? -(k + 1) / 2 : k / 2 };
 
@@ -986,7 +1098,17 @@ namespace standard {
 					for (int i{}; i < n_speeds; ++i) {
 
 						a.device.absolute.speed = sv[i];
-						abs.push_back(a);
+
+						// at a speed some clients round the product to float first: a tablet of its own to the screening,
+						// which would not pass one on for the other to be tried
+						for (const bool rounded : { false, true }) {
+
+							a.game.product_rounded = rounded;
+
+							if (!rounded || sv[i] != 1.f)
+								abs.push_back(a);
+
+						}
 
 					}
 
@@ -1018,13 +1140,24 @@ namespace standard {
 
 					const size_t max_origins{ refine && si + 1 == nsp ? 1u : 4u };
 
-					for (int o{}; origins.size() < max_origins && o <= 4000; ++o) {
+					if (!desktop_origins(sp, span, t.game.off, t.game.window_half, max_origins, origins)) {
 
-						if (near_grid(base - o, step, 0.03))
-							origins.push_back(o);
+						const double r{ base / step }, d{ 65536. / span };
+						const int period{ span >> std::countr_zero((unsigned)span) };
+						bool any{ period > 4000 };
 
-						if (o && origins.size() < max_origins && near_grid(base + o, step, 0.03))
-							origins.push_back(-o);
+						for (int o{}; o < period && !any; ++o)
+							any = near_grid(r - o * d, 1., 0.031);
+
+						for (int o{}; any && origins.size() < max_origins && o <= 4000; ++o) {
+
+							if (near_grid(r - o * d, 1., 0.03))
+								origins.push_back(o);
+
+							if (o && origins.size() < max_origins && near_grid(r + o * d, 1., 0.03))
+								origins.push_back(-o);
+
+						}
 
 					}
 
@@ -1092,10 +1225,166 @@ namespace standard {
 
 	}
 
+	static bool is_device(dspace::axis_mode k) {
+		return k == dspace::axis_mode::rational || k == dspace::axis_mode::mouse || k == dspace::axis_mode::absolute;
+	}
+
+	// a mouse without raw input: the game adds a frame's whole movement times the sensitivity at once (MouseHandler), which
+	// is a polling rate of one report a frame. No mouse reports this slowly, so 1 Hz stands for it.
+	constexpr float PER_FRAME{ 1.f };
+
+	// a mouse's reports per frame come from its polling rate and the replay's play rate
+	struct _report_rate {
+		float poll, rate;
+		bool operator==(const _report_rate&) const = default;
+	};
+
+	// The report rates the search tries: each polling rate at the replay's play rate, then at the other of normal and
+	// double time. Bare replay data does not say its play rate, and its frame times do not either (a client that
+	// records every frame leaves no 60 a second to measure). Where the mods do say it, frames a millisecond or two long
+	// hold a report or two whichever rate is counted with, and the other often codes them smaller. Half time at a
+	// polling rate is double time at twice it, report for report, so those two stand for all three.
+	static std::vector<_report_rate> report_rates(const orz_state& state) {
+
+		std::vector<_report_rate> rates;
+
+		for (const float poll : { PER_FRAME, 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f })
+			rates.push_back({ poll, state.play_rate });
+
+		for (const float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f })
+			rates.push_back({ poll, state.play_rate == 1.f ? 1.5f : 1.f });
+
+		return rates;
+	}
+
+	static dspace::axis_params at_rate(dspace::axis_params q, const _report_rate& r) {
+
+		q.device.mouse.poll = r.poll;
+		q.game.rate = r.rate;
+
+		return q;
+	}
+
+	// settings a replay often leaves open (a mouse's polling rate, how the game rounds) keep their plain value unless
+	// another codes the whole axis smaller by more than one part in this: one that only ties would change from replay
+	// to replay
+	constexpr size_t VARIANT_MARGIN{ 1000 };
+
+	// a lattice finer than the replay's fits it too, only at a higher cost: the moves then share a factor
+	static bool shared_factor(const dspace::axis_streams& st) {
+
+		u64 g{};
+
+		for (size_t i{ 1 }; i < st.K.size() && g != 1; ++i)
+			g = std::gcd(g, (u64)std::abs(st.K[i] - st.K[i - 1]));
+
+		return g > 1;
+	}
+
+	// a hinted device for this axis is taken without a search when it fits as x's device has to fit y (device_from_x),
+	// missing at most 0.1% of the samples (a mouse's seed frame aside), and no coarser lattice would. Real devices miss
+	// a little (a tablet around 0.1%), so one that says how much it missed where it came from is held to about that,
+	// up to the 1% at which the search itself looks further. The setups of a player's replays often differ in a
+	// setting, so a mouse's polling rate is searched as it is for any mouse.
+	static bool hinted_axis(orz_state& state, const dspace::_axis_samples& samples, int axis, dspace::axis_params& p, dspace::axis_streams& streams) {
+
+		const auto& [vals, bounds, dt]{ samples };
+
+		float missed{};
+
+		const auto limit_of = [&](const dspace::axis_params& q) {
+
+			const size_t allowed{ std::min((size_t)((double)vals.size() * (2. * missed + 0.002)), vals.size() / 100) };
+
+			return std::max(vals.size() / 1000, missed > 0.f ? allowed : 0) + (q.device.kind == dspace::axis_mode::mouse);
+		};
+
+		const auto fits = [&](const dspace::axis_params& q, dspace::axis_streams& st) {
+
+			const size_t limit{ limit_of(q) };
+
+			st = dspace::encode_axis(q, samples, state.exact_text(), limit + 1);
+
+			return st.escapes.size() + st.repeats <= limit && !shared_factor(st);
+		};
+
+		for (size_t k{}; k < state.hints.size(); ++k) {
+
+			auto q{ setup::device(state.hints[k], axis) };
+
+			if (!is_device(q.device.kind))
+				continue;
+
+			bool seen{};
+
+			for (size_t j{}; j < k && !seen; ++j)
+				seen = setup::device(state.hints[j], axis) == q;
+
+			// a hinted device is from another replay: this one's play rate
+			q.game.rate = state.play_rate;
+
+			dspace::axis_streams st;
+
+			missed = state.hints[k].missed[axis];
+
+			if (seen || !fits(q, st))
+				continue;
+
+			if (q.device.kind == dspace::axis_mode::mouse) {
+
+				constexpr size_t PREFIX{ 2000 };
+
+				double best{ prefix_score(state, q, samples, PREFIX) };
+
+				auto r{ q };
+
+				for (const auto& rate : report_rates(state)) {
+
+					const auto t{ at_rate(q, rate) };
+
+					if (const double sc{ prefix_score(state, t, samples, PREFIX, best) }; sc < best) {
+
+						best = sc;
+						r = t;
+
+					}
+
+				}
+
+				// the rate the prefix prefers is a variant of the hinted one: the whole axis decides, by its margin
+				if (r != q) {
+
+					if (dspace::axis_streams rs; fits(r, rs)) {
+
+						const size_t cost{ device_cost(state, r, rs, dt, axis) };
+
+						if (cost + cost / VARIANT_MARGIN + 1 < device_cost(state, q, st, dt, axis)) {
+
+							q = r;
+							st = std::move(rs);
+
+						}
+
+					}
+
+				}
+
+			}
+
+			p = q;
+			streams = std::move(st);
+
+			return true;
+		}
+
+		return false;
+	}
+
 	// tries to find the best model for one axis.
 	// failing to find one is the huge perf problem - having to try and bruteforce an acceptable solution
-	static dspace::axis_params detect_axis_model(orz_state& state, std::span<const float> vals, std::span<const int> dt,
-		int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false, double fit_s = 0., double fit_c = 0.) {
+	static dspace::axis_params detect_axis_model(orz_state& state, const dspace::_axis_samples& samples, int axis, const dspace::axis_params* other, dspace::axis_streams& streams, bool virtual_desktops = true, bool refine = false, double fit_s = 0., double fit_c = 0.) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		const dspace::axis_params none{};
 
@@ -1104,12 +1393,38 @@ namespace standard {
 		if (vals.size() < 64)
 			return none;
 
-		std::vector<dotnet::text_bounds> bounds(vals.size());
-
-		for (size_t i{}; i < vals.size(); ++i)
-			bounds[i] = dotnet::text_bounds{ vals[i], state.exact_text() };
-
 		const std::span<const float> p{ vals.subspan(2) };
+
+		// a hinted device that fits is taken as it is, no search
+		if (dspace::axis_params q; !refine && hinted_axis(state, samples, axis, q, streams))
+			return q;
+
+		// the device found on the first frames, when it also fits the last frames and then the whole axis
+		// is taken without the whole axis's search
+		if (constexpr size_t W{ 500 }; !refine && vals.size() >= 3 * W) {
+
+			dspace::axis_streams first;
+
+			const auto q{ detect_axis_model(state, samples.first(W), axis, other, first, virtual_desktops) };
+
+			// missing at most 2% of the samples it is tried on (a mouse's seed frame aside)
+			const auto fits = [&](const dspace::_axis_samples& part, dspace::axis_streams& st) {
+
+				const size_t limit{ part.size() / 50 + (q.device.kind == dspace::axis_mode::mouse) };
+
+				st = dspace::encode_axis(q, part, state.exact_text(), limit + 1);
+
+				return st.escapes.size() + st.repeats <= limit;
+			};
+
+			if (dspace::axis_streams last, st; is_device(q.device.kind) && fits(samples.sub(vals.size() - W, W), last) && fits(samples, st)) {
+
+				streams = std::move(st);
+
+				return q;
+			}
+
+		}
 
 		// no step may be found here even though the other axis found a mapping
 		const bool reuse_absolute{ other && other->device.kind == dspace::axis_mode::absolute };
@@ -1131,20 +1446,66 @@ namespace standard {
 
 		std::vector<dspace::axis_params> cands;
 
-		// a simple rational term first
-		if (dspace::axis_params q; !refine && rational_candidate(p, s, q))
+		// a simple rational term first. Half of all players are on whole pixels of their window (the system cursor, or a
+		// raw mouse at sensitivity 1), and no device codes those better than the lattice itself: it is taken as it
+		// stands, by the bar a hinted device is taken by. Finer lattices are a tablet's or a mouse's and go on.
+		if (dspace::axis_params q; !refine && s > 0. && rational_candidate(p, s, q)) {
+
+			q.game.rate = state.play_rate;
+
+			const size_t limit{ vals.size() / 1000 };
+
+			auto st{ dspace::encode_axis(q, samples, state.exact_text(), limit + 1) };
+
+			// one pixel of a window H high is 480 / H field units
+			const double height{ 480. * (double)q.device.rational.D / (double)q.device.rational.a };
+			const bool whole_pixels{ height >= 240. && height <= 4320. && std::abs(height - std::round(height)) < 1e-6 };
+
+			if (whole_pixels && st.escapes.size() + st.repeats <= limit && !shared_factor(st)) {
+
+				streams = std::move(st);
+
+				return q;
+			}
+
 			cands.push_back(q);
+
+		}
 
 		std::vector<dspace::axis_params> mouse, abs;
 
-		const auto& games{ get_axis_game_candidates(axis) };
+		dspace::axis_params other_rate{}; // the mouse candidate at the report rate its prefix prefers, when not its own
 
-		for (const auto& g : games) {
+		// hinted devices that do not fit outright are still candidates, scored with the others of their kind
+		if (!refine) {
 
-			mouse_candidates(g, steps, other, refine, mouse);
-			tablet_candidates(g, s, c, steps, other, refine, abs);
+			for (const auto& h : state.hints) {
+
+				const auto q{ setup::device(h, axis) };
+
+				auto& list{ q.device.kind == dspace::axis_mode::mouse ? mouse : q.device.kind == dspace::axis_mode::absolute ? abs : cands };
+
+				if (is_device(q.device.kind) && std::find(list.begin(), list.end(), q) == list.end())
+					list.push_back(q);
+
+			}
 
 		}
+
+		float pick[8];
+		const size_t picks{ spread_picks(p, pick) };
+
+		for (const auto& g : get_axis_game_candidates(axis)) {
+
+			mouse_candidates(g, steps, other, refine, mouse);
+			tablet_candidates(g, s, c, steps, other, refine, abs, std::span<const float>{ pick, picks });
+
+		}
+
+		// every device of this replay is at its play rate, wherever it came from
+		for (auto* list : { &cands, &mouse, &abs })
+			for (auto& q : *list)
+				q.game.rate = state.play_rate;
 
 		constexpr size_t PREFIX{ 2000 };
 
@@ -1152,46 +1513,143 @@ namespace standard {
 
 		if (!mouse.empty()) {
 
-			dspace::axis_params best{};
+			// A candidate is as good as it is at the report rate that suits it: the right window at the wrong rate
+			// scores worse than a wrong window does at any. So the base is the candidate whose best rate scores lowest,
+			// and that rate is a variant of the one it was listed with: most replays say little about the rate, so the
+			// whole axis decides between the two.
+			dspace::axis_params base{}, best{};
 
 			double best_score{ std::numeric_limits<double>::max() };
 
-			for (const auto& q : mouse) {
+			const size_t n{ refine ? REFINE_PREFIX : PREFIX };
 
-				const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
+			const auto rates{ report_rates(state) };
 
-				if (sc < best_score) {
+			struct _scored {
+				prefix_result listed; // at the rate it is listed with
+				u32 i;
+			};
 
-					best_score = sc;
-					best = q;
+			std::vector<_scored> scored;
+
+			{
+
+				// a prefix's score only grows with its length: a short prefix orders the candidates and rules most of
+				// them out
+				std::vector<std::pair<double, u32>> order(mouse.size());
+
+				size_t fewest{ SIZE_MAX };
+
+				for (u32 i{}; i < mouse.size(); ++i) {
+
+					const auto r{ prefix_eval(state, mouse[i], samples, n / 8) };
+
+					order[i] = { r.score, i };
+					fewest = std::min(fewest, r.escapes);
+
+				}
+
+				// every candidate misses most of the short prefix: not a mouse
+				if (fewest * 2 > std::min(n / 8, vals.size()))
+					order.clear();
+
+				std::sort(order.begin(), order.end());
+
+				double listed_best{ std::numeric_limits<double>::max() };
+
+				for (const auto& [low, i] : order) {
+
+					if (low > listed_best)
+						break;
+
+					const auto r{ prefix_eval(state, mouse[i], samples, n, escape_cap(listed_best)) };
+
+					if (r.score == INFINITY)
+						continue;
+
+					listed_best = std::min(listed_best, r.score);
+					scored.push_back({ r, i });
 
 				}
 
 			}
 
-			const auto base{ best };
+			// What a candidate misses hardly depends on the report rate, so the fewest misses come first and bound what
+			// any rate could score. The rates of the few likeliest are tried, the rest stand as listed.
+			std::sort(scored.begin(), scored.end(), [](const _scored& a, const _scored& b) {
+				return std::tie(a.listed.escapes, a.listed.score, a.i) < std::tie(b.listed.escapes, b.listed.score, b.i);
+			});
 
-			for (float poll : { 125.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f }) {
+			// candidates that score the same as listed are the same device named twice (a window and its double at twice
+			// the sensitivity): they score the same at every rate
+			struct _rated {
+				prefix_result listed;
+				double score;
+				_report_rate rate;
+			};
 
-				if (poll == base.device.mouse.poll)
-					continue;
+			std::vector<_rated> rated;
 
-				auto q{ base };
+			constexpr size_t RATED_MAX{ 3 };
 
-				q.device.mouse.poll = poll;
+			u32 best_i{};
 
-				const double sc{ prefix_score(state, q, vals, dt, bounds, refine ? REFINE_PREFIX : PREFIX, best_score) };
+			for (const auto& [listed, i] : scored) {
 
-				if (sc < best_score) {
+				if (40.0 * listed.escapes > best_score)
+					break;
 
-					best_score = sc;
-					best = q;
+				const _report_rate listed_rate{ mouse[i].device.mouse.poll, mouse[i].game.rate };
+
+				_rated r{ listed, listed.score, listed_rate };
+
+				const auto same{ std::find_if(rated.begin(), rated.end(), [&](const _rated& e) {
+					return e.listed.score == listed.score && e.listed.escapes == listed.escapes;
+				}) };
+
+				if (same != rated.end())
+					r = *same;
+
+				else if (rated.size() < RATED_MAX) {
+
+					for (const auto& rate : rates) {
+
+						if (rate == listed_rate)
+							continue;
+
+						if (const double sc{ prefix_score(state, at_rate(mouse[i], rate), samples, n, r.score) }; sc < r.score) {
+
+							r.score = sc;
+							r.rate = rate;
+
+						}
+
+					}
+
+					rated.push_back(r);
+
+				}
+
+				// equal scores keep the earliest listed
+				if (r.score < best_score || (r.score == best_score && i < best_i)) {
+
+					best_score = r.score;
+					base = mouse[i];
+					best = at_rate(base, r.rate);
+					best_i = i;
 
 				}
 
 			}
 
-			cands.push_back(best);
+			if (base.device.kind == dspace::axis_mode::mouse) {
+
+				cands.push_back(base);
+
+				if (best != base)
+					other_rate = best;
+
+			}
 
 		}
 
@@ -1216,9 +1674,9 @@ namespace standard {
 			const auto tablet_eval = [&](const dspace::axis_params& q, size_t max_escapes) {
 
 				if (informative)
-					return prefix_eval(state, q, tv, tdt, tb, tv.size(), max_escapes);
+					return prefix_eval(state, q, { tv, tb, tdt }, tv.size(), max_escapes);
 
-				return prefix_eval(state, q, vals, dt, bounds, 400, max_escapes);
+				return prefix_eval(state, q, samples, 400, max_escapes);
 
 			};
 
@@ -1234,13 +1692,14 @@ namespace standard {
 				constexpr size_t N{ 400 };
 
 				for (const auto& q : cands) {
-					if (clean = (prefix_eval(state, q, vals, dt, bounds, N, (N - 1) / 100).escapes * 100 < N))
+					if (clean = (prefix_eval(state, q, samples, N, (N - 1) / 100).escapes * 100 < N))
 						break;
 				}
 
 				for (size_t i{}; i < abs.size() && !clean; ++i) {
 
-					for (u8 fp : { 0, 1 }) {
+					// a rounded product only differs from the plain one on x87
+					for (u8 fp{ abs[i].game.product_rounded }; fp < 2; ++fp) {
 
 						auto q{ abs[i] };
 
@@ -1285,7 +1744,7 @@ namespace standard {
 					if (b.device.absolute.mapping == dspace::tablet_mapping::desktop && b.device.absolute.speed == 1.f)
 						listed.insert({ b.game.scale, b.game.off, b.device.absolute.span, b.game.origin });
 
-				for (const auto& g : games)
+				for (const auto& g : get_axis_game_candidates(axis))
 					virtual_candidates(g, s, c, field_lo, field_hi, abs, listed, vgroups);
 
 			}
@@ -1318,7 +1777,8 @@ namespace standard {
 
 				for (size_t i{}; i < n_std; ++i) {
 
-					for (u8 fp : { 0, 1 }) {
+					// a rounded product only differs from the plain one on x87
+					for (u8 fp{ abs[i].game.product_rounded }; fp < 2; ++fp) {
 
 						auto q{ abs[i] };
 
@@ -1386,9 +1846,6 @@ namespace standard {
 
 				std::sort(order.begin(), order.end());
 
-				dspace::axis_params best{};
-				double best_score{ std::numeric_limits<double>::max() };
-
 				std::vector<float> rv;
 				std::vector<int> rdt;
 				std::vector<dotnet::text_bounds> rb;
@@ -1401,6 +1858,13 @@ namespace standard {
 
 				}
 
+				// The sampled frames often fit several tablets as well as each other (a lattice twice as coarse holds every
+				// sample that happens to be on it), so the few that score best all go on: the whole replay decides between
+				// them, and between the two float precisions of each.
+				constexpr size_t TABLETS_ON{ 4 };
+
+				std::vector<std::pair<double, dspace::axis_params>> rescored;
+
 				for (size_t i{}; i < std::min<size_t>(order.size(), 8); ++i) {
 
 					auto q{ abs[order[i].second / 2] };
@@ -1408,28 +1872,55 @@ namespace standard {
 					q.game.fp = dspace::float_unit(order[i].second & 1);
 
 					const double sc{ rv.empty() ?
-						prefix_score(state, q, vals, dt, bounds, PREFIX, best_score) :
-						prefix_score(state, q, rv, rdt, rb, rv.size(), best_score)
+						prefix_score(state, q, samples, PREFIX) :
+						prefix_score(state, q, { rv, rb, rdt }, rv.size())
 					};
 
-					if (sc < best_score) {
-
-						best_score = sc;
-						best = q;
-
-					}
+					if (std::isfinite(sc))
+						rescored.push_back({ sc, q });
 
 				}
 
-				cands.push_back(best);
+				std::stable_sort(rescored.begin(), rescored.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
 
-				// SSE and x87 often tie on the sampled frame so let the whole replay decide
-				if (best.device.kind == dspace::axis_mode::absolute) {
+				// One tablet goes on once. Both ways of rounding a window's product are tried for any that is on, and a
+				// desktop's origin a whole number of its integers further on names the same tablet and scores the same.
+				const auto same_tablet = [](const dspace::axis_params& x, dspace::axis_params y) {
 
-					auto flip{ best };
+					y.game.product_rounded = x.game.product_rounded;
 
-					flip.game.fp = best.game.fp == dspace::float_unit::sse ? dspace::float_unit::x87 : dspace::float_unit::sse;
-					cands.push_back(flip);
+					if (x == y)
+						return true;
+
+					const double span{ x.device.absolute.span };
+
+					if (x.device.kind != dspace::axis_mode::absolute || x.device.absolute.mapping != dspace::tablet_mapping::desktop ||
+						span < 1. || span != std::floor(span))
+						return false;
+
+					const i64 apart{ (i64)x.game.origin - (i64)y.game.origin };
+
+					y.game.origin = x.game.origin;
+
+					return x == y && apart % ((i64)span / (i64)std::gcd((u64)span, (u64)65536)) == 0;
+				};
+
+				for (size_t i{}, on{}; i < rescored.size() && on < TABLETS_ON; ++i) {
+
+					auto q{ rescored[i].second };
+
+					// the other precision of one already on is on as well
+					q.game.fp = dspace::float_unit::x87;
+
+					if (std::any_of(cands.begin(), cands.end(), [&](const auto& e) { return same_tablet(e, q); }))
+						continue;
+
+					cands.push_back(q);
+
+					q.game.fp = dspace::float_unit::sse;
+					cands.push_back(q);
+
+					++on;
 
 				}
 
@@ -1442,19 +1933,31 @@ namespace standard {
 
 		size_t chosen_cost{ std::numeric_limits<size_t>::max() };
 
-		std::vector<dspace::axis_params> finals;
+		std::vector<std::pair<dspace::axis_params, bool>> finals; // and whether it is a variant of a plainer one
 
 		// the variants can repeat a candidate, each is coded once
-		const auto add_final = [&](const dspace::axis_params& q) {
+		const auto add_final = [&](const dspace::axis_params& q, bool variant = false) {
 
-			if (std::find(finals.begin(), finals.end(), q) == finals.end())
-				finals.push_back(q);
+			const bool listed{ std::any_of(finals.begin(), finals.end(), [&q](const auto& f) { return f.first == q; }) };
+
+			if (listed)
+				return;
+
+			finals.push_back({ q, variant });
 
 		};
 
-		for (const auto& q : cands) {
+		for (const auto& listed : cands) {
 
-			// a desktop tablet at speed 1 fits the same every span / gcd(span, 65536) - try the one nearest 0 first
+			// The game's float arithmetic runs at the x87 unit's precision: 53 bits unless something lowered it to 24, which
+			// few clients have (float_unit::sse stands for it). Many replays fit both, so 24 is the variant.
+			const bool low_precision{ listed.device.kind == dspace::axis_mode::absolute && listed.game.fp == dspace::float_unit::sse };
+
+			// the candidate the variants are of
+			auto q{ listed };
+
+			// a desktop tablet at speed 1 fits the same every span / gcd(span, 65536): the one nearest 0 stands for them,
+			// first, and the listed one is tried as it is
 			if (q.device.kind == dspace::axis_mode::absolute && q.device.absolute.mapping == dspace::tablet_mapping::desktop &&
 				q.device.absolute.speed == 1.f && q.device.absolute.span >= 1.f && q.device.absolute.span == std::floor(q.device.absolute.span)) {
 
@@ -1468,18 +1971,12 @@ namespace standard {
 				if (c * 2 > period)
 					c -= period;
 
-				if (c != o) {
-
-					auto r{ q };
-
-					r.game.origin = (float)c;
-					add_final(r);
-
-				}
+				q.game.origin = (float)c;
 
 			}
 
-			add_final(q);
+			add_final(q, low_precision);
+			add_final(listed, low_precision);
 
 			// the game may keep pos - off unrounded so we have to try both (JIT differences?)
 			if (q.device.kind == dspace::axis_mode::mouse || q.device.kind == dspace::axis_mode::absolute) {
@@ -1487,22 +1984,66 @@ namespace standard {
 				auto r{ q };
 
 				r.game.unrounded_sub = !r.game.unrounded_sub;
-				add_final(r);
+				add_final(r, true);
+
+			}
+
+			// A screen origin is added before the x87 unit rounds the screen position. That is what the game's code does
+			// at 53 bits, so it stands beside the candidate itself, not behind it.
+			if (q.device.kind == dspace::axis_mode::absolute && q.device.absolute.mapping == dspace::tablet_mapping::desktop && q.game.origin != 0.f) {
+
+				auto r{ q };
+
+				r.game.fp = dspace::float_unit::x87;
+				r.game.origin_unrounded = true;
+				add_final(r, low_precision);
+
+				r.game.unrounded_sub = !r.game.unrounded_sub;
+				add_final(r, true);
+
+			}
+
+			// mapped to the window at a speed, some clients round the product to float first
+			if (q.device.kind == dspace::axis_mode::absolute && q.device.absolute.mapping == dspace::tablet_mapping::window &&
+				q.device.absolute.speed != 1.f && q.game.fp == dspace::float_unit::x87) {
+
+				auto r{ q };
+
+				r.game.product_rounded = !r.game.product_rounded;
+				add_final(r, true);
+
+				r.game.unrounded_sub = !r.game.unrounded_sub;
+				add_final(r, true);
 
 			}
 
 		}
 
-		// keep q when it codes smaller
-		const auto consider = [&](const dspace::axis_params& q) {
+		if (other_rate.device.kind == dspace::axis_mode::mouse) {
+
+			add_final(other_rate, true);
+
+			other_rate.game.unrounded_sub = !other_rate.game.unrounded_sub;
+
+			add_final(other_rate, true);
+
+		}
+
+		// keep q when it codes smaller: a variant by more than its margin
+		const auto consider = [&](const dspace::axis_params& q, bool variant = false) {
 
 			// a model that escapes most frames is worse than text ordinals (the encode stops once it has)
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), bounds, vals.size() / 2) };
+			auto st{ dspace::encode_axis(q, samples, state.exact_text(), samples.size() / 2) };
 
 			if (st.escapes.size() * 2 > vals.size())
 				return;
 
-			if (const size_t cost{ device_cost(state, q, st, dt, axis) }; cost < chosen_cost) {
+			size_t cost{ device_cost(state, q, st, dt, axis) };
+
+			if (variant)
+				cost += cost / VARIANT_MARGIN + 1;
+
+			if (cost < chosen_cost) {
 
 				chosen_cost = cost;
 				chosen = q;
@@ -1512,8 +2053,43 @@ namespace standard {
 
 		};
 
-		for (const auto& q : finals)
-			consider(q);
+		for (const auto& [q, variant] : finals)
+			consider(q, variant);
+
+		// refine origin selection
+		if (chosen.device.kind == dspace::axis_mode::absolute) {
+
+			const auto q{ chosen };
+			const double U{ (double)q.device.absolute.span * q.device.absolute.speed };
+
+			for (const int m : { 2, 3 }) {
+
+				for (const bool window : { true, false }) {
+
+					auto r{ q };
+
+					if (window) {
+
+						r.device.absolute.mapping = dspace::tablet_mapping::window;
+						r.device.absolute.span = 2.f * q.game.window_half;
+						r.game.origin = 0.f;
+						r.game.origin_unrounded = false;
+
+					}
+
+					const double sp{ m * U / r.device.absolute.span }, h{ std::round(sp * 100.) };
+
+					if (std::abs(sp * 100. - h) > 1e-3 || h < 5. || h > 1000.)
+						continue;
+
+					r.device.absolute.speed = (float)(h / 100.);
+					consider(r, true);
+
+				}
+
+			}
+
+		}
 
 		if (refine && chosen_cost != SIZE_MAX && (chosen.device.kind == dspace::axis_mode::mouse || chosen.device.kind == dspace::axis_mode::absolute)) {
 
@@ -1528,7 +2104,7 @@ namespace standard {
 
 				constexpr size_t N{ 1000 };
 
-				double best{ prefix_score(state, chosen, vals, dt, bounds, N) };
+				double best{ prefix_score(state, chosen, samples, N) };
 				i64 best_j{};
 
 				const auto at = [&](i64 j) {
@@ -1553,7 +2129,7 @@ namespace standard {
 
 						const auto q{ at(from + k * stride) };
 
-						if (const double sc{ prefix_score(state, q, vals, dt, bounds, N, best) }; sc < best) {
+						if (const double sc{ prefix_score(state, q, samples, N, best) }; sc < best) {
 
 							best = sc;
 							best_j = from + k * stride;
@@ -1565,18 +2141,18 @@ namespace standard {
 				}
 
 				if (best_j != 0)
-					consider(at(best_j));
+					consider(at(best_j), true);
 
 			}
 
 		}
 
 		// we are escaping often, the step may be a neighbouring lattice
-		if (!refine && s > 0. && (chosen.device.kind == dspace::axis_mode::none || best_streams.escapes.size() * 100 > vals.size())) {
+		if (!refine && s > 0. && (chosen.device.kind == dspace::axis_mode::internal_none || best_streams.escapes.size() * 100 > vals.size())) {
 
 			dspace::axis_streams rs;
 
-			if (const auto r{ detect_axis_model(state, vals, dt, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::none) {
+			if (const auto r{ detect_axis_model(state, samples, axis, other, rs, false, true, s, c) }; r.device.kind != dspace::axis_mode::internal_none) {
 
 				if (const size_t cost{ device_cost(state, r, rs, dt, axis) }; cost < chosen_cost) {
 
@@ -1591,10 +2167,14 @@ namespace standard {
 
 		streams = std::move(best_streams);
 
+		// a mouse's rate is part of what was searched
+		if (chosen.device.kind != dspace::axis_mode::mouse)
+			chosen.game.rate = state.play_rate;
+
 		return chosen;
 	}
 
-	static void refine_window(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	static void refine_window(orz_state& state, const dspace::_axis_samples (&samples)[2],
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		dspace::axis_params* pa[2]{ &px, &py };
@@ -1612,7 +2192,7 @@ namespace standard {
 		if (!lattice(px) && !lattice(py))
 			return;
 
-		if ((ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= vals[0].size())
+		if ((ws[0].escapes.size() + ws[1].escapes.size()) * 100 <= samples[0].size())
 			return;
 
 		dspace::axis_params tab{ t >= 0 ? *pa[t] : px.device.kind == dspace::axis_mode::absolute ? px : py };
@@ -1622,7 +2202,7 @@ namespace standard {
 		tab.device.absolute.mapping = dspace::tablet_mapping::window;
 		tab.game.origin = 0.f;
 
-		const std::span<const float> p[2]{ std::span<const float>{ vals[0] }.subspan(2), std::span<const float>{ vals[1] }.subspan(2) };
+		const std::span<const float> p[2]{ samples[0].vals.subspan(2), samples[1].vals.subspan(2) };
 
 		double sx{}, sy{}, c{};
 
@@ -1693,22 +2273,22 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			auto pick{ spread_frames(informative_frames(state, vals[a]), 128) };
+			auto pick{ spread_frames(informative_frames(state, samples[a].vals), 128) };
 
 			if (pick.size() < 32) {
 
 				pick.clear();
 
-				for (size_t i{ 2 }; i < vals[a].size(); i += std::max<size_t>(1, vals[a].size() / 128))
+				for (size_t i{ 2 }; i < samples[a].size(); i += std::max<size_t>(1, samples[a].size() / 128))
 					pick.push_back(i);
 
 			}
 
 			for (const size_t i : pick) {
 
-				tv[a].push_back(vals[a][i]);
-				tdt[a].push_back(dt[i]);
-				tb[a].push_back(dotnet::text_bounds{ vals[a][i], state.exact_text() });
+				tv[a].push_back(samples[a].vals[i]);
+				tdt[a].push_back(samples[a].dt[i]);
+				tb[a].push_back(samples[a].bounds[i]);
 
 			}
 
@@ -1746,7 +2326,7 @@ namespace standard {
 				size_t esc{};
 
 				for (int a{}; a < 2; ++a)
-					esc += dspace::encode_axis(make(W, H, si, a), tv[a], tdt[a], state.exact_text(), tb[a]).escapes.size();
+					esc += dspace::encode_axis(make(W, H, si, a), { tv[a], tb[a], tdt[a] }, state.exact_text()).escapes.size();
 
 				scored.push_back({ esc, { W, H, si } });
 
@@ -1759,7 +2339,7 @@ namespace standard {
 		size_t best_cost{};
 
 		for (int a{}; a < 2; ++a)
-			best_cost += device_cost(state, *pa[a], ws[a], dt, a);
+			best_cost += device_cost(state, *pa[a], ws[a], samples[a].dt, a);
 
 		for (size_t i{}; i < std::min<size_t>(scored.size(), 4); ++i) {
 
@@ -1772,13 +2352,13 @@ namespace standard {
 			for (int a{}; a < 2; ++a) {
 
 				q[a] = make(W, H, si, a);
-				st[a] = dspace::encode_axis(q[a], vals[a], dt, state.exact_text(), {}, vals[a].size() / 2);
+				st[a] = dspace::encode_axis(q[a], samples[a], state.exact_text(), samples[a].size() / 2);
 
-				if (st[a].escapes.size() * 2 > vals[a].size())
+				if (st[a].escapes.size() * 2 > samples[a].size())
 					cost = SIZE_MAX;
 
 				if (cost != SIZE_MAX)
-					cost += device_cost(state, q[a], st[a], dt, a);
+					cost += device_cost(state, q[a], st[a], samples[a].dt, a);
 
 			}
 
@@ -1803,16 +2383,18 @@ namespace standard {
 	// so each 250 frame chunk is detected on its own
 	constexpr size_t SEGMENT_CHUNK{ 250 };
 
-	static size_t escapes_of(const dspace::axis_params& p, std::span<const float> vals, std::span<const int> dt,
-		size_t from, size_t to, bool exact_text) {
-		return dspace::encode_axis(p, vals.subspan(from, to - from), dt.subspan(from, to - from), exact_text).escapes.size();
+	static size_t escapes_of(const dspace::axis_params& p, const dspace::_axis_samples& samples, size_t from, size_t to, bool exact_text) {
+
+		return dspace::encode_axis(p, samples.sub(from, to - from), exact_text).escapes.size();
 	}
 
 	constexpr size_t SEGMENT_GIVE_UP{ 4 };
 	constexpr size_t SEGMENT_REUSE_THRESHOLD{ 200 };
 
-	static dspace::axis_model segment_axis(orz_state& state, std::span<const float> vals, std::span<const int> dt, int axis,
-		const dspace::axis_model* other, bool give_up_early, bool virtual_desktops) {
+	static dspace::axis_model segment_axis(orz_state& state, const dspace::_axis_samples& samples, int axis, const dspace::axis_model* other,
+		bool give_up_early, bool virtual_desktops) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		const size_t n{ vals.size() };
 		dspace::axis_model m;
@@ -1826,24 +2408,24 @@ namespace standard {
 				to = n;
 
 			const bool reuse{
-				!m.seg.empty() && m.seg.back().p.device.kind != dspace::axis_mode::none &&
-				escapes_of(m.seg.back().p, vals, dt, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
+				!m.seg.empty() && m.seg.back().p.device.kind != dspace::axis_mode::internal_none &&
+				escapes_of(m.seg.back().p, samples, from, to, state.exact_text()) * 1000 <= (to - from) * SEGMENT_REUSE_THRESHOLD
 			};
 
 			dspace::axis_streams unused;
 
 			const dspace::axis_params p{ reuse ?
 				m.seg.back().p :
-				detect_axis_model(state, vals.subspan(from, to - from), dt.subspan(from, to - from), axis,
+				detect_axis_model(state, samples.sub(from, to - from), axis,
 					other ? &other->at(from, other_at) : nullptr, unused, virtual_desktops)
 			};
 
 			// if we find a new device, we should check to see if this device is a better fit on the previous segments.
-			if (p.device.kind != dspace::axis_mode::none) {
+			if (p.device.kind != dspace::axis_mode::internal_none) {
 
 				const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
 
-					return device_cost(state, q, dspace::encode_axis(q, vals.subspan(a, b - a), dt.subspan(a, b - a), state.exact_text()),
+					return device_cost(state, q, dspace::encode_axis(q, samples.sub(a, b - a), state.exact_text()),
 						dt.subspan(a, b - a), axis);
 				};
 
@@ -1860,11 +2442,17 @@ namespace standard {
 
 			}
 
-			m.seg.push_back({ (u32)from, p });
+			// a chunk with the previous chunk's model extends its segment
+			if (m.seg.empty() || m.seg.back().p != p)
+				m.seg.push_back({ (u32)from, p });
 
 			from = to;
 
-			misses_in_row = p.device.kind == dspace::axis_mode::none ? misses_in_row + 1 : 0;
+			// no new devices past MAX_SEGMENTS: the last segment takes the rest
+			if (m.seg.size() == dspace::MAX_SEGMENTS)
+				break;
+
+			misses_in_row = p.device.kind == dspace::axis_mode::internal_none ? misses_in_row + 1 : 0;
 
 			if (give_up_early && misses_in_row >= SEGMENT_GIVE_UP && from < n) {
 
@@ -1885,17 +2473,17 @@ namespace standard {
 
 			for (size_t k{}; k < m.seg.size(); ++k) {
 
-				if (m.seg[k].p.device.kind != dspace::axis_mode::none)
+				if (m.seg[k].p.device.kind != dspace::axis_mode::internal_none)
 					continue;
 
 				const size_t from{ m.seg[k].start }, to{ seg_end(k) };
 
 				for (const size_t nb : { k - 1, k + 1 }) {
 
-					if (nb >= m.seg.size() || m.seg[nb].p.device.kind == dspace::axis_mode::none)
+					if (nb >= m.seg.size() || m.seg[nb].p.device.kind == dspace::axis_mode::internal_none)
 						continue;
 
-					if (escapes_of(m.seg[nb].p, vals, dt, from, to, state.exact_text()) * 2 < to - from) {
+					if (escapes_of(m.seg[nb].p, samples, from, to, state.exact_text()) * 2 < to - from) {
 
 						m.seg[k].p = m.seg[nb].p;
 
@@ -1920,6 +2508,35 @@ namespace standard {
 
 		}
 
+		{ // a segment that does not pay for itself: a neighbour's device over both codes smaller (one pass, left to right)
+
+			const auto cost = [&](const dspace::axis_params& q, size_t a, size_t b) {
+
+				return device_cost(state, q, dspace::encode_axis(q, samples.sub(a, b - a), state.exact_text()), dt.subspan(a, b - a), axis);
+			};
+
+			for (size_t k{ 1 }; k < m.seg.size(); ) {
+
+				const size_t a{ m.seg[k - 1].start }, b{ m.seg[k].start }, e{ seg_end(k) };
+				const auto A{ m.seg[k - 1].p }, B{ m.seg[k].p };
+
+				const size_t apart{ cost(A, a, b) + cost(B, b, e) };
+				const size_t with_a{ cost(A, a, e) }, with_b{ cost(B, a, e) };
+
+				if (std::min(with_a, with_b) >= apart) {
+
+					++k;
+
+					continue;
+				}
+
+				m.seg[k - 1].p = with_a <= with_b ? A : B;
+				m.seg.erase(m.seg.begin() + k);
+
+			}
+
+		}
+
 		for (size_t k{ 1 }; k < m.seg.size(); ++k) {
 
 			const auto& A{ m.seg[k - 1].p };
@@ -1937,13 +2554,12 @@ namespace standard {
 
 			{
 
-				const auto v{ vals.subspan(w0, w1 - w0) };
-				const auto d{ dt.subspan(w0, w1 - w0) };
+				const auto w{ samples.sub(w0, w1 - w0) };
 
-				for (const auto& [f, x] : dspace::encode_axis(A, v, d, state.exact_text()).escapes)
+				for (const auto& [f, x] : dspace::encode_axis(A, w, state.exact_text()).escapes)
 					missA[f] = 1;
 
-				for (const auto& [f, x] : dspace::encode_axis(B, v, d, state.exact_text()).escapes)
+				for (const auto& [f, x] : dspace::encode_axis(B, w, state.exact_text()).escapes)
 					missB[f] = 1;
 
 			}

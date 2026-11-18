@@ -51,20 +51,22 @@ namespace dspace {
 	}
 
 	enum class axis_mode : u8 {
-		none = 0,
 
 		// mostly can be used when raw input is turned off, maps to the windows (OS) cursor lattice
 		// can map to any absolute device too though
-		rational = 1,
+		rational = 0,
 
 		// any device that moves by a delta
-		mouse = 2,
+		mouse = 1,
 
 		// tablets, touch devices - etc
-		absolute = 3,
+		absolute = 2,
 
 		// fall back - value ordinals when nothing else maps
-		text = 4,
+		text = 3,
+
+		// encoder internal state only - not defined to write
+		internal_none = 4,
 	};
 
 	enum class tablet_mapping : u8 { desktop, window };  // window is stable's sAbsoluteToOsuWindow
@@ -76,6 +78,12 @@ namespace dspace {
 		float scale, off;
 		bool unrounded_sub; // pos - off stays unrounded (x87 register) before the multiply
 		float window_half, origin;  // absolute: size / 2, screen origin - client origin
+		bool origin_unrounded; // absolute on the desktop, x87: the origin joins L / 65536 * span before that is rounded
+		bool product_rounded; // absolute on the window, x87: (L - 32768) * speed is rounded to float before the rest
+
+		// mouse: the replay's play rate. Frame times are the song's, and a mouse reports in real time: under double time
+		// a frame holds two thirds of the reports its time says. 1, 1.5 (double time) or 0.75 (half time); 0 counts as 1.
+		float rate;
 		bool operator==(const _game_state_model&) const = default;
 	};
 
@@ -93,7 +101,7 @@ namespace dspace {
 
 	struct _input_device_model {
 
-		axis_mode kind;
+		axis_mode kind{ axis_mode::internal_none };
 
 		rational_params rational;
 
@@ -117,12 +125,15 @@ namespace dspace {
 		bool operator==(const axis_params&) const = default;
 	};
 
-	// common window sizes
+	// Common window sizes, the likeliest first: by how many players use each, counted over the players of a replay
+	// corpus, each once by their usual window (sizes nobody used keep their place at the end), with 2560x1440 kept
+	// second as it grows more common. The device search tries them in this order, so that what fits several windows
+	// as well lands on the likeliest, and a file names a window by its place here.
 	constexpr int PM_RES[][2]{
-		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1360, 768 }, { 1600, 900 }, { 1280, 720 },
-		{ 1680, 1050 }, { 1920, 1200 }, { 1440, 900 }, { 1280, 800 }, { 1280, 1024 }, { 1024, 768 },
-		{ 800, 600 }, { 3840, 2160 }, { 2560, 1080 }, { 3440, 1440 }, { 1536, 864 }, { 1280, 960 },
-		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1152, 864 }, { 1600, 1024 }, { 1920, 1440 },
+		{ 1920, 1080 }, { 2560, 1440 }, { 1366, 768 }, { 1600, 900 }, { 1680, 1050 }, { 1024, 768 },
+		{ 1440, 900 }, { 1280, 800 }, { 2560, 1080 }, { 1280, 1024 }, { 1920, 1440 }, { 1360, 768 },
+		{ 1152, 864 }, { 800, 600 }, { 1280, 960 }, { 1920, 1200 }, { 3840, 2160 }, { 3440, 1440 },
+		{ 1400, 1050 }, { 1600, 1200 }, { 2560, 1600 }, { 1600, 1024 }, { 1280, 720 }, { 1536, 864 },
 	};
 
 	FORCEINLINE constexpr auto playfield(int W, int H) {
@@ -143,6 +154,10 @@ namespace dspace {
 	// most replays keep a consistent axis_model
 	// if setup changes mid play (window moved, input device swapped, etc) it can though
 	// a mouse segment starts with an escaped frame (re-seed)
+
+	// the count starts at 1; a set bit adds 1 + the next SEGMENT_COUNT_BITS bits, so every count has one coding
+	constexpr int SEGMENT_COUNT_BITS{ 5 };
+	constexpr size_t MAX_SEGMENTS{ 1 + 1 + ((1u << SEGMENT_COUNT_BITS) - 1) };
 
 	struct axis_segment {
 		u32 start;
@@ -167,7 +182,7 @@ namespace dspace {
 		bool any_none() const {
 
 			for (const auto& s : seg)
-				if (s.p.device.kind == axis_mode::none)
+				if (s.p.device.kind == axis_mode::internal_none)
 					return true;
 
 			return seg.empty();
@@ -176,7 +191,7 @@ namespace dspace {
 		bool all_none() const {
 
 			for (const auto& s : seg)
-				if (s.p.device.kind != axis_mode::none)
+				if (s.p.device.kind != axis_mode::internal_none)
 					return false;
 
 			return true;
@@ -185,6 +200,61 @@ namespace dspace {
 
 	struct _model_info {
 		axis_model axis[2];
+	};
+
+	// a tablet's own lattice under an axis's coded integers: value(j) = (A * j + C) >> 32
+	struct _native_grid {
+		bool on;
+		u64 A; // 32:32 fixed p
+		i64 C; // 32:32 fixed p
+	};
+
+	// The hardware and software configuration behind a coding model (orz_setup.h): what an encode says of the player's
+	// setup, and what a caller hands back as a hint for the player's next replays. A hint is not trusted unless it is
+	// forced: the device it stands for is a candidate for the search, and has to fit the replay as any other does.
+	// Unknown parts are 0.
+	struct _setup {
+
+		enum class input : u8 {
+			unknown,
+			pixels, // whole window pixels: the system cursor, or a raw mouse at sensitivity 1
+			mouse,  // raw relative movement
+			tablet, // raw absolute positions
+			lattice, // any other input, by the positions it can give (lattice): a game that is not stable says its own
+		};
+
+		input kind{};
+
+		u32 window[2]{}; // the game window
+
+		// sensitivity (mouse, and a tablet's in game), mouse reports per second: 1 is one per frame, the game without raw
+		// input, which moves by a frame's whole movement at once
+		float sens{}, poll{};
+
+		// tablet
+		u32 desktop[2]{}; // pixels the coded integers cover: one monitor, or the virtual desktop
+		i32 window_at[2]{}; // the window's position within them, as coded
+		bool to_window[2]{}; // the range is mapped onto the window itself (the game's option), not through the desktop
+		double grid_step[2]{}; // the tablet's lattice as coded: coded integers per tablet count, 0: none
+
+		// the game's float arithmetic as each axis was coded (one game has one, but an axis that fits either way keeps
+		// what it was coded with): the x87 unit at 53 bits, pos - off kept unrounded, the screen origin added unrounded,
+		// the window mapping's product rounded
+		bool x87[2]{}, unrounded_sub[2]{}, origin_unrounded[2]{}, product_rounded[2]{};
+
+		// lattice: an axis's positions are (a * k + b) / D for whole k, as float((a * k + b) / (double)D)
+		rational_params lattice[2]{};
+
+		// the share of each axis's positions the model did not give: as a hint, the setup is taken again while it fits
+		// about as well
+		float missed[2]{};
+
+		// as a hint: the replay was recorded with this very setup, as the game that recorded it says. It is coded with
+		// the setup's device without a search, and a position that device does not give is escaped: a wrong setup costs
+		// size, never the replay.
+		bool force{};
+
+		bool operator==(const _setup&) const = default;
 	};
 
 	FORCEINLINE float rational_value(const axis_params& p, i64 k) {
@@ -213,9 +283,17 @@ namespace dspace {
 				return a * p.device.absolute.span;
 			}
 
-			const float a{ (float)((double)(L - 32768) * p.device.absolute.speed) };
+			// at 53 bits the whole expression is rounded once, when it is stored: the game's cast of the product to float
+			// does nothing to a value the x87 unit already holds as one. Some clients do round it there (two in three
+			// replays do not): product_rounded.
+			if (p.game.product_rounded) {
 
-			return (float)(((double)a + 32768.0) / 65536.0 * p.device.absolute.span);
+				const float a{ (float)((double)(L - 32768) * p.device.absolute.speed) };
+
+				return (float)(((double)a + 32768.0) / 65536.0 * p.device.absolute.span);
+			}
+
+			return (float)(((double)(L - 32768) * (double)p.device.absolute.speed + 32768.0) / 65536.0 * p.device.absolute.span);
 		}
 
 		// ToScreenCoords: (float)L / 65536 * width + screen.X; then - ClientBounds.X; then (pos - W/2) * speed + W/2
@@ -228,18 +306,24 @@ namespace dspace {
 
 			a = a - (-p.game.origin);
 
-			if (p.device.absolute.speed != 1.f) {
-				a = a - p.game.window_half;
-				a = a * p.device.absolute.speed;
-				a = a + p.game.window_half;
-			}
+			// the speed is applied about the window's middle whatever it is: at 24 bits the subtraction and the addition
+			// each round, so even a speed of 1 changes the value
+			a = a - p.game.window_half;
+			a = a * p.device.absolute.speed;
+			a = a + p.game.window_half;
 
 			return a;
 		}
 
-		float a{ (float)((double)L / 65536.0 * p.device.absolute.span) };
+		// ToScreenCoords gives (float)(L / 65536 * width + screen.X): on the x87 unit the sum is rounded once, so an origin
+		// that is the screen's (a client at 0) never sees the product rounded
+		float a{ p.game.origin_unrounded ?
+			(float)((double)L / 65536.0 * p.device.absolute.span + p.game.origin) :
+			(float)((double)L / 65536.0 * p.device.absolute.span)
+		};
 
-		a = (float)((double)a + p.game.origin);
+		if (!p.game.origin_unrounded)
+			a = (float)((double)a + p.game.origin);
 
 		if (p.device.absolute.speed != 1.f)
 			a = (float)(((double)a - p.game.window_half) * p.device.absolute.speed + p.game.window_half);
@@ -292,6 +376,8 @@ namespace dspace {
 
 	inline float to_field(const _axis& a, float pos) {
 
+		// these divisions are okay to be precomputed and shared, not sure if I want to though
+
 		const axis_params& p{ a.param };
 
 		if (p.game.unrounded_sub && (p.device.kind == axis_mode::mouse || p.device.kind == axis_mode::absolute))
@@ -327,37 +413,90 @@ namespace dspace {
 
 	constexpr i64 MOUSE_MAX_REPORTS{ 1ll << 16 };
 
+	// mouse reports a decode may simulate, guards damaged files
+	constexpr i64 MOUSE_DECODE_BUDGET{ 1ll << 27 };
+
 	inline i64 mouse_reports(const axis_params& p, i64 dk, int dt) {
 
 		const i64 n{ std::abs(dk) };
 
-		const double want{ std::clamp((double)dt * p.device.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
+		const double real_ms{ p.game.rate > 0.f ? (double)dt / (double)p.game.rate : (double)dt };
+
+		const double want{ std::clamp(real_ms * p.device.mouse.poll / 1000.0, 1.0, (double)MOUSE_MAX_REPORTS) };
 
 		return std::clamp<i64>(round_i64(want), 1, std::min(n, MOUSE_MAX_REPORTS));
 	}
 
-	inline float mouse_advance_m(const _axis& a, float X, i64 dk, i64 m) {
+	FORCEINLINE bool in_window(const _axis& a, float X, float Y) {
+
+		const float size{ a.window };
+
+		return size <= 0.f || (X >= 0.f && X <= size - 1.f && Y >= 0.f && Y <= size - 1.f);
+	}
+
+	template<bool is_clamped = false>
+	FORCEINLINE float mouse_advance_m(const _axis& a, float X, i64 dk, i64 m) {
 
 		if (dk == 0)
 			return X;
 
 		const i64 n{ std::abs(dk) }, sgn{ dk < 0 ? -1 : 1 };
 
-		// while playing the cursor is clamped to the window after every report (RawMouseHandler)
+		const double step[2]{
+			(double)(sgn * (n / m)) * (double)a.param.device.mouse.sens,
+			(double)(sgn * (n / m + 1)) * (double)a.param.device.mouse.sens
+		};
+
+		const i64 longer{ n % m };
 		const float size{ a.window };
+
+		float Y{ X };
 
 		for (i64 q{}; q < m; ++q) {
 
-			const i64 c{ n / m + (q < n % m) };
+			Y = (float)((double)Y + step[q < longer]);
 
-			X = (float)((double)X + (double)(sgn * c) * (double)a.param.device.mouse.sens);
-
-			if (size > 0.f)
-				X = std::clamp(X, 0.f, size - 1.f);
+			if constexpr (is_clamped)
+				if (size > 0.f)
+					Y = std::clamp(Y, 0.f, size - 1.f);
 
 		}
 
-		return X;
+		if constexpr (!is_clamped)
+			if (!in_window(a, X, Y))
+				return mouse_advance_m<true>(a, X, dk, m);
+
+		return Y;
+	}
+
+	constexpr int MOUSE_BATCH{ 4 };
+
+	inline void mouse_advance_each(const _axis& a, float X, i64 dk, const i64 (&m)[MOUSE_BATCH], int count, float (&out)[MOUSE_BATCH]) {
+
+		const i64 n{ std::abs(dk) }, sgn{ dk < 0 ? -1 : 1 };
+
+		double step[MOUSE_BATCH][2];
+		i64 longer[MOUSE_BATCH], most{};
+
+		for (int j{}; j < count; ++j) {
+
+			step[j][0] = (double)(sgn * (n / m[j])) * (double)a.param.device.mouse.sens;
+			step[j][1] = (double)(sgn * (n / m[j] + 1)) * (double)a.param.device.mouse.sens;
+			longer[j] = n % m[j];
+			most = std::max(most, m[j]);
+			out[j] = X;
+
+		}
+
+		for (i64 q{}; q < most; ++q)
+			for (int j{}; j < count; ++j)
+				if (q < m[j])
+					out[j] = (float)((double)out[j] + step[j][q < longer[j]]);
+
+		for (int j{}; j < count; ++j)
+			if (!in_window(a, X, out[j]))
+				out[j] = mouse_advance_m<true>(a, X, dk, m[j]);
+
 	}
 
 	inline float mouse_advance(const _axis& a, float X, i64 dk, int dt) {
@@ -388,6 +527,7 @@ namespace dspace {
 		i64 dk, n, m;
 		float list[20];
 		int count{}, next_split{};
+		i64 reports{};
 
 		_mouse_candidates(const _axis& a_, float X_, i64 dk_, int dt, float first) : a{ a_ }, X{ X_ }, dk{ dk_ } {
 
@@ -415,20 +555,37 @@ namespace dspace {
 
 			while (count <= k && next_split < (int)std::size(OFFSETS)) {
 
-				const i64 r{ m + OFFSETS[next_split++] };
+				i64 r[MOUSE_BATCH];
+				int got{};
 
-				if (r < 1 || r > n || r > MOUSE_MAX_REPORTS)
-					continue;
+				while (got < MOUSE_BATCH && next_split < (int)std::size(OFFSETS)) {
 
-				const float v{ mouse_advance_m(a, X, dk, r) };
+					const i64 t{ m + OFFSETS[next_split++] };
 
-				bool seen{};
+					if (t >= 1 && t <= n && t <= MOUSE_MAX_REPORTS) {
 
-				for (int q{}; q < count; ++q)
-					seen |= std::bit_cast<u32>(list[q]) == std::bit_cast<u32>(v);
+						r[got++] = t;
+						reports += t;
 
-				if (!seen)
-					list[count++] = v;
+					}
+
+				}
+
+				float v[MOUSE_BATCH];
+
+				mouse_advance_each(a, X, dk, r, got, v);
+
+				for (int i{}; i < got; ++i) {
+
+					bool seen{};
+
+					for (int q{}; q < count; ++q)
+						seen |= std::bit_cast<u32>(list[q]) == std::bit_cast<u32>(v[i]);
+
+					if (!seen)
+						list[count++] = v[i];
+
+				}
 
 			}
 
@@ -577,6 +734,8 @@ namespace dspace {
 
 		size_t repeats{};
 
+		// mouse reports decode_axis replays, against MOUSE_DECODE_BUDGET
+		i64 reports{};
 
 		void clear() {
 
@@ -587,6 +746,7 @@ namespace dspace {
 			decoded.clear();
 
 			repeats = 0;
+			reports = 0;
 
 		}
 
@@ -684,11 +844,33 @@ namespace dspace {
 		return false;
 	}
 
-	// bounds: optional precomputed text_bounds of vals
 	// max_escapes: give up past this many (streams incomplete)
 	// decoded: optional, gets what decode_axis will return per frame
-	inline axis_streams encode_axis(const axis_params& p, std::span<const float> vals, std::span<const int> dt,
-		bool exact_text, std::span<const dotnet::text_bounds> bounds = {}, size_t max_escapes = SIZE_MAX, float* decoded = nullptr) {
+	// one axis's samples as views: the values, their text bounds, the time since the previous sample
+	struct _axis_samples {
+
+		std::span<const float> vals;
+		std::span<const dotnet::text_bounds> bounds;
+		std::span<const int> dt;
+
+		size_t size() const {
+			return vals.size();
+		}
+
+		_axis_samples first(size_t n) const {
+			return { vals.first(n), bounds.first(n), dt.first(n) };
+		}
+
+		_axis_samples sub(size_t from, size_t n) const {
+			return { vals.subspan(from, n), bounds.subspan(from, n), dt.subspan(from, n) };
+		}
+
+	};
+
+	inline axis_streams encode_axis(const axis_params& p, const _axis_samples& samples, bool exact_text, size_t max_escapes = SIZE_MAX,
+		float* decoded = nullptr) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		axis_streams o{};
 		o.K.resize(vals.size());
@@ -734,7 +916,7 @@ namespace dspace {
 			return false;
 		};
 
-		if (p.device.kind == axis_mode::none) {
+		if (p.device.kind == axis_mode::internal_none) {
 
 			for (size_t i{}; i < vals.size(); ++i)
 				escape(i, NAN);
@@ -742,18 +924,13 @@ namespace dspace {
 			return o;
 		}
 
-		const auto bound = [&](const size_t i) {
-
-			return bounds.empty() ? dotnet::text_bounds{ vals[i], exact_text } : bounds[i];
-		};
-
 		if (p.device.kind == axis_mode::text) {
 
 			for (size_t i{}; i < vals.size(); ++i) {
 
 				if (i64 ord; dotnet::text_ord(vals[i], exact_text, ord)) {
 
-					if (const float v{ dotnet::from_text_ord(ord, exact_text) }; bound(i).contains(v)) {
+					if (const float v{ dotnet::from_text_ord(ord, exact_text) }; bounds[i].contains(v)) {
 
 						o.K[i] = ord;
 						out(i, v);
@@ -780,7 +957,7 @@ namespace dspace {
 				if (o.escapes.size() > max_escapes)
 					return;
 
-				const dotnet::text_bounds b{ bound(i) };
+				const dotnet::text_bounds b{ bounds[i] };
 
 				i64 k;
 				float v;
@@ -842,12 +1019,28 @@ namespace dspace {
 			if (o.escapes.size() > max_escapes)
 				return o;
 
+			// past the decoder's budget no more reports are simulated: the rest escapes (bounds crafted files' encode time)
+			if (o.reports > MOUSE_DECODE_BUDGET) {
+
+				for (; i < vals.size() && o.escapes.size() <= max_escapes; ++i) {
+
+					o.K[i] = K;
+					escape(i, NAN);
+
+				}
+
+				return o;
+			}
+
 			const float x{ vals[i] };
-			const dotnet::text_bounds b{ bound(i) };
+			const dotnet::text_bounds b{ bounds[i] };
 
 			bool escaped{ i == 0 };
 
 			const i64 dk{ escaped ? 0 : mouse_dk(p, x, X) };
+
+			if (dk != 0)
+				o.reports += mouse_reports(p, dk, dt[i]);
 
 			float pred{ NAN };
 
@@ -874,10 +1067,14 @@ namespace dspace {
 				if (first_fit(cand, b, k, Y)) {
 
 					if (decoded && dk != 0 && i + 1 < vals.size())
-						mouse_finalize(cand, b, vals[i + 1], bound(i + 1), dt[i + 1], k, Y);
+						mouse_finalize(cand, b, vals[i + 1], bounds[i + 1], dt[i + 1], k, Y);
 
-					if (dk != 0)
+					if (dk != 0) {
+
 						o.slack.push_back(k);
+						o.reports += cand.reports;
+
+					}
 
 					X = Y;
 
@@ -906,7 +1103,9 @@ namespace dspace {
 	}
 
 	// each segment encoded on its own, joined in frame order
-	inline axis_streams encode_axis_model(const axis_model& m, std::span<const float> vals, std::span<const int> dt, bool exact_text) {
+	inline axis_streams encode_axis_model(const axis_model& m, const _axis_samples& samples, bool exact_text) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		axis_streams o{};
 		o.K.resize(vals.size());
@@ -921,14 +1120,14 @@ namespace dspace {
 				continue;
 
 			const auto part{
-				encode_axis(m.seg[k].p, vals.subspan(from, to - from), dt.subspan(from, to - from),
-					exact_text, {}, SIZE_MAX, o.decoded.data() + from)
+				encode_axis(m.seg[k].p, samples.sub(from, to - from), exact_text, SIZE_MAX, o.decoded.data() + from)
 			};
 
 			std::copy(part.K.begin(), part.K.end(), o.K.begin() + from);
 
 			o.slack.insert(o.slack.end(), part.slack.begin(), part.slack.end());
 			o.repeats += part.repeats;
+			o.reports += part.reports;
 
 			for (size_t j{}; j < part.escapes.size(); ++j) {
 
@@ -941,9 +1140,6 @@ namespace dspace {
 
 		return o;
 	}
-
-	// mouse reports a decode may simulate, guards damaged files
-	constexpr i64 MOUSE_DECODE_BUDGET{ 1ll << 27 };
 
 	// escapes: escaped positions, ascending; escape_value(pred): the next escaped value. false if damaged
 	template<typename Value>
@@ -982,15 +1178,8 @@ namespace dspace {
 			const i64 dk{ K[i] - prevK };
 			prevK = K[i];
 
-			if (p.device.kind == axis_mode::mouse && dk != 0 && (budget -= mouse_reports(p, dk, dt[i])) < 0)
+			if (p.device.kind == axis_mode::mouse && dk != 0 && !segment_start && (budget -= mouse_reports(p, dk, dt[i])) < 0)
 				return false;
-
-			if (p.device.kind == axis_mode::none) {
-
-				out[i] = escape_value(NAN);
-
-				continue;
-			}
 
 			if (p.device.kind == axis_mode::text) {
 
@@ -1036,7 +1225,7 @@ namespace dspace {
 
 				_mouse_candidates cand{ a, X, dk, dt[i], Y0 };
 
-				if (!cand.get(s < slack.size() ? slack[s++] : 0, X))
+				if (!cand.get(s < slack.size() ? slack[s++] : 0, X) || (budget -= cand.reports) < 0)
 					return false;
 
 			} else
@@ -1082,6 +1271,11 @@ namespace dspace {
 		return in.read_float();
 	}
 
+	// stored floats that no model can turn into a NaN (its bits differ between processors)
+	inline bool valid_setting(float v) {
+		return v > 0.f && std::isfinite(v);
+	}
+
 	constexpr int WINDOW_BITS{ 5 };
 
 	static_assert(std::size(PM_RES) <= (1u << WINDOW_BITS));
@@ -1125,7 +1319,7 @@ namespace dspace {
 			f.scale = in.read_float();
 			f.off = in.read_float();
 
-			return true;
+			return f.scale > 0.f && std::isnormal(f.scale) && std::isfinite(f.off);
 		}
 
 		const int r{ (int)in.read_bits<WINDOW_BITS>() };
@@ -1145,6 +1339,16 @@ namespace dspace {
 
 	static_assert(std::size(POLL_RATES) == 7);
 
+	// a polling rate past the list: its whole Hz in POLL_BITS bits
+	constexpr int POLL_BITS{ 13 };
+
+	inline bool valid_poll(float poll) {
+		return poll >= 0.f && poll < (float)(1u << POLL_BITS) && poll == std::floor(poll);
+	}
+
+	// a mouse axis's play rate code past the game's three: the rate follows as float bits
+	constexpr u32 RATE_CUSTOM{ 3 };
+
 	inline void write_poll(float poll, bit_stream& o) {
 
 		u32 k{};
@@ -1155,7 +1359,7 @@ namespace dspace {
 		o.write_bits<3>(k);
 
 		if (k == std::size(POLL_RATES))
-			o.write_bits<16>((u32)poll);
+			o.write_bits<POLL_BITS>((u32)poll);
 
 	}
 
@@ -1166,12 +1370,21 @@ namespace dspace {
 		if (k < std::size(POLL_RATES))
 			return (float)POLL_RATES[k];
 
-		return (float)in.read_bits<16>();
+		return (float)in.read_bits<POLL_BITS>();
 	}
 
 	inline void write_params(const axis_params& p, int axis, bit_stream& o) {
 
-		o.write_bucket((u32)p.device.kind, 2);
+		// the four stored modes in 2 bits; internal_none is written as text (no parameters), never cut to rational.
+		// Encoders code from as_written, so they take the text ordinals too
+		if (p.device.kind == axis_mode::internal_none) {
+
+			o.write_bits<2>((u32)axis_mode::text);
+			return;
+		}
+
+		o.write_bits<2>((u32)p.device.kind);
+
 
 		if (p.device.kind == axis_mode::rational) {
 
@@ -1185,6 +1398,14 @@ namespace dspace {
 
 			write_setting(p.device.mouse.sens, o);
 			write_poll(p.device.mouse.poll, o);
+			// the play rate: one of the game's three, or any other as its float's bits, the sign left out
+			const u32 rate{ p.game.rate == 1.5f ? 1u : p.game.rate == 0.75f ? 2u : p.game.rate == 1.f || !(p.game.rate > 0.f) ? 0u : RATE_CUSTOM };
+
+			o.write_bits<2>(rate);
+
+			if (rate == RATE_CUSTOM)
+				o.write_bits<31>(std::bit_cast<u32>(p.game.rate));
+
 			o.push_back(p.game.unrounded_sub);
 			write_field(p.game, axis, o);
 
@@ -1195,6 +1416,9 @@ namespace dspace {
 			o.push_back(p.device.absolute.mapping == tablet_mapping::window);
 			o.push_back(p.game.fp == float_unit::x87);
 			o.push_back(p.game.unrounded_sub);
+
+			// one bit for how the x87 unit rounds along the mapping: the origin's on the desktop, the product's on the window
+			o.push_back(p.device.absolute.mapping == tablet_mapping::window ? p.game.product_rounded : p.game.origin_unrounded);
 
 			write_u((u32)p.device.absolute.span, o);
 			write_u((u32)rc::zz((int)p.game.origin), o);
@@ -1210,16 +1434,16 @@ namespace dspace {
 
 		p = {};
 
-		p.device.kind = (axis_mode)in.read_bucket<2>();
-
-		if (p.device.kind > axis_mode::text)
-			return false; // no detector produces these
+		p.device.kind = (axis_mode)in.read_bits<2>();
 
 		if (p.device.kind == axis_mode::rational) {
 
 			p.device.rational.D = (int)read_u(in);
 			p.device.rational.a = (int)read_u(in);
 			p.device.rational.b = (int)rc::unzz(read_u(in));
+
+			if (p.device.rational.D == 0)
+				return false;
 
 		}
 
@@ -1228,8 +1452,21 @@ namespace dspace {
 			p.device.mouse.sens = read_setting(in);
 			p.device.mouse.poll = read_poll(in);
 
-			if (p.device.mouse.poll > 8000.f)
+			if (!valid_setting(p.device.mouse.sens))
 				return false;
+
+			constexpr float RATES[]{ 1.f, 1.5f, 0.75f };
+
+			if (const u32 rate{ (u32)in.read_bits<2>() }; rate != RATE_CUSTOM)
+				p.game.rate = RATES[rate];
+			else {
+
+				p.game.rate = std::bit_cast<float>((u32)in.read_bits<31>());
+
+				if (!(p.game.rate > 0.f) || !std::isfinite(p.game.rate))
+					return false;
+
+			}
 
 			p.game.unrounded_sub = in.read_bits<1>() != 0;
 
@@ -1243,10 +1480,19 @@ namespace dspace {
 			p.device.absolute.mapping = in.read_bits<1>() ? tablet_mapping::window : tablet_mapping::desktop;
 			p.game.fp = in.read_bits<1>() ? float_unit::x87 : float_unit::sse;
 			p.game.unrounded_sub = in.read_bits<1>() != 0;
+
+			if (p.device.absolute.mapping == tablet_mapping::window)
+				p.game.product_rounded = in.read_bits<1>() != 0;
+			else
+				p.game.origin_unrounded = in.read_bits<1>() != 0;
+
 			p.device.absolute.span = (float)read_u(in);
 			p.game.origin = (float)rc::unzz(read_u(in));
 			p.game.window_half = (float)read_u(in);
 			p.device.absolute.speed = read_setting(in);
+
+			if (p.device.absolute.span == 0.f || !valid_setting(p.device.absolute.speed))
+				return false;
 
 			if (!read_field(in, axis, p.game))
 				return false;
@@ -1256,11 +1502,12 @@ namespace dspace {
 		return true;
 	}
 
+	// y cloning x: a rational or text (or internal_none, written as text) x, or a mouse x on a common window taking its y offset
 	inline bool y_from_x(const axis_params& x, axis_params& y) {
 
 		y = x;
 
-		if (x.device.kind == axis_mode::rational)
+		if (x.device.kind == axis_mode::rational || x.device.kind == axis_mode::text || x.device.kind == axis_mode::internal_none)
 			return true;
 
 		if (x.device.kind != axis_mode::mouse)
@@ -1276,31 +1523,49 @@ namespace dspace {
 		return true;
 	}
 
+	// where either axis's model changes; past MAX_SEGMENTS the last segment takes the rest
+	inline std::vector<u32> synced_starts(const _model_info& m) {
+
+		std::vector<u32> s;
+
+		for (const auto& ax : m.axis)
+			for (const auto& sg : ax.seg)
+				s.push_back(sg.start);
+
+		std::sort(s.begin(), s.end());
+
+		s.erase(std::unique(s.begin(), s.end()), s.end());
+		s.resize(std::min(s.size(), MAX_SEGMENTS));
+
+		return s;
+	}
+
 	inline void write_info(const _model_info& m, bit_stream& o) {
 
+		const auto s{ synced_starts(m) };
+
+		if (o.emplace_back(s.size() > 1))
+			o.write_bits<SEGMENT_COUNT_BITS>(s.size() - 2);
+
+		// the lengths, but for the last segment's (it runs to the end)
+		for (size_t k{ 1 }; k < s.size(); ++k)
+			o.write_length_bucket<4, 0>(s[k] - s[k - 1] - 1);
+
+		// every segment's x, then every segment's y: where x can be cloned, a set bit clones it
 		for (int a{}; a < 2; ++a) {
 
-			const auto& ax{ m.axis[a] };
+			size_t cur[2]{};
 
-			write_u((u32)ax.seg.size(), o);
+			for (const u32 start : s) {
 
-			if (a == 1 && ax.seg.size() == 1 && m.axis[0].seg.size() == 1) {
+				const auto& p{ m.axis[a].at(start, cur[a]) };
 
-				axis_params y;
+				axis_params clone;
 
-				const bool same{ y_from_x(m.axis[0].seg[0].p, y) && y == ax.seg[0].p };
-
-				if (o.emplace_back(same))
+				if (a == 1 && y_from_x(m.axis[0].at(start, cur[0]), clone) && o.emplace_back(clone == p))
 					continue;
 
-			}
-
-			for (size_t k{}; k < ax.seg.size(); ++k) {
-
-				if (k)
-					write_u(ax.seg[k].start - ax.seg[k - 1].start, o);
-
-				write_params(ax.seg[k].p, a, o);
+				write_params(p, a, o);
 
 			}
 
@@ -1311,33 +1576,31 @@ namespace dspace {
 	// from in's cursor, in ends past it
 	inline bool read_info(_bit_view& in, _model_info& out) {
 
+		const u32 n{ 1u + (in.read_bits<1>() ? 1u + (u32)in.read_bits<SEGMENT_COUNT_BITS>() : 0u) };
+
+		std::vector<u32> start(n);
+
+		for (u32 k{ 1 }; k < n; ++k)
+			start[k] = start[k - 1] + 1 + (u32)in.read_length_bucket<4, 0>();
+
 		_model_info m{};
 
+		// every segment's x, then every segment's y; each axis's own segments are where its model changes
 		for (int a{}; a < 2; ++a) {
 
-			auto& ax{ m.axis[a] };
+			size_t cur{};
 
-			const u32 n{ read_u(in) };
+			for (const u32 s : start) {
 
-			if (n == 0 || n > 100000)
-				return false;
+				axis_params p;
 
-			ax.seg.resize(n);
+				const bool cloned{ a == 1 && y_from_x(m.axis[0].at(s, cur), p) && in.read_bits<1>() };
 
-			if (a == 1 && n == 1 && m.axis[0].seg.size() == 1 && in.read_bits<1>()) {
-
-				if (!y_from_x(m.axis[0].seg[0].p, ax.seg[0].p))
+				if (!cloned && !read_params(in, a, p))
 					return false;
 
-				continue;
-			}
-
-			for (size_t k{}; k < n; ++k) {
-
-				ax.seg[k].start = k ? ax.seg[k - 1].start + read_u(in) : 0;
-
-				if (!read_params(in, a, ax.seg[k].p))
-					return false;
+				if (m.axis[a].seg.empty() || m.axis[a].seg.back().p != p)
+					m.axis[a].seg.push_back({ s, p });
 
 			}
 
@@ -1346,6 +1609,18 @@ namespace dspace {
 		out = std::move(m);
 
 		return true;
+	}
+
+	// the model a decoder reads back from write_info; false if a decoder would reject it
+	inline bool as_written(const _model_info& m, _model_info& out) {
+
+		bit_stream o{};
+
+		write_info(m, o);
+
+		_bit_view in{ o };
+
+		return read_info(in, out);
 	}
 
 	struct move_predictor {
@@ -1362,8 +1637,12 @@ namespace dspace {
 		}
 
 		// n / m rounded half away from zero, m > 0
-		static i64 round_div(i64 n, i64 m) {
-			return n >= 0 ? (n + m / 2) / m : -((-n + m / 2) / m);
+		static FORCEINLINE i64 round_div(i64 n, i64 m) {
+
+			const u64 a{ (u64)std::abs(n) + (u64)m / 2 };
+			const u64 q{ (a | (u64)m) >> 32 ? a / (u64)m : (u32)a / (u32)m };
+
+			return n >= 0 ? (i64)q : -(i64)q;
 		}
 
 		i64 window(const int a, const int dt) const {

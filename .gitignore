@@ -364,3 +364,6 @@ FodyWeavers.xsd
 
 test/
 res/
+
+# Local test programs
+tests/

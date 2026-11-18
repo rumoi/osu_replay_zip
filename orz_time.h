@@ -71,57 +71,99 @@ namespace frame_time {
 		return delta;
 	}
 	
-	constexpr u32 TABLE_RANKED{ 32 }, TABLE_SYMBOLS{ 96 }, TABLE_FIRST{ 33 };
-	
-	constexpr u8 TABLE_ORDER[34][96]{
-		{ 33, 42, 1, 19, 2, 20, 25, 53, 18, 17, 21, 3, 4, 27, 24, 28, 22, 6, 15, 5, 23, 13, 7, 14, 9, 51, 8, 29, 10, 12, 11, 26, 30, 58, 16, 44, 56, 31, 54, 60, 49, 39, 47, 45, 43, 62, 37, 46, 41, 64, 66, 59, 57, 70, 48, 55, 68, 72, 0, 32, 34, 35, 36, 38, 40, 50, 52, 61, 63, 65, 67, 69, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 0, 2, 20, 19, 3, 17, 4, 5, 21, 13, 10, 11, 18, 9, 6, 42, 8, 14, 7, 25, 12, 15, 27, 28, 23, 29, 16, 22, 24, 30, 26, 31, 44, 53, 33, 49, 56, 41, 37, 51, 39, 54, 47, 58, 48, 52, 45, 60, 35, 46, 59, 62, 43, 50, 55, 1, 32, 34, 36, 38, 40, 57, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 3, 1, 4, 5, 0, 6, 7, 11, 10, 8, 9, 14, 12, 13, 15, 17, 25, 20, 24, 21, 18, 19, 22, 16, 23, 42, 28, 26, 30, 29, 27, 31, 33, 39, 53, 44, 51, 49, 47, 58, 45, 46, 48, 54, 37, 43, 56, 41, 50, 59, 60, 63, 64, 2, 32, 34, 35, 36, 38, 40, 52, 55, 57, 61, 62, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 4, 5, 2, 6, 1, 10, 7, 8, 9, 11, 13, 14, 12, 0, 15, 18, 22, 17, 19, 23, 25, 16, 20, 24, 21, 42, 26, 27, 29, 28, 30, 31, 33, 44, 47, 49, 51, 39, 48, 56, 37, 41, 45, 46, 57, 35, 43, 52, 53, 54, 60, 3, 32, 34, 36, 38, 40, 50, 55, 58, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 5, 6, 3, 8, 7, 13, 2, 12, 10, 9, 11, 14, 1, 15, 20, 18, 0, 25, 19, 23, 21, 17, 16, 24, 22, 42, 26, 27, 28, 29, 31, 30, 33, 49, 51, 39, 53, 41, 44, 45, 47, 48, 54, 59, 60, 37, 43, 46, 56, 4, 32, 34, 35, 36, 38, 40, 50, 52, 55, 57, 58, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 6, 4, 8, 7, 9, 3, 10, 12, 11, 2, 13, 1, 14, 20, 15, 19, 21, 18, 0, 23, 16, 17, 22, 25, 24, 42, 27, 26, 28, 29, 30, 31, 53, 44, 33, 39, 49, 51, 45, 60, 64, 41, 47, 48, 52, 54, 56, 5, 32, 34, 35, 36, 37, 38, 40, 43, 46, 50, 55, 57, 58, 59, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 8, 7, 11, 9, 5, 10, 4, 12, 3, 13, 14, 2, 15, 19, 1, 21, 20, 18, 0, 22, 16, 23, 17, 42, 24, 28, 25, 27, 26, 29, 30, 31, 33, 44, 53, 39, 51, 37, 41, 35, 45, 47, 57, 64, 6, 32, 34, 36, 38, 40, 43, 46, 48, 49, 50, 52, 54, 55, 56, 58, 59, 60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 10, 8, 9, 6, 11, 5, 12, 4, 13, 3, 14, 2, 15, 1, 18, 21, 19, 20, 22, 0, 17, 16, 23, 24, 25, 42, 27, 26, 28, 29, 30, 31, 44, 39, 53, 33, 47, 51, 54, 56, 58, 66, 7, 32, 34, 35, 36, 37, 38, 40, 41, 43, 45, 46, 48, 49, 50, 52, 55, 57, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 9, 7, 10, 6, 11, 12, 5, 13, 4, 14, 3, 2, 15, 19, 1, 20, 18, 22, 17, 0, 21, 16, 23, 24, 42, 28, 25, 26, 27, 29, 30, 31, 33, 53, 44, 37, 39, 49, 48, 51, 54, 58, 62, 64, 66, 8, 32, 34, 35, 36, 38, 40, 41, 43, 45, 46, 47, 50, 52, 55, 56, 57, 59, 60, 61, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 8, 7, 10, 12, 11, 5, 6, 4, 13, 15, 14, 3, 18, 2, 1, 19, 16, 20, 21, 0, 22, 17, 23, 42, 28, 24, 25, 27, 29, 26, 30, 31, 53, 33, 44, 41, 47, 49, 51, 56, 59, 64, 9, 32, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 48, 50, 52, 54, 55, 57, 58, 60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 11, 9, 7, 12, 8, 6, 13, 5, 4, 14, 3, 15, 19, 2, 1, 20, 18, 21, 0, 16, 22, 17, 23, 24, 42, 25, 28, 29, 26, 27, 31, 30, 33, 51, 44, 49, 37, 39, 43, 47, 54, 58, 62, 10, 32, 34, 35, 36, 38, 40, 41, 45, 46, 48, 50, 52, 53, 55, 56, 57, 59, 60, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 12, 10, 13, 6, 9, 14, 7, 5, 8, 3, 4, 15, 1, 2, 19, 20, 18, 0, 21, 17, 16, 22, 23, 42, 24, 28, 27, 29, 25, 30, 26, 31, 44, 33, 51, 54, 45, 46, 47, 49, 52, 53, 56, 64, 11, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 48, 50, 55, 57, 58, 59, 60, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 13, 11, 14, 10, 9, 5, 7, 8, 6, 20, 15, 18, 1, 19, 4, 3, 2, 21, 0, 17, 16, 22, 23, 42, 27, 28, 29, 24, 30, 26, 25, 31, 53, 33, 51, 44, 47, 49, 58, 60, 39, 64, 54, 12, 32, 34, 35, 36, 37, 38, 40, 41, 43, 45, 46, 48, 50, 52, 55, 56, 57, 59, 61, 62, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 12, 14, 11, 10, 20, 9, 7, 8, 19, 4, 15, 6, 18, 5, 1, 3, 2, 0, 17, 16, 21, 22, 42, 23, 27, 29, 24, 28, 30, 26, 25, 31, 53, 33, 44, 51, 54, 62, 45, 58, 39, 41, 49, 56, 13, 32, 34, 35, 36, 37, 38, 40, 43, 46, 47, 48, 50, 52, 55, 57, 59, 60, 61, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 19, 13, 15, 18, 12, 11, 4, 3, 8, 10, 7, 6, 5, 9, 2, 16, 20, 1, 17, 0, 21, 22, 42, 23, 27, 29, 24, 28, 26, 30, 31, 25, 53, 33, 58, 51, 49, 44, 37, 56, 47, 60, 64, 41, 48, 62, 14, 32, 34, 35, 36, 38, 39, 40, 43, 45, 46, 50, 52, 54, 55, 57, 59, 61, 63, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 14, 18, 19, 2, 3, 4, 16, 13, 10, 7, 12, 5, 6, 17, 8, 9, 11, 1, 0, 20, 21, 22, 23, 28, 42, 27, 25, 24, 26, 29, 30, 31, 33, 53, 44, 49, 51, 55, 58, 37, 66, 47, 15, 32, 34, 35, 36, 38, 39, 40, 41, 43, 45, 46, 48, 50, 52, 54, 56, 57, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 18, 15, 17, 2, 3, 8, 4, 14, 1, 5, 0, 19, 13, 9, 11, 7, 6, 12, 10, 20, 21, 22, 27, 23, 29, 28, 42, 30, 24, 31, 26, 25, 33, 53, 58, 43, 37, 39, 44, 51, 55, 45, 60, 16, 32, 34, 35, 36, 38, 40, 41, 46, 47, 48, 49, 50, 52, 54, 56, 57, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 16, 18, 15, 14, 19, 13, 20, 12, 8, 11, 4, 3, 21, 7, 5, 9, 2, 10, 6, 22, 1, 0, 27, 23, 28, 29, 42, 30, 24, 26, 25, 31, 53, 33, 58, 51, 37, 49, 54, 60, 39, 43, 44, 46, 17, 32, 34, 35, 36, 38, 40, 41, 45, 47, 48, 50, 52, 55, 56, 57, 59, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 15, 19, 14, 0, 17, 16, 13, 20, 12, 7, 21, 3, 9, 8, 4, 6, 11, 10, 5, 2, 53, 22, 1, 42, 23, 27, 28, 29, 24, 30, 51, 58, 26, 44, 25, 31, 33, 56, 60, 49, 54, 62, 64, 47, 66, 39, 41, 43, 68, 35, 37, 18, 32, 34, 36, 38, 40, 45, 46, 48, 50, 52, 55, 57, 59, 61, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 20, 14, 13, 0, 21, 18, 1, 4, 12, 17, 6, 53, 8, 11, 16, 10, 22, 3, 7, 5, 15, 2, 42, 9, 23, 27, 28, 29, 24, 26, 51, 30, 25, 58, 44, 56, 49, 54, 31, 33, 60, 47, 64, 66, 45, 62, 35, 43, 41, 46, 70, 48, 52, 55, 68, 19, 32, 34, 36, 37, 38, 39, 40, 50, 57, 59, 61, 63, 65, 67, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 21, 0, 19, 22, 12, 1, 13, 53, 18, 42, 10, 23, 11, 5, 16, 17, 9, 7, 2, 14, 8, 6, 27, 15, 4, 28, 24, 29, 3, 51, 26, 30, 44, 25, 33, 58, 56, 49, 54, 60, 31, 47, 62, 64, 43, 45, 66, 39, 41, 52, 55, 68, 46, 48, 57, 61, 72, 20, 32, 34, 35, 36, 37, 38, 40, 50, 59, 63, 65, 67, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 22, 20, 23, 0, 42, 19, 7, 12, 11, 8, 10, 27, 1, 9, 17, 18, 28, 6, 2, 24, 5, 29, 3, 15, 13, 16, 53, 26, 4, 14, 25, 51, 58, 44, 31, 56, 33, 30, 49, 54, 60, 47, 62, 45, 41, 43, 64, 35, 39, 48, 55, 46, 52, 66, 57, 59, 70, 21, 32, 34, 36, 37, 38, 40, 50, 61, 63, 65, 67, 68, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 23, 21, 28, 42, 24, 20, 27, 0, 9, 8, 26, 7, 18, 3, 1, 19, 6, 10, 2, 4, 12, 5, 13, 11, 53, 17, 25, 14, 16, 15, 51, 29, 30, 33, 60, 49, 58, 56, 44, 54, 47, 31, 62, 39, 45, 59, 35, 43, 52, 66, 72, 37, 41, 55, 64, 68, 22, 32, 34, 36, 38, 40, 46, 48, 50, 57, 61, 63, 65, 67, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 24, 27, 22, 42, 26, 21, 25, 0, 5, 3, 9, 4, 20, 2, 6, 7, 10, 8, 1, 19, 11, 18, 28, 13, 14, 16, 15, 12, 17, 53, 29, 30, 51, 31, 58, 49, 60, 33, 44, 54, 47, 56, 41, 62, 43, 64, 52, 45, 37, 48, 66, 68, 39, 46, 57, 59, 23, 32, 34, 35, 36, 38, 40, 50, 55, 61, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 26, 25, 23, 42, 27, 0, 22, 3, 21, 4, 2, 5, 6, 20, 10, 19, 1, 11, 28, 7, 14, 18, 9, 12, 53, 15, 29, 8, 16, 13, 17, 30, 51, 49, 56, 60, 54, 31, 58, 44, 33, 62, 47, 41, 35, 46, 48, 59, 39, 43, 52, 55, 37, 45, 57, 61, 66, 24, 32, 34, 36, 38, 40, 50, 63, 64, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 24, 26, 0, 2, 42, 27, 23, 3, 4, 28, 5, 1, 6, 22, 7, 21, 29, 20, 19, 15, 53, 9, 11, 10, 14, 13, 8, 12, 49, 30, 51, 17, 18, 31, 16, 33, 54, 47, 56, 58, 60, 44, 43, 48, 45, 52, 41, 39, 62, 57, 35, 37, 59, 66, 46, 50, 55, 61, 64, 25, 32, 34, 36, 38, 40, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 23, 27, 24, 25, 3, 42, 4, 2, 0, 5, 28, 6, 22, 10, 11, 21, 12, 20, 1, 19, 7, 8, 9, 29, 30, 14, 53, 16, 18, 13, 15, 17, 51, 31, 33, 54, 49, 58, 60, 47, 39, 41, 43, 44, 62, 37, 45, 56, 48, 55, 66, 35, 46, 59, 64, 52, 57, 61, 68, 26, 32, 34, 36, 38, 40, 50, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 28, 22, 23, 42, 0, 26, 29, 25, 6, 24, 21, 5, 53, 1, 30, 20, 4, 7, 3, 9, 2, 13, 10, 19, 8, 31, 51, 17, 12, 14, 49, 18, 11, 33, 15, 54, 58, 16, 44, 56, 60, 47, 39, 45, 41, 64, 48, 55, 52, 59, 62, 37, 46, 66, 43, 61, 70, 27, 32, 34, 35, 36, 38, 40, 50, 57, 63, 65, 67, 68, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 29, 42, 21, 27, 30, 0, 26, 22, 20, 53, 1, 6, 25, 31, 9, 7, 19, 8, 10, 23, 2, 4, 51, 3, 17, 15, 12, 56, 5, 18, 11, 16, 24, 49, 58, 14, 54, 13, 60, 44, 33, 52, 39, 47, 64, 48, 37, 41, 62, 66, 55, 45, 35, 43, 50, 59, 46, 57, 61, 28, 32, 34, 36, 38, 40, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 42, 30, 28, 31, 0, 20, 53, 27, 26, 19, 25, 21, 1, 51, 18, 15, 14, 2, 24, 56, 9, 6, 16, 33, 49, 17, 58, 13, 5, 7, 10, 23, 54, 12, 22, 3, 11, 8, 4, 60, 44, 39, 52, 61, 62, 55, 47, 59, 45, 57, 37, 43, 46, 48, 64, 66, 35, 41, 50, 70, 29, 32, 34, 36, 38, 40, 63, 65, 67, 68, 69, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 42, 31, 29, 28, 0, 51, 53, 27, 26, 19, 33, 1, 2, 15, 54, 18, 3, 25, 23, 39, 49, 56, 7, 17, 21, 16, 14, 6, 24, 22, 11, 13, 10, 5, 20, 12, 9, 60, 8, 4, 46, 44, 47, 58, 57, 45, 55, 37, 59, 43, 52, 35, 41, 66, 48, 62, 64, 68, 30, 32, 34, 36, 38, 40, 50, 61, 63, 65, 67, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 42, 30, 29, 0, 28, 51, 27, 53, 56, 33, 26, 16, 60, 1, 59, 39, 49, 2, 9, 14, 17, 8, 4, 7, 18, 20, 25, 54, 10, 11, 3, 13, 23, 21, 22, 5, 15, 19, 12, 6, 24, 44, 45, 46, 47, 55, 43, 37, 41, 66, 52, 62, 64, 31, 32, 34, 35, 36, 38, 40, 48, 50, 57, 58, 61, 63, 65, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 42, 44, 53, 58, 31, 56, 0, 59, 30, 33, 60, 51, 57, 46, 54, 55, 29, 39, 61, 28, 27, 22, 24, 25, 21, 1, 49, 52, 41, 26, 23, 37, 62, 20, 43, 2, 19, 3, 63, 64, 4, 35, 47, 5, 48, 45, 65, 66, 11, 6, 12, 7, 67, 10, 9, 13, 8, 16, 50, 18, 14, 15, 17, 68, 69, 70, 71, 72, 73, 74, 75, 32, 34, 36, 38, 40, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-		{ 17, 25, 1, 16, 0, 2, 3, 15, 4, 18, 24, 14, 5, 12, 6, 13, 26, 8, 10, 19, 7, 11, 9, 23, 22, 20, 21, 27, 29, 28, 30, 42, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95 },
-	};
+	// The delta table: the replay's distinct frame deltas, which the frames then give by their place in it. The
+	// TABLE_LEAD most used come first, most used first; then the other low deltas, ascending; then the rest, most
+	// used first. Only the rest can be negative. Of the low deltas, a file says that every one below its start is in
+	// the table, and gives a bit each for a length of deltas from the start on.
+	constexpr u32 TABLE_SMALL{ 32 }; // a leading delta below this is written in 5 bits
+	constexpr size_t TABLE_LEAD{ 2 };
+	constexpr u32 TABLE_START_BITS{ 5 }, TABLE_START_MAX{ (1u << TABLE_START_BITS) - 1 };
+	constexpr u32 TABLE_LENGTH_MAX{ 127 }; // the most deltas a file gives a bit each for
 
-	inline u32 table_symbol(int v) {
+	// a leading delta, never negative: a 1 bit and its 5 bits from 0 to 31, else a 0 bit and the delta
+	inline void write_entry(bit_stream& t, int v) {
 
-		if (v >= 0 && v < (int)TABLE_RANKED)
-			return (u32)v;
+		if (t.emplace_back(v < (int)TABLE_SMALL))
+			return t.write_bits<5>((u32)v);
 
-		const u32 m{ v < 0 ? 0u - (u32)v : (u32)v };
+		t.write_length_bucket<4, 0>((u32)v);
 
-		return TABLE_RANKED + ((u32)std::bit_width(m) - 1) * 2 + (v < 0);
 	}
 
-	inline bool table_unused(u8 x, u64 used) {
-		return x >= TABLE_RANKED || !((used >> x) & 1);
+	inline int read_entry(_bit_view& t) {
+
+		if (t.read_bits<1>())
+			return (int)t.read_bits<5>();
+
+		return std::bit_cast<int>((u32)t.read_length_bucket<4, 0>());
+	}
+
+	// the bits of an entry of the rest: its sign, and its magnitude as length_bucket<4,0>
+	inline u32 rest_bits(int v) {
+
+		const u32 length{ (u32)std::bit_width(v < 0 ? 0u - (u32)v : (u32)v) };
+
+		return 1 + 4 + (length < 15 ? 0 : 5) + (length ? length - 1 : 0);
+	}
+
+	struct _table_range {
+		u32 start, length;
+	};
+
+	// the bits of a length written as length_bucket<3,0>
+	inline u32 length_bits(u32 length) {
+
+		const u32 width{ (u32)std::bit_width(length) };
+
+		return 3 + (width < 7 ? 0 : 5) + (width ? width - 1 : 0);
+	}
+
+	// The start and length that make the table smallest. The start is as far as every delta is a leading entry or one
+	// of the others. From there a delta within the length costs its bit, and an entry past it its own bits: the length
+	// is the lower of two that tie.
+	inline _table_range table_range(std::span<const int> leading, std::span<const int> entries) {
+
+		u32 rest[TABLE_START_MAX + TABLE_LENGTH_MAX]{}; // the bits, as the rest, of each entry
+		bool held[TABLE_START_MAX]{};
+
+		for (const int v : leading)
+			if (v >= 0 && v < (int)TABLE_START_MAX)
+				held[v] = true;
+
+		for (const int v : entries) {
+
+			if (v < 0 || v >= (int)std::size(rest))
+				continue;
+
+			rest[v] += rest_bits(v);
+
+			if (v < (int)TABLE_START_MAX)
+				held[v] = true;
+
+		}
+
+		u32 start{};
+
+		while (start < TABLE_START_MAX && held[start])
+			++start;
+
+		u32 length{};
+		i64 cost{}, least{ length_bits(0) }; // against the entries from the start on all being the rest
+
+		for (u32 k{ 1 }; k <= TABLE_LENGTH_MAX; ++k) {
+
+			cost += 1 - (i64)rest[start + k - 1];
+
+			if (cost + length_bits(k) < least) {
+
+				least = cost + length_bits(k);
+				length = k;
+
+			}
+
+		}
+
+		return { start, length };
 	}
 
 	// counts of each value, in the order they first appear
@@ -141,11 +183,6 @@ namespace frame_time {
 		return b.emplace_back(v, 1);
 	}
 
-	// most counted first
-	inline bool pair_sort(const std::pair<u32, u32>& x, const std::pair<u32, u32>& y) {
-		return x.second > y.second;
-	}
-
 	inline std::vector<int> build_table(std::span<const int> delta) {
 
 		std::vector<std::pair<u32, u32>> counts{};
@@ -155,110 +192,85 @@ namespace frame_time {
 		for (const int d : delta)
 			unique_add(std::bit_cast<u32>(d), counts);
 
-		std::sort(counts.begin(), counts.end(), pair_sort);
+		// most counted first, the smaller delta first of two counted the same
+		std::sort(counts.begin(), counts.end(), [](const std::pair<u32, u32>& x, const std::pair<u32, u32>& y) {
+			return x.second != y.second ? x.second > y.second : std::bit_cast<int>(x.first) < std::bit_cast<int>(y.first);
+		});
 
-		std::vector<int> table;
+		std::vector<int> table, others, small, rest;
 
-		table.reserve(counts.size());
-
-		u64 used{};
-		u32 at{ TABLE_FIRST };
+		table.reserve(counts.size() + TABLE_LEAD);
 
 		for (size_t i{}; i < counts.size(); ++i) {
 
-			size_t end{ i };
-
-			while (end < counts.size() && counts[end].second == counts[i].second)
-				++end;
-
-			size_t best{ i };
-
-			for (const u8 x : TABLE_ORDER[at]) {
-
-				if (!table_unused(x, used))
-					continue;
-
-				bool found{};
-
-				for (size_t k{ i }; k < end; ++k) {
-
-					const int v{ std::bit_cast<int>(counts[k].first) };
-
-					if (table_symbol(v) == x && (!found || v < std::bit_cast<int>(counts[best].first))) {
-
-						best = k;
-						found = true;
-
-					}
-
-				}
-
-				if (found)
-					break;
-
-			}
-
-			std::swap(counts[i], counts[best]);
-
 			const int v{ std::bit_cast<int>(counts[i].first) };
 
-			table.push_back(v);
-
-			if (v >= 0 && v < (int)TABLE_RANKED)
-				used |= u64(1) << v;
-
-			at = std::min(table_symbol(v), TABLE_RANKED);
+			(v >= 0 && table.size() < TABLE_LEAD ? table : others).push_back(v);
 
 		}
+
+		// A leading entry cannot be negative. A replay with too few other deltas to lead its negative ones gets
+		// deltas it does not use there.
+		for (int v{}; table.size() < TABLE_LEAD && others.size(); ++v)
+			if (std::find(table.begin(), table.end(), v) == table.end())
+				table.push_back(v);
+
+		const _table_range range{ table_range(table, others) };
+
+		for (const int v : others)
+			(v >= 0 && v < (int)(range.start + range.length) ? small : rest).push_back(v);
+
+		std::sort(small.begin(), small.end());
+
+		table.insert(table.end(), small.begin(), small.end());
+		table.insert(table.end(), rest.begin(), rest.end());
 
 		return table;
 	}
 
-	inline u32 pick_grid(std::span<const int> delta) {
+	// the bits the deltas take with the grid's phase as their only context
+	inline double grid_bits(std::span<const int> delta, const _time_grid& grid) {
 
 		constexpr int SYM{ 48 };
 
-		u32 counts[GRID_PERIOD_COUNT][GRID_BINS][SYM]{};
-
-		_time_grid grids[GRID_PERIOD_COUNT];
-
-		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
-			grids[g] = _time_grid{ g };
+		u32 counts[GRID_BINS][SYM]{};
 
 		i64 now{};
 
 		for (const int d : delta) {
 
-			const int s{ std::clamp(d, 0, SYM - 1) };
-
-			for (u32 g{}; g < GRID_PERIOD_COUNT; ++g)
-				++counts[g][grids[g].bin(now)][s];
+			++counts[grid.bin(now)][std::clamp(d, 0, SYM - 1)];
 
 			now += d;
+		}
+
+		double bits{};
+
+		for (const auto& row : counts) {
+
+			u32 total{};
+
+			for (const u32 c : row)
+				total += c;
+
+			for (const u32 c : row)
+				if (c)
+					bits += c * std::log2((double)total / c) + 0.5 * std::log2((double)total);
 
 		}
+
+		return bits;
+	}
+
+	// the listed grid whose phase codes the deltas in the fewest bits
+	inline u32 pick_grid(std::span<const int> delta) {
 
 		u32 best{};
 		double best_bits{ std::numeric_limits<double>::max() };
 
 		for (u32 g{}; g < GRID_PERIOD_COUNT; ++g) {
 
-			double bits{};
-
-			for (const auto& row : counts[g]) {
-
-				u32 total{};
-
-				for (const u32 c : row)
-					total += c;
-
-				for (const u32 c : row)
-					if (c)
-						bits += c * std::log2((double)total / c) + 0.5 * std::log2((double)total);
-
-			}
-
-			if (bits < best_bits) {
+			if (const double bits{ grid_bits(delta, _time_grid{ g }) }; bits < best_bits) {
 
 				best_bits = bits;
 				best = g;
@@ -270,42 +282,36 @@ namespace frame_time {
 		return best;
 	}
 
-	inline void write_gamma(u32 r, bit_stream& t) {
+	// A grid for ticks about `period` ms apart when that is none of the listed periods: a game clock off the usual play
+	// rates. The periods tried are whole 24ths of a millisecond, which holds every hundredth of the three play rates'
+	// periods. num 0 when the listed grid (index `listed`) serves the deltas as well.
+	inline _grid_period custom_grid(std::span<const int> delta, double period, u32 listed) {
 
-		const u32 v{ r + 1 };
-		const int n{ (int)std::bit_width(v) };
+		for (u32 g{ 1 }; g < GRID_PERIOD_COUNT; ++g)
+			if (std::abs(period * (double)GRID_PERIODS[g].den / (double)GRID_PERIODS[g].num - 1.) < 0.015)
+				return {};
 
-		for (int b{ 1 }; b < n; ++b)
-			t.push_back(0);
+		constexpr u32 DEN{ 24 };
 
-		for (int b{ n - 1 }; b >= 0; --b)
-			t.push_back((v >> b) & 1);
+		_grid_period best{};
 
-	}
+		// a custom period has to earn its bytes in the head, and more than a fit to noise would
+		double best_bits{ 0.98 * grid_bits(delta, _time_grid{ listed }) };
 
-	inline bool read_gamma(_bit_view& t, u32 max, u32& r) {
+		// the ticks' mean spacing reads a little short where other frames fall between them
+		for (u32 k{ std::max(1u, (u32)(period * 0.985 * DEN)) }; k <= (u32)(period * 1.075 * DEN) + 1 && k <= GRID_CUSTOM_MAX; ++k) {
 
-		const int limit{ (int)std::bit_width(max + 1) };
+			const double bits{ grid_bits(delta, _time_grid{ _grid_period{ k, DEN } }) };
 
-		int n{ 1 };
+			if (bits < best_bits) {
 
-		while (t.in < t.max_size() && !t[t.in]) {
-
-			++t.in;
-
-			if (++n > limit)
-				return false;
+				best_bits = bits;
+				best = { k, DEN };
+			}
 
 		}
 
-		u32 v{};
-
-		for (int b{}; b < n; ++b)
-			v = (v << 1) | (u32)t.read_bits<1>();
-
-		r = v - 1;
-
-		return v != 0 && r <= max;
+		return best;
 	}
 
 	// the delta table and time grid, at the front of the stream holding the times (custom: the period of GRID_CUSTOM)
@@ -313,38 +319,29 @@ namespace frame_time {
 
 		t.small_write<5>((u32)table.size());
 
-		u64 used{};
-		u32 at{ TABLE_FIRST };
+		size_t k{};
 
-		for (const int v : table) {
+		for (; k < std::min(TABLE_LEAD, table.size()); ++k)
+			write_entry(t, table[k]);
 
-			const u32 sym{ table_symbol(v) };
+		// the low deltas come next, ascending: all of those below the start, and a bit for each of a length from it on
+		const _table_range range{ table_range(std::span{ table }.first(k), std::span{ table }.subspan(k)) };
 
-			u32 r{};
+		t.write_bits<TABLE_START_BITS>(range.start);
+		t.write_length_bucket<3, 0>(range.length);
 
-			for (const u8 x : TABLE_ORDER[at]) {
+		for (int v{}; v < (int)range.start; ++v)
+			k += k < table.size() && table[k] == v;
 
-				if (x == sym)
-					break;
+		for (int v{ (int)range.start }; v < (int)(range.start + range.length); ++v)
+			if (t.emplace_back(k < table.size() && table[k] == v))
+				++k;
 
-				r += table_unused(x, used);
+		// the rest: a sign bit and the magnitude
+		for (; k < table.size(); ++k) {
 
-			}
-
-			write_gamma(r, t);
-
-			if (sym < TABLE_RANKED)
-				used |= u64(1) << sym;
-			else {
-
-				const u32 m{ v < 0 ? 0u - (u32)v : (u32)v };
-
-				for (int b{ (int)std::bit_width(m) - 2 }; b >= 0; --b)
-					t.push_back((m >> b) & 1);
-
-			}
-
-			at = std::min(sym, TABLE_RANKED);
+			t.push_back(table[k] < 0);
+			t.write_length_bucket<4, 0>(table[k] < 0 ? 0u - (u32)table[k] : (u32)table[k]);
 
 		}
 
@@ -352,8 +349,9 @@ namespace frame_time {
 
 		if (grid == GRID_CUSTOM) {
 
-			t.write_bucket(custom.num, 7);
-			t.write_bucket(custom.den, 3);
+			// each less 1: neither is ever 0
+			t.write_bucket(custom.num - 1, 7);
+			t.write_bucket(custom.den - 1, 3);
 
 		}
 
@@ -366,46 +364,32 @@ namespace frame_time {
 
 		table.clear();
 
-		u64 used{};
-		u32 at{ TABLE_FIRST };
+		while (table.size() < std::min(TABLE_LEAD, n) && t.in < t.max_size())
+			table.push_back(read_entry(t));
 
-		for (size_t k{}; k < n && t.in < t.max_size(); ++k) {
+		const size_t leading{ table.size() };
 
-			u32 r;
+		const int start{ (int)t.read_bits<TABLE_START_BITS>() };
+		const u64 length{ t.read_length_bucket<3, 0>() };
 
-			if (!read_gamma(t, TABLE_SYMBOLS - 1, r))
-				break;
+		if (length > TABLE_LENGTH_MAX)
+			return false;
 
-			u32 sym{ TABLE_SYMBOLS };
+		// every delta below the start that is not a leading entry
+		for (int v{}; v < start && table.size() < n; ++v)
+			if (std::find(table.begin(), table.begin() + leading, v) == table.begin() + leading)
+				table.push_back(v);
 
-			for (const u8 x : TABLE_ORDER[at])
-				if (table_unused(x, used) && r-- == 0) {
+		for (int v{ start }; v < start + (int)length; ++v)
+			if (t.read_bits<1>() && table.size() < n)
+				table.push_back(v);
 
-					sym = x;
+		while (table.size() < n && t.in < t.max_size()) {
 
-					break;
-				}
+			const bool negative{ t.read_bits<1>() != 0 };
+			const u32 m{ (u32)t.read_length_bucket<4, 0>() };
 
-			if (sym == TABLE_SYMBOLS)
-				break;
-
-			int v{ (int)sym };
-
-			if (sym < TABLE_RANKED)
-				used |= u64(1) << sym;
-			else {
-
-				u32 m{ 1 };
-
-				for (u32 b{ (sym - TABLE_RANKED) >> 1 }; b > 0; --b)
-					m = (m << 1) | (u32)t.read_bits<1>();
-
-				v = std::bit_cast<int>(sym & 1 ? 0u - m : m);
-
-			}
-
-			table.push_back(v);
-			at = std::min(sym, TABLE_RANKED);
+			table.push_back(std::bit_cast<int>(negative ? 0u - m : m));
 
 		}
 
@@ -421,14 +405,84 @@ namespace frame_time {
 		if (code != GRID_CUSTOM)
 			return false;
 
-		const _grid_period custom{ t.read_bucket<7>(), t.read_bucket<3>() };
+		// each is stored less 1, so neither can be 0
+		const u64 num{ (u64)t.read_bucket<7>() + 1 }, den{ (u64)t.read_bucket<3>() + 1 };
 
-		if (custom.num == 0 || custom.den == 0 || custom.num > GRID_CUSTOM_MAX || custom.den > GRID_CUSTOM_MAX)
+		if (num > GRID_CUSTOM_MAX || den > GRID_CUSTOM_MAX)
 			return false;
 
-		grid = _time_grid{ custom };
+		grid = _time_grid{ _grid_period{ (u32)num, (u32)den } };
 
 		return true;
+	}
+
+	// Audio time against real time by the 60 Hz ticks, 0 with too few clean ticks to say. The game records a frame on the
+	// first update after each 60th of a second of real time, so ticks are 16.67 ms of audio apart at normal speed, 25
+	// with double time, 12.5 with half time.
+	inline float tick_rate(const _osr& r) {
+
+		constexpr int LO{ 8 }, HI{ 45 }; // audio ms a tick can be apart
+
+		const size_t n{ r.size() };
+
+		size_t by_delta[HI + 2]{};
+
+		for (const auto& f : r)
+			if (f.delta >= LO && f.delta <= HI)
+				++by_delta[f.delta];
+
+		// the commonest spacing, over three neighbouring values
+		const auto around = [&](int d) { return by_delta[d - 1] + by_delta[d] + by_delta[d + 1]; };
+
+		int mode{ LO + 1 };
+
+		for (int d{ LO + 2 }; d < HI; ++d)
+			mode = around(d) > around(mode) ? d : mode;
+
+		// Ticks keep to their own grid whatever else is recorded. Where the game's frames are long a tick falls on one
+		// of the two frame counts around the period, and the mean spacing is still the period. A frame recorded between
+		// two ticks splits their spacing in two, one part short: a spacing with a short neighbour is not counted.
+		const int lo{ (int)(0.6 * mode) }, hi{ (int)(1.65 * mode) };
+
+		const auto whole = [&](size_t i) { return r[i].delta >= lo && r[i].delta <= hi; };
+
+		const auto clean = [&](size_t i) { return whole(i - 1) && whole(i) && whole(i + 1); };
+
+		double sum{};
+		size_t count{};
+
+		for (size_t i{ 1 }; i + 1 < n; ++i) {
+
+			if (!clean(i))
+				continue;
+
+			sum += (double)r[i].delta;
+			++count;
+		}
+
+		if (count < 50)
+			return 0.f;
+
+		return (float)(sum / (double)count / (1000. / 60.));
+	}
+
+	// How fast audio time ran against real time, 0 where the replay does not show it. tick: tick_rate of the frames;
+	// play_rate is the rate the replay's mods state (0: unknown); grid_ms is the period of the grid the times are coded on, 0 for none.
+	inline float clock_rate(const float tick, const float play_rate, const double grid_ms) {
+
+		float rate{ tick };
+
+		// the ticks' mean spacing reads up to a few percent short where other frames fall between them: the grid the
+		// times are coded on is their exact period where the two agree
+		if (const double on_grid{ grid_ms / (1000. / 60.) }; rate >= 0.92 * on_grid && rate <= 1.015 * on_grid)
+			rate = (float)on_grid;
+
+		// a known play rate the ticks agree with is exact
+		for (const float known : { play_rate, 1.f, 1.5f, 0.75f })
+			if (known > 0.f && std::abs(rate / known - 1.f) < 0.015f)
+				return known;
+
+		return rate;
 	}
 
 }

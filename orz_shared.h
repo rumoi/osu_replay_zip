@@ -13,6 +13,7 @@
 #include <fstream>
 #include <new>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -20,11 +21,13 @@
 #include <emmintrin.h>
 #endif
 
-// replay data is decoded with the LZMA SDK's decoder (Lib), and encoded the way osu! encodes it (osu_lzma.h)
+// replay data is decoded and encoded with the LZMA SDK (Lib, built with Z7_ST: one thread). Its decoder has an
+// assembly version for x64 (LzmaDecOpt.asm, MASM) and arm64 (LzmaDecOpt.S), used when Lib is built with
+// Z7_LZMA_DEC_OPT and that file; without them LzmaDec.c decodes on its own.
 #include "LzmaDec.h"
+#include "LzmaEnc.h"
 #include "crc.h"
 #include "orz_types.h"
-#include "osu_lzma.h"
 
 namespace orz {
 
@@ -86,10 +89,11 @@ inline void no_FMA_check() {
 
 }
 
-constexpr u32 ORZ_VERSION{ 0 };
+constexpr u32 ORZ_VERSION{ 0 }; // unreleased format; the compression priority selects the frame model
 
 // limits for untrusted input, real replays are far below all of them and anything beyond is treated as corrupted
-constexpr size_t ORZ_MAX_FRAMES{ 1u << 22 }; // (~19 hours at 60 fps)
+constexpr size_t ORZ_MAX_FRAMES{ 1u << 20 }; // (~4.85 hours at 60 fps)
+constexpr size_t ORZ_MAX_FRAMES_PER_BYTE{ 8 }; // of the input's LZMA data (1 bit a frame): real replays stay under 5
 constexpr size_t ORZ_MAX_STREAM{ 1u << 28 };
 
 // extended game mode: the game mode with the gameplay modifiers that change it completely (relax, autopilot), and so the
@@ -102,7 +106,7 @@ enum class e_mode : u32 {
 
 };
 
-// the encode info as a file stores it: the e_mode in the low 4 bits (8 of 16 used), then a bit each
+// the encode info as a file stores it: e_mode, two replay flags, the two-bit compression priority, two more flags
 enum ORZ_ENCODE_INFO : u32 {
 
 	e_mode_bits = 15,
@@ -111,13 +115,18 @@ enum ORZ_ENCODE_INFO : u32 {
 
 	trailing_comma = 1 << 5,
 
-	replay_verbatim = 1 << 6,
+	compression_priority_mask = 3 << 6, // 0 = size, 1 = balanced, 2 = speed; 3 is reserved
+	compression_priority_size = 0 << 6,
+	compression_priority_balanced = 1 << 6,
+	compression_priority_speed = 2 << 6,
 
-	text_shortest = 1 << 7, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
+	replay_verbatim = 1 << 8,
+
+	text_shortest = 1 << 9, // floats are 'shortest round-trip' (newer .NET, osu!lazer)
 
 };
 
-constexpr u32 ORZ_ENCODE_INFO_BITS{ 8 };
+constexpr u32 ORZ_ENCODE_INFO_LENGTH_BITS{ 4 }; // its bit length in this many bits, then the bits under its leading 1
 
 FORCEINLINE e_mode get_e_mode(u32 encode_info) {
 	return (e_mode)(encode_info & ORZ_ENCODE_INFO::e_mode_bits);
@@ -145,11 +154,22 @@ enum ORZ_OPTION : u32 {
 
 	ENCODE_CHECK_ROUND_TRIP = 1 << 0,
 
+	ENCODE_NO_DEVICE = 1 << 1, // skip cursor device-model detection
+
 	DECODE_SKIP_CRC = 1 << 2,
+
+
+	ENCODE_COMPRESSION_PRIORITY_MASK = 3 << 3,
+	ENCODE_COMPRESSION_PRIORITY_SIZE = 0 << 3, // default: all contexts and mixer, without APM
+	ENCODE_COMPRESSION_PRIORITY_BALANCED = 1 << 3, // first context, direct prediction with fallback
+	ENCODE_COMPRESSION_PRIORITY_SPEED = 2 << 3, // direct fallback prediction only
+
+	DECODE_MINIFY = 1 << 5,
 
 };
 
 constexpr u32 OSR_MOD_RELAX{ 1 << 7 };
+constexpr u32 OSR_MOD_DOUBLE_TIME{ 1 << 6 }, OSR_MOD_HALF_TIME{ 1 << 8 };
 
 enum class orz_tag : u8 {
 
@@ -455,6 +475,10 @@ struct bit_stream {
 
 		push_back(0);
 
+		// MAX_VALUE is the only value its length holds that is not written directly: it needs no bits after
+		if (value == MAX_VALUE)
+			return;
+
 		for (int i{}; i < in; ++i)
 			push_back((value >> i) & 1);
 
@@ -609,6 +633,9 @@ struct _bit_view {
 		while (read_bits<1>())
 			++bit_count;
 
+		if (bit_count == BIT_WRITE - 1)
+			return MAX_VALUE;
+
 		bit_count = std::min(bit_count, 31u);
 
 		return (1u << bit_count) | (u32)read_bits(bit_count);
@@ -663,6 +690,8 @@ struct small_string{
 };
 
 
+enum class _frame_profile { size, balanced, speed };
+
 struct _orz_file {
 
 	u32 version;
@@ -673,6 +702,10 @@ struct _orz_file {
 	u32 seed;
 
 	u32 frame_count;
+
+	_frame_profile frame_profile() const {
+		return (_frame_profile)((encode_info & compression_priority_mask) >> 6);
+	}
 
 	struct _container {
 
@@ -717,8 +750,15 @@ struct _orz_file {
 
 		CRC = bs.read_bits<32>();
 
-		encode_info = bs.read_bucket<ORZ_ENCODE_INFO_BITS>();
-		
+		encode_info = (u32)bs.read_length_bucket<ORZ_ENCODE_INFO_LENGTH_BITS, 0>();
+
+		constexpr u32 known_info{ e_mode_bits | has_osr_header | trailing_comma | replay_verbatim | text_shortest | compression_priority_mask };
+		const u32 priority{ (encode_info & compression_priority_mask) >> 6 };
+
+		if ((encode_info & ~known_info) || get_e_mode(encode_info) >= e_mode::e_mode_max ||
+			priority == 3 || (priority != 0 && (encode_info & replay_verbatim)))
+			return 0;
+
 		if (seeded = bs.read_bits<1>())
 			seed = bs.read_length_bucket<3, ORZ_SEED_LENGTH>();
 
@@ -830,7 +870,7 @@ struct _orz_file {
 
 		bs.write_bits<32>(CRC);
 
-		bs.write_bucket(encode_info, ORZ_ENCODE_INFO_BITS);
+		bs.write_length_bucket<ORZ_ENCODE_INFO_LENGTH_BITS, 0>(encode_info);
 		
 		if (bs.emplace_back(seeded))
 			bs.write_length_bucket<3, ORZ_SEED_LENGTH>(seed);
@@ -942,7 +982,9 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 
 	memcpy(&text_size, data + 5, 4);
 
-	if (text_size > ORZ_MAX_STREAM)
+	constexpr u64 LZMA_MAX_RATIO{ 1 << 14 };
+
+	if (text_size > ORZ_MAX_STREAM || text_size / LZMA_MAX_RATIO > size)
 		return false;
 
 	out.resize(text_size);
@@ -962,9 +1004,41 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 	return true;
 }
 
-// the replay text as osu! stores it, so replay data the game wrote comes back byte for byte (osu_lzma.h)
+// the replay text as replay data osu! reads: 5 property bytes, the u64 size, the LZMA stream with no end mark.
+// Compressed for speed (the SDK's fast mode on a short hash chain), so not to the bytes osu! wrote
 inline std::vector<u8> compress_osr_string(std::string_view string) {
-	return osu_lzma::compress({ (const u8*)string.data(), string.size() });
+
+	CLzmaEncProps props;
+
+	LzmaEncProps_Init(&props);
+
+	props.dictSize = 1u << 21;
+	props.reduceSize = string.size();
+	props.lc = 3;
+	props.lp = 0;
+	props.pb = 2;
+	props.algo = 0;
+	props.btMode = 0;
+	props.fb = 8;
+	props.mc = 4;
+	props.numThreads = 1;
+
+	// LZMA grows data it cannot compress by a little
+	std::vector<u8> out(5 + 8 + string.size() + string.size() / 3 + 128);
+
+	SizeT size{ out.size() - (5 + 8) }, props_size{ 5 };
+
+	if (LzmaEncode(out.data() + 5 + 8, &size, (const u8*)string.data(), string.size(), &props, out.data(), &props_size, 0, nullptr,
+		&lzma_allocFuncs, &lzma_allocFuncs) != SZ_OK)
+		throw std::runtime_error("LZMA encode failed");
+
+	const u64 text_size{ string.size() };
+
+	memcpy(out.data() + 5, &text_size, 8);
+
+	out.resize(5 + 8 + size);
+
+	return out;
 }
 
 }

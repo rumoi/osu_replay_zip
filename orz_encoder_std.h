@@ -11,6 +11,7 @@
 #include "orz_time.h"
 #include "orz_frames.h"
 #include "orz_device_std.h"
+#include "orz_setup.h"
 
 namespace orz {
 
@@ -74,14 +75,32 @@ namespace standard {
 		std::vector<u32> keys; // folded, K1 / K2 imply M1 / M2
 		std::vector<int> table;
 		u32 grid{};
+		frame_time::_grid_period custom{}; // the period when grid is GRID_CUSTOM
+		float tick_rate{}; // frame_time::tick_rate
 		bool std_default_pos{};
 		bool std_default_time{};
+
+		frame_time::_grid_period period() const {
+
+			return grid == frame_time::GRID_CUSTOM ? custom : frame_time::GRID_PERIODS[grid];
+		}
+
+		frame_time::_time_grid time_grid() const {
+
+			return frame_time::_time_grid{ period() };
+		}
+
 	};
 
 	inline bool std_default_pos_of(const _osr& r) {
 
 		return r.size() > 2 && same_bits(r[0].x, POS_DEFAULT_X) && same_bits(r[0].y, POS_DEFAULT_Y) &&
 			same_bits(r[1].x, POS_DEFAULT_X) && same_bits(r[1].y, POS_DEFAULT_Y);
+	}
+
+	inline bool check_if_AP(const _osr& r) {
+
+		return std_default_pos_of(r) && same_bits(r[2].x, 256.f) && r[2].y >= 192.f && r[2].y <= 500.f;
 	}
 
 	inline _shared_streams shared_streams(const _osr& r, bool std_default_pos, bool std_default_time) {
@@ -96,6 +115,18 @@ namespace standard {
 		sh.table = frame_time::build_table(std::span{ sh.delta }.subspan(std_default_time ? 2 : 0));
 		sh.grid = frame_time::pick_grid(sh.delta);
 
+		// a game clock off the usual play rates has its ticks on none of the listed grids: one of their own period
+		sh.tick_rate = frame_time::tick_rate(r);
+
+		if (sh.tick_rate > 0.f) {
+
+			sh.custom = frame_time::custom_grid(sh.delta, (double)sh.tick_rate * (1000. / 60.), sh.grid);
+
+			if (sh.custom.num)
+				sh.grid = frame_time::GRID_CUSTOM;
+
+		}
+
 		sh.repeated = repeat::flags(r);
 		sh.sample = repeat::sample_of(sh.repeated);
 
@@ -107,11 +138,7 @@ namespace standard {
 		return sh;
 	}
 
-	struct _native_grid {
-		bool on;
-		u64 A; // 32:32 fixed p
-		i64 C; // 32:32 fixed p
-	};
+	using dspace::_native_grid;
 
 	inline i64 grid_value(const _native_grid& g, i64 j) {
 
@@ -196,8 +223,8 @@ namespace standard {
 			if (n * 10 >= most * 9)
 				s = std::max(s, st);
 
-		if (s < 1.5 || most * 2 < (i64)d.size() - 1)
-			return {};
+		// a step the gaps agree on: the device's own lattice, one count a step
+		const bool coarse{ s >= 1.5 && most * 2 >= (i64)d.size() - 1 };
 
 		struct _fitter {
 
@@ -221,7 +248,7 @@ namespace standard {
 				return u;
 			}
 
-			void sweep(double reach_steps, double q_step, const std::vector<double>& u) {
+			void sweep(double reach_steps, double q_step, const std::vector<double>& u, double least = 1.2) {
 
 				constexpr int BINS{ 256 };
 
@@ -236,7 +263,7 @@ namespace standard {
 					const double N{ n0 + q * q_step }, st{ span / N };
 
 					// a wide reach can pass zero steps
-					if (N <= 0 || st < 1.2)
+					if (N <= 0 || st < least)
 						continue;
 
 					std::fill(std::begin(hist), std::end(hist), 0);
@@ -245,7 +272,7 @@ namespace standard {
 
 						const double f{ x * N };
 
-						++hist[std::min(BINS - 1, (int)((f - std::floor(f)) * BINS))];
+						++hist[std::min(BINS - 1, (int)((f - (double)(i64)f) * BINS))]; // f >= 0: the cast is floor
 
 					}
 
@@ -320,29 +347,34 @@ namespace standard {
 
 				double lo;
 
-				for (int it{}; it < 3; ++it) {
+				std::vector<double> v(d.size());
+				std::vector<double> t;
 
-					std::vector<std::pair<double, size_t>> t(d.size());
-					std::vector<i64> jd(d.size());
+				std::vector<i64> jd(d.size());
+
+				for (int it{}; it < 3; ++it) {
 
 					for (size_t i{}; i < d.size(); ++i) {
 
-						jd[i] = std::llround(((double)(d[i] - d.front()) - phase) / s);
-						t[i] = { (double)(d[i] - d.front()) - (double)jd[i] * s, i };
+						jd[i] = dspace::round_i64(((double)(d[i] - d.front()) - phase) / s);
+						v[i] = (double)(d[i] - d.front()) - (double)jd[i] * s;
 
 					}
 
-					size_t count{ d.size() }, at{};
+					double last{ std::numeric_limits<float>::infinity() };
+					double first{ -last };
 
 					if (!exact) {
 
+						t = v;
+
 						std::sort(t.begin(), t.end());
 
-						count = 0;
+						size_t count{}, at{};
 
 						for (size_t e{}, b{}; e < t.size(); ++e) {
 
-							while (t[e].first - t[b].first >= 1.)
+							while (t[e] - t[b] >= 1.)
 								++b;
 
 							if (e - b + 1 > count) {
@@ -354,22 +386,26 @@ namespace standard {
 
 						}
 
-						std::sort(t.begin() + at, t.begin() + at + count, [](const auto& x, const auto& y) {
-
-							return x.second < y.second;
-						});
+						first = t[at];
+						last = t[at + count - 1];
 
 					}
 
 					on.clear();
 					j.clear();
 
-					const i64 low{ jd[t[at].second] };
+					i64 low{};
 
-					for (size_t k{ at }; k < at + count; ++k) {
+					for (size_t i{}; i < d.size(); ++i) {
 
-						on.push_back(d[t[k].second]);
-						j.push_back(jd[t[k].second] - low);
+						if (!(v[i] >= first && v[i] <= last))
+							continue;
+
+						if (on.empty())
+							low = jd[i];
+
+						on.push_back(d[i]);
+						j.push_back(jd[i] - low);
 
 					}
 
@@ -409,7 +445,7 @@ namespace standard {
 					i64 n{};
 
 					for (size_t i{ 1 }; i < d.size(); ++i)
-						n += std::max<i64>(1, std::llround((double)(d[i] - d[i - 1]) / s));
+						n += std::max<i64>(1, dspace::round_i64((double)(d[i] - d[i - 1]) / s));
 
 					const double s1{ span / (double)n };
 
@@ -464,71 +500,315 @@ namespace standard {
 
 		};
 
-		const double guess{ s };
-
 		_fitter f{ d, (double)(d.back() - d.front()) };
 
 		f.few = f.sample(256);
 		f.many = f.sample(2048);
 
-		if (const size_t count{ f.fit_from(guess) }; count * 10 < d.size() * 9) {
+		// the grid of the lattice the fitter holds, off where it holds none
+		const auto grid_of = [&]() -> _native_grid {
 
-			double best{ f.gain(count) }, best_s{ f.s }, best_phase{ f.phase };
-			std::vector<double> tried{ guess };
+			if (f.on.empty())
+				return {};
 
-			for (const double pr : pairs)
-				for (int k{ 1 }; k <= 6; ++k) {
+			// Any lattice holds its share of any integers, all but the 1 - 1 / step it skips, and one under 1.5 integers a
+			// count holds most. Fit to integers that are on none, the best still misses about that share; a tablet's own
+			// misses a small part of it (what the device model escaped, the cursor held at an edge). Half of it divides
+			// the two.
+			if (f.s < 1.5 && (double)(d.size() - f.on.size()) > (double)d.size() * (1. - 1. / f.s) / 2.)
+				return {};
 
-					const double st{ pr / k };
+			double lo;
 
-					const bool seen{ std::any_of(tried.begin(), tried.end(), [&](double t) {
+			const double w{ f.window(f.s, lo) };
+			const u64 A{ (u64)std::llround(f.s * 4294967296.) };
 
-						return std::abs(st - t) < t * 0.005;
-					}) };
+			if (w <= 0 || A == 0)
+				return {};
 
-					if (st < 1.2 || seen)
-						continue;
+			return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
+		};
 
-					tried.push_back(st);
+		if (coarse) {
 
-					if (const double g{ f.gain(f.fit_from(st)) }; g > best) {
+			const double guess{ s };
 
-						best = g;
-						best_s = f.s;
-						best_phase = f.phase;
+			if (const size_t count{ f.fit_from(guess) }; count * 10 < d.size() * 9) {
+
+				double best{ f.gain(count) }, best_s{ f.s }, best_phase{ f.phase };
+				std::vector<double> tried{ guess };
+
+				for (const double pr : pairs)
+					for (int k{ 1 }; k <= 6; ++k) {
+
+						const double st{ pr / k };
+
+						const bool seen{ std::any_of(tried.begin(), tried.end(), [&](double t) {
+
+							return std::abs(st - t) < t * 0.005;
+						}) };
+
+						if (st < 1.2 || seen)
+							continue;
+
+						tried.push_back(st);
+
+						if (const double g{ f.gain(f.fit_from(st)) }; g > best) {
+
+							best = g;
+							best_s = f.s;
+							best_phase = f.phase;
+
+						}
 
 					}
 
+				f.s = best_s;
+				f.phase = best_phase;
+
+				if (best == std::numeric_limits<double>::lowest())
+					f.on.clear();
+
+				else if (f.refine(true) == 0)
+					f.refine(false);
+
+			}
+
+			// The span's count of steps can settle off the gaps' own estimates: a step just under 2 leaves gaps of 2 and a
+			// few of 1, and reads as one just over 2 with those left off it. The lattice at an estimate near the one
+			// found stands where it holds more of the integers.
+			double lo;
+
+			const double found{ f.s };
+
+			size_t held{ f.window(f.s, lo) > 0 ? f.on.size() : 0 };
+
+			for (size_t k{}; k < cand.size() && held < d.size(); ++k) {
+
+				const double st{ cand[k].first };
+
+				const bool seen{ std::any_of(cand.begin(), cand.begin() + k, [&](const auto& c) {
+
+					return std::abs(st - c.first) < st * 0.001;
+				}) };
+
+				if (seen || std::abs(st - found) > found * 0.05)
+					continue;
+
+				const double s0{ f.s }, phase0{ f.phase };
+				const auto on0{ f.on }, j0{ f.j };
+				const auto up0{ f.up }, dn0{ f.dn };
+
+				f.s = st;
+				f.sweep(std::max(8., f.span / st * 0.005), 0.25, f.few);
+
+				size_t direct{ f.refine(true) };
+
+				if (direct == 0)
+					direct = f.refine(false);
+
+				if (direct > held)
+					held = direct;
+
+				else {
+
+					f.s = s0;
+					f.phase = phase0;
+					f.on = on0;
+					f.j = j0;
+					f.up = up0;
+					f.dn = dn0;
+
 				}
 
-			if (best == std::numeric_limits<double>::lowest())
-				return {};
+			}
 
-			f.s = best_s;
-			f.phase = best_phase;
-
-			if (f.refine(true) == 0)
-				f.refine(false);
+			if (const _native_grid g{ grid_of() }; g.on)
+				return g;
 
 		}
 
-		double lo;
+		// A lattice under 1.5 integers a count leaves gaps of 1 and 2, which say little of its step. What shows it are the
+		// integers it never lands on: one every step / (step - 1), each alone among visited ones. How far apart those are
+		// gives the step, to within fine_reach counts across the span. It is looked for where the gaps agree on no
+		// step, or on one that then holds no lattice (near 1.5 every gap of 1, 2 or 3 is within reach of a step).
+		std::unordered_map<i64, int> apart;
 
-		const double w{ f.window(f.s, lo) };
-		const u64 A{ (u64)std::llround(f.s * 4294967296.) };
+		i64 last{};
+		bool any{};
 
-		if (w <= 0 || A == 0)
+		for (size_t i{ 1 }; i + 2 < d.size(); ++i) {
+
+			// d[i] + 1 was never visited, the two integers either side of it were
+			if (d[i + 1] - d[i] != 2 || d[i] - d[i - 1] != 1 || d[i + 2] - d[i + 1] != 1)
+				continue;
+
+			if (any)
+				++apart[d[i] - last];
+
+			any = true;
+			last = d[i];
+
+		}
+
+		i64 g1{};
+		int n1{};
+
+		for (const auto& [g, n] : apart)
+			if (n > n1 || (n == n1 && g < g1)) {
+
+				g1 = g;
+				n1 = n;
+
+			}
+
+		const int below{ apart.count(g1 - 1) ? apart[g1 - 1] : 0 }, above{ apart.count(g1 + 1) ? apart[g1 + 1] : 0 };
+		const i64 g2{ below >= above ? g1 - 1 : g1 + 1 };
+		const int n2{ std::max(below, above) }, n{ n1 + n2 };
+
+		// the lattice's own spacing stands out: integers the replay happened not to visit are any distance apart
+		int other{};
+
+		for (const auto& [g, c] : apart)
+			if (std::abs(g - g1) > 1 && g < 2 * g1 - 1)
+				other = std::max(other, c);
+
+		if (n < 32 || n1 < 2 * other)
 			return {};
 
-		return { true, A, (i64)std::floor((lo + w / 2) * 4294967296.) };
+		const double every{ (double)(g1 * n1 + g2 * n2) / n };
+		const double share{ (double)n2 / n };
+
+		s = every / (every - 1.);
+
+		// the estimate's deviation as a share of the step: four of them across the span, in counts
+		const double deviation{ std::sqrt(std::max(share * (1. - share), 1. / n) / n) / (every * (every - 1.)) };
+
+		const double fine_reach{ std::min(64., 2. + 4. * deviation * (double)(d.back() - d.front()) / s) };
+
+		// the lattice holds the replay's integers only where its counts stay in step across the whole span: by less
+		// than the share of integers it skips, which a few samples show unless it is small
+		const double skips{ 1. - 1. / s };
+
+		f.s = s;
+		f.sweep(fine_reach, skips / 4., skips < 0.15 ? f.many : f.few, 1.);
+
+		if (f.refine(true) == 0)
+			f.refine(false);
+
+		return grid_of();
+	}
+
+	// The grid of a known step under st's integers: the lattice of that step holding the most of them. A few sit off
+	// any (the cursor held at an edge, a frame of another device) and are left to escape; off when more than a
+	// hundredth do.
+	inline _native_grid grid_of_step(const dspace::axis_streams& st, double step) {
+
+		if (!(step > 1.) || !(step < 65536.) || st.K.size() < 64)
+			return {};
+
+		std::vector<u8> escaped(st.K.size());
+
+		for (const auto& e : st.escapes)
+			escaped[e.first] = 1;
+
+		// where each integer the replay visits sits within a step, however long the cursor stayed on it
+		std::vector<i64> visited;
+
+		visited.reserve(st.K.size());
+
+		for (size_t i{}; i < st.K.size(); ++i)
+			if (!escaped[i] && st.K[i] < (1 << 24))
+				visited.push_back(st.K[i]);
+
+		std::sort(visited.begin(), visited.end());
+		visited.erase(std::unique(visited.begin(), visited.end()), visited.end());
+
+		if (visited.empty() || visited.front() <= -(1 << 24))
+			return {};
+
+		const i64 low{ visited.front() };
+
+		std::vector<double> at(visited.size());
+
+		for (size_t i{}; i < visited.size(); ++i) {
+
+			const double q{ (double)(visited[i] - low) / step };
+
+			at[i] = q - std::floor(q);
+
+		}
+
+		std::sort(at.begin(), at.end());
+
+		// one lattice's integers sit within an integer of each other there: the stretch that wide holding the most of
+		// them starts at the lattice's phase
+		const double width{ 1. / step };
+		const size_t n{ at.size() };
+
+		size_t most{}, first{};
+
+		for (size_t b{}, e{}; b < n; ++b) {
+
+			e = std::max(e, b);
+
+			while (e < b + n && at[e % n] + (e >= n ? 1. : 0.) - at[b] < width)
+				++e;
+
+			if (e - b > most) {
+
+				most = e - b;
+				first = b;
+
+			}
+
+		}
+
+		if (most * 100 < n * 99)
+			return {};
+
+		const double phase{ at[first] };
+
+		const u64 A{ (u64)std::llround(step * 4294967296.) };
+
+		i64 r_low{ std::numeric_limits<i64>::max() }, r_high{ std::numeric_limits<i64>::min() }, j_low{ std::numeric_limits<i64>::max() };
+
+		for (const i64 k : visited) {
+
+			const double q{ (double)(k - low) / step - phase };
+			const double whole{ std::floor(q + 1e-9) };
+
+			// off the lattice
+			if (q - whole >= width)
+				continue;
+
+			// visited is in order, so the first integer on the lattice has the lowest index
+			const i64 j{ (i64)whole };
+
+			j_low = std::min(j_low, j);
+
+			const i64 r{ (i64)((u64)k << 32) - (i64)(A * (u64)(j - j_low)) };
+
+			r_low = std::min(r_low, r);
+			r_high = std::max(r_high, r);
+
+		}
+
+		// value(j) = (A * j + C) >> 32 gives every integer back when C is in [r_high, r_low + 2^32)
+		if (r_high - r_low >= (1ll << 32))
+			return {};
+
+		return { true, A, r_high + ((1ll << 32) - 1 - (r_high - r_low)) / 2 };
 	}
 
 	inline float grid_field(const dspace::_axis& a, i64 L) {
 		return a.param.device.kind == dspace::axis_mode::rational ? dspace::rational_value(a.param, L) : dspace::absolute_field(a, L);
 	}
 
-	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, std::span<const float> vals,
-		bool exact_text, const _native_grid& g) {
+	inline dspace::axis_streams grid_streams(const dspace::axis_params& p, const dspace::axis_streams& st, const dspace::_axis_samples& samples,
+		const _native_grid& g) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		const dspace::_axis a{ p };
 
@@ -560,7 +840,7 @@ namespace standard {
 
 			prev = Ls;
 
-			const dotnet::text_bounds b{ vals[i], exact_text };
+			const dotnet::text_bounds& b{ bounds[i] };
 
 			if (held && dk == 0) {
 
@@ -611,6 +891,40 @@ namespace standard {
 		near[0] = grid_field(a, L - 1);
 		near[1] = grid_field(a, L + 1);
 
+	}
+
+	// axis_cost of an axis on a grid. A position one native count off its grid value is coded as the side it is on
+	// (grid_near): a few bits, where axis_cost would count an escaped value.
+	inline size_t grid_cost(const dspace::axis_params& p, const _native_grid& g, const dspace::axis_streams& st, std::span<const int> dt,
+		int axis, bool exact_text) {
+
+		const dspace::_axis a{ p };
+
+		dspace::axis_streams far{};
+
+		far.K = st.K;
+		far.slack = st.slack;
+
+		size_t near{};
+
+		for (size_t j{}; j < st.escapes.size(); ++j) {
+
+			const i64 L{ grid_value(g, st.K[st.escapes[j].first]) };
+			const float x{ st.escapes[j].second };
+
+			if (same_bits(x, grid_field(a, L - 1)) || same_bits(x, grid_field(a, L + 1))) {
+
+				++near;
+
+				continue;
+			}
+
+			far.escapes.push_back(st.escapes[j]);
+			far.escape_pred.push_back(st.escape_pred[j]);
+
+		}
+
+		return axis_cost(far, dt, axis, exact_text) + 4 * near;
 	}
 
 	// after the autopilot parameters in the head of the frames stream, per axis
@@ -750,28 +1064,57 @@ namespace standard {
 
 		std::vector<u8> frames; // the frames stream
 		std::array<dspace::axis_streams, 2> st;
+		_native_grid fitted[2]{}; // the native grids that fit, coded on or not
 		bool autopilot{}; // coded with the autopilot path model
+		bool over{};
 
 		size_t size() const {
-			return frames.size();
+			return over ? SIZE_MAX : frames.size();
 		}
 
 	};
 
-	inline _positions position_streams(const dspace::_model_info& m, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, orz_state& state, const autopilot::_params& ap = {}, const std::vector<autopilot::event>& moves = {}) {
+	inline dspace::_model_info all_text() {
+
+		dspace::axis_params p{};
+
+		p.device.kind = dspace::axis_mode::text;
+
+		dspace::_model_info m{};
+
+		m.axis[0] = dspace::axis_model{ p };
+		m.axis[1] = dspace::axis_model{ p };
+
+		return m;
+	}
+
+	inline _positions position_streams(
+		const dspace::_model_info& model, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, orz_state& state,
+		size_t limit = SIZE_MAX, const autopilot::_params& ap = {},
+		const std::vector<autopilot::event>& moves = {}
+	) {
+
+		// coded as the decoder reads it: the axes' segments synced, then each axis's own again
+		dspace::_model_info m;
+
+		if (!dspace::as_written(model, m))
+			return position_streams(all_text(), samples, shared, state, limit, ap, moves);
 
 		_positions p{};
 
 		p.autopilot = ap.on;
 
 		for (int a{}; a < 2; ++a)
-			p.st[a] = dspace::encode_axis_model(m.axis[a], vals[a], dt, state.exact_text());
+			p.st[a] = dspace::encode_axis_model(m.axis[a], samples[a], state.exact_text());
+
+		// a mouse replay past the decoder's budget is coded as text, this should never happen for real replays.
+		if (p.st[0].reports > dspace::MOUSE_DECODE_BUDGET || p.st[1].reports > dspace::MOUSE_DECODE_BUDGET)
+			return position_streams(all_text(), samples, shared, state, limit, ap, moves);
 
 		// frames: delta table and device model, from the next byte the context mixed frames and escape values
 		bit_stream model_head{};
 
-		frame_time::write_table(model_head, shared.table, shared.grid);
+		frame_time::write_table(model_head, shared.table, shared.grid, shared.custom);
 		dspace::write_info(m, model_head);
 		write_autopilot(ap, model_head);
 
@@ -782,14 +1125,97 @@ namespace standard {
 			if (m.axis[a].seg.size() == 1 && (m.axis[a].seg[0].p.device.kind == dspace::axis_mode::absolute ||
 				m.axis[a].seg[0].p.device.kind == dspace::axis_mode::rational)) {
 
-				grid[a] = fit_grid(p.st[a].K);
+				// a hinted grid of this very device is kept while it holds all but 0.1% of the positions
+				for (const auto& h : state.hints) {
+
+					// the same device, whatever play rate its replay had
+					auto hinted_device{ setup::device(h, a) };
+
+					hinted_device.game.rate = m.axis[a].seg[0].p.game.rate;
+
+					if (grid[a].on || hinted_device != m.axis[a].seg[0].p)
+						continue;
+
+					const _native_grid hinted{ h.grid_step[a] > 0. ? grid_of_step(p.st[a], h.grid_step[a]) : _native_grid{} };
+
+					if (!hinted.on)
+						continue;
+
+					auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], hinted) };
+
+					// a finer grid than the tablet's holds the positions too, at a higher cost: on the tablet's own grid
+					// neighbouring counts are the most common gap between the counts a replay visits
+					std::vector<i64> js{ st.K };
+
+					std::sort(js.begin(), js.end());
+					js.erase(std::unique(js.begin(), js.end()), js.end());
+
+					size_t neighbours{};
+
+					for (size_t k{ 1 }; k < js.size(); ++k)
+						neighbours += js[k] - js[k - 1] == 1;
+
+					if (neighbours * 2 < js.size())
+						continue;
+
+					if ((st.escapes.size() - std::min(st.escapes.size(), p.st[a].escapes.size())) * 1000 <= st.K.size()) {
+
+						grid[a] = hinted;
+						on_grid[a] = std::move(st);
+
+					}
+
+				}
 
 				if (grid[a].on)
-					on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], vals[a], state.exact_text(), grid[a]);
+					continue;
+
+				grid[a] = fit_grid(p.st[a].K);
+
+				if (!grid[a].on)
+					continue;
+
+				on_grid[a] = grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], grid[a]);
+
+				// a driver spreads a whole number of tablet counts over its output range (65535, a doubled 32767, 65536),
+				// so a fitted step near such a one is that one. The integers of a lattice of N counts are on one of
+				// range - N too, and the fit can land on either: the tablet's own is the one its counts move smoothly on.
+				const double step{ (double)grid[a].A / 4294967296. };
+
+				size_t cost{ grid_cost(m.axis[a].seg[0].p, grid[a], on_grid[a], samples[a].dt, a, state.exact_text()) };
+
+				for (const double range : { 65535., 65534., 65536. }) {
+
+					const double n{ std::round(range / step) };
+
+					if (std::abs(range / step - n) >= 0.05 || n < 64.)
+						continue;
+
+					for (const double counts : { n, range - n }) {
+
+						const _native_grid exact{ counts >= 64. ? grid_of_step(p.st[a], range / counts) : _native_grid{} };
+
+						if (!exact.on || exact.A == grid[a].A)
+							continue;
+
+						auto st{ grid_streams(m.axis[a].seg[0].p, p.st[a], samples[a], exact) };
+
+						if (const size_t c{ grid_cost(m.axis[a].seg[0].p, exact, st, samples[a].dt, a, state.exact_text()) }; c < cost) {
+
+							cost = c;
+							grid[a] = exact;
+							on_grid[a] = std::move(st);
+
+						}
+
+					}
+
+					break;
+				}
 
 			}
 
-		const auto build = [&](bool use_grid) {
+		const auto build = [&](bool use_grid, size_t below, std::vector<u8>& out) {
 
 			bit_stream head{ model_head };
 
@@ -829,27 +1255,56 @@ namespace standard {
 
 			}
 
-			const frames::_side side{ m.axis, shared.table, frame_time::_time_grid{ shared.grid }, state.mode(), ap, shared.std_default_time };
+			const frames::_side side{ m.axis, shared.table, shared.time_grid(), state.mode(), ap, shared.std_default_time };
 
-			add_to_u8(head.data, frames::encode(state.tables.standard, fd, side, shared.delta.size(), values, state.exact_text()));
+			if (below <= head.data.size())
+				return false;
 
-			return head.data;
+			const size_t coded_below{ below == SIZE_MAX ? SIZE_MAX : below - head.data.size() };
+
+			bool ok;
+
+			if (state.file.frame_profile() == _frame_profile::speed)
+				ok = frames::encode<cm::fastest_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text(), coded_below, head.data);
+			else if (state.file.frame_profile() == _frame_profile::balanced)
+				ok = frames::encode<cm::balanced_bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text(), coded_below, head.data);
+			else
+				ok = frames::encode<cm::bit_encoder>(state.tables.frames, fd, side, shared.delta.size(), values, state.exact_text(), coded_below, head.data);
+
+			if (ok)
+				out = std::move(head.data);
+
+			return ok;
 		};
+
+		p.fitted[0] = grid[0];
+		p.fitted[1] = grid[1];
 
 		bool use_grid{ grid[0].on || grid[1].on };
 
 		for (int a{}; a < 2; ++a)
 			use_grid &= !grid[a].on || on_grid[a].escapes.size() * 20 < on_grid[a].K.size();
 
-		auto best{ build(use_grid) };
+		std::vector<u8> best;
 
+		bool built{ build(use_grid, limit, best) };
+
+		// the grid only replaces a smaller stream
 		if (!use_grid && (grid[0].on || grid[1].on))
-			if (auto g{ build(true) }; g.size() < best.size()) {
+			if (std::vector<u8> g; build(true, built ? best.size() : limit, g)) {
 
 				best = std::move(g);
 				use_grid = true;
+				built = true;
 
 			}
+
+		if (!built) {
+
+			p.over = true;
+
+			return p;
+		}
 
 		if (use_grid)
 			for (int a{}; a < 2; ++a)
@@ -887,14 +1342,17 @@ namespace standard {
 
 	}
 
-	// axis_mode::none marks what detection could not fit
+	// axis_mode::internal_none marks what detection could not fit; every axis is written with at least one segment
 	inline dspace::_model_info text_filled(dspace::_model_info m) {
 
 		for (auto& ax : m.axis) {
 
+			if (ax.seg.empty())
+				ax.seg.emplace_back();
+
 			for (auto& sg : ax.seg) {
 
-				if (sg.p.device.kind == dspace::axis_mode::none) {
+				if (sg.p.device.kind == dspace::axis_mode::internal_none) {
 
 					sg.p = {};
 					sg.p.device.kind = dspace::axis_mode::text;
@@ -908,37 +1366,24 @@ namespace standard {
 		return m;
 	}
 
-	inline dspace::_model_info all_text() {
-
-		dspace::axis_params p{};
-
-		p.device.kind = dspace::axis_mode::text;
-
-		dspace::_model_info m{};
-
-		m.axis[0] = dspace::axis_model{ p };
-		m.axis[1] = dspace::axis_model{ p };
-
-		return m;
-	}
-
 	// the replay's frames with autopilot moves in place of a device model
-	inline _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const std::vector<float> vals[2],
-		const std::vector<int>& dt, const _shared_streams& shared, orz_state& state) {
+	inline _positions autopilot_streams(std::span<const autopilot::sample> s, const autopilot::_params& ap, const dspace::_axis_samples (&samples)[2],
+		const _shared_streams& shared, orz_state& state, size_t limit = SIZE_MAX) {
 
 		size_t covered{};
 
 		const auto moves{ autopilot::fitter{ s, ap }.fit(covered) };
 
-		return position_streams(all_text(), vals, dt, shared, state, ap, moves);
+		return position_streams(all_text(), samples, shared, state, limit, ap, moves);
 	}
 
 	// mouse axes differ, try each other and keep the winners
-	inline void try_other_mouse(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	inline void try_other_mouse(orz_state& state, const dspace::_axis_samples (&samples)[2],
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		const bool differ{
-			px.game.scale != py.game.scale || px.game.unrounded_sub != py.game.unrounded_sub || px.device.mouse.sens != py.device.mouse.sens || px.device.mouse.poll != py.device.mouse.poll
+			px.game.scale != py.game.scale || px.game.unrounded_sub != py.game.unrounded_sub || px.device.mouse.sens != py.device.mouse.sens || px.device.mouse.poll != py.device.mouse.poll ||
+			px.game.rate != py.game.rate
 		};
 
 		if (px.device.kind != dspace::axis_mode::mouse || py.device.kind != dspace::axis_mode::mouse || !differ)
@@ -949,7 +1394,7 @@ namespace standard {
 
 		for (int a{}; a < 2; ++a) {
 
-			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
+			size_t best{ axis_cost(ws[a], samples[a].dt, a, state.exact_text()) };
 
 			for (const auto& [W, H] : PM_RES) {
 
@@ -962,12 +1407,12 @@ namespace standard {
 
 				q.game.off = a ? oy : ox;
 
-				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
+				auto st{ dspace::encode_axis(q, samples[a], state.exact_text(), samples[a].size() / 2) };
 
-				if (st.escapes.size() * 2 > vals[a].size())
+				if (st.escapes.size() * 2 > samples[a].size())
 					continue;
 
-				if (const size_t c{ axis_cost(st, dt, a, state.exact_text()) }; c < best) {
+				if (const size_t c{ axis_cost(st, samples[a].dt, a, state.exact_text()) }; c < best) {
 
 					best = c;
 					*to[a] = q;
@@ -982,8 +1427,10 @@ namespace standard {
 	}
 
 	// x's device on y (the same window, y's offset), taken when it misses at most 0.1% of y's samples
-	inline bool device_from_x(orz_state& state, const std::vector<float>& vals, const std::vector<int>& dt, const dspace::axis_params& px,
-		dspace::axis_params& py, dspace::axis_streams& streams) {
+	inline bool device_from_x(orz_state& state, const dspace::_axis_samples& samples, const dspace::axis_params& px, dspace::axis_params& py,
+		dspace::axis_streams& streams) {
+
+		const auto& [vals, bounds, dt]{ samples };
 
 		std::vector<dspace::axis_params> cands;
 
@@ -1048,7 +1495,7 @@ namespace standard {
 
 		for (const auto& q : cands) {
 
-			auto st{ dspace::encode_axis(q, vals, dt, state.exact_text(), {}, limit + 1) };
+			auto st{ dspace::encode_axis(q, samples, state.exact_text(), limit + 1) };
 
 			if (st.escapes.size() + st.repeats <= limit) {
 
@@ -1063,7 +1510,7 @@ namespace standard {
 		return false;
 	}
 
-	inline void share_mouse(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
+	inline void share_mouse(orz_state& state, const dspace::_axis_samples (&samples)[2],
 		dspace::axis_params& px, dspace::axis_params& py, dspace::axis_streams ws[2]) {
 
 		dspace::axis_params* p[2]{ &px, &py };
@@ -1072,10 +1519,10 @@ namespace standard {
 
 			const int a{ 1 - m };
 
-			if (p[m]->device.kind != dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::none)
+			if (p[m]->device.kind != dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::mouse || p[a]->device.kind == dspace::axis_mode::internal_none)
 				continue;
 
-			size_t best{ axis_cost(ws[a], dt, a, state.exact_text()) };
+			size_t best{ axis_cost(ws[a], samples[a].dt, a, state.exact_text()) };
 
 			for (const auto& [W, H] : PM_RES) {
 
@@ -1088,12 +1535,12 @@ namespace standard {
 
 				q.game.off = a ? oy : ox;
 
-				auto st{ dspace::encode_axis(q, vals[a], dt, state.exact_text(), {}, vals[a].size() / 2) };
+				auto st{ dspace::encode_axis(q, samples[a], state.exact_text(), samples[a].size() / 2) };
 
-				if (st.escapes.size() * 2 > vals[a].size())
+				if (st.escapes.size() * 2 > samples[a].size())
 					continue;
 
-				if (const size_t c{ axis_cost(st, dt, a, state.exact_text()) }; c < best) {
+				if (const size_t c{ axis_cost(st, samples[a].dt, a, state.exact_text()) }; c < best) {
 
 					best = c;
 					*p[a] = q;
@@ -1107,8 +1554,140 @@ namespace standard {
 
 	}
 
-	inline bool detect_device_model(orz_state& state, const std::vector<float> vals[2], const std::vector<int>& dt,
-		const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
+	// The device of the first forced hint that gives one on both axes, as the model: the setup the replay was recorded
+	// with, at this replay's play rate. False when no hint is forced.
+	inline bool forced_model(const orz_state& state, dspace::_model_info& info) {
+
+		for (const auto& h : state.hints) {
+
+			dspace::axis_params q[2]{ setup::device(h, 0), setup::device(h, 1) };
+
+			if (!h.force || q[0].device.kind == dspace::axis_mode::internal_none || q[1].device.kind == dspace::axis_mode::internal_none)
+				continue;
+
+			for (int a{}; a < 2; ++a) {
+
+				q[a].game.rate = state.play_rate;
+				info.axis[a] = dspace::axis_model{ q[a] };
+
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	// An axis on a tablet missing at most 0.1% of its samples is the device: the other, missing more than 1%, is tried on
+	// the same tablet at its speed, in the same window, on a desktop of any span near its own step's
+	inline void fit_from_clean(orz_state& state, const dspace::_axis_samples (&samples)[2], dspace::axis_params& px, dspace::axis_params& py,
+		dspace::axis_streams ws[2]) {
+
+		dspace::axis_params* pa[2]{ &px, &py };
+
+		const size_t n{ samples[0].size() };
+
+		for (int good{}; good < 2; ++good) {
+
+			const int bad{ 1 - good };
+			const auto& q{ *pa[good] };
+
+			double fs, fc;
+
+			if (q.device.kind != dspace::axis_mode::absolute || (ws[good].escapes.size() + ws[good].repeats) * 1000 > n ||
+				(ws[bad].escapes.size() + ws[bad].repeats) * 100 <= n || !fit_axis_step(samples[bad].vals.subspan(2), fs, fc))
+				continue;
+
+			const auto pre{ samples[bad].first(std::min<size_t>(2000, n)) };
+
+			float pick[8];
+			const std::span<const float> picks{ pick, spread_picks(pre.vals.subspan(2), pick) };
+
+			dspace::axis_params best{};
+			size_t cap{ pre.size() / 50 + 1 };
+
+			for (const auto& [W, H] : PM_RES) {
+
+				const auto [ratio, ox, oy] { dspace::playfield(W, H) };
+
+				if (ratio != q.game.scale || (float)(good ? H / 2 : W / 2) != q.game.window_half)
+					continue;
+
+				auto r{ q };
+
+				r.game.off = bad ? oy : ox;
+				r.game.window_half = (float)(bad ? H / 2 : W / 2);
+				r.game.product_rounded = false;
+				r.device.absolute.mapping = dspace::tablet_mapping::desktop;
+
+				const double sp{ q.device.absolute.speed }, est{ fs * ratio * 65536. / sp };
+
+				std::vector<int> spans(std::begin(SPANS), std::end(SPANS));
+
+				for (int span{ (int)(est * 0.97) }; span <= (int)(est * 1.03) + 1; ++span)
+					spans.push_back(span);
+
+				for (const int span : spans) {
+
+					const double A{ ratio / sp * 65536. / span }, B{ ((r.game.off - r.game.window_half) / sp + r.game.window_half) * 65536. / span };
+
+					i64 residue, period;
+
+					if (span < 100 || !fit_origin_residue(picks, A, B, span, residue, period, true))
+						continue;
+
+					// the voted class and its neighbours within period / 128, at the 4 origins of each nearest 0
+					for (i64 d{ -period / 128 }; d <= period / 128; ++d) {
+
+						fit_origin_residue(picks, A, B, span, residue, period, true, d);
+
+						const i64 k0{ dspace::round_i64(-(double)residue / (double)period) };
+
+						for (i64 j{}; j < 4; ++j) {
+
+							r.device.absolute.span = (float)span;
+							r.game.origin = (float)(residue + (k0 + (j & 1 ? -(j + 1) / 2 : j / 2)) * period);
+
+							for (const auto fp : { dspace::float_unit::sse, dspace::float_unit::x87 }) {
+
+								r.game.fp = fp;
+
+								const auto st{ dspace::encode_axis(r, pre, state.exact_text(), cap) };
+
+								if (const size_t e{ st.escapes.size() + st.repeats }; e < cap) {
+
+									cap = e;
+									best = r;
+
+								}
+
+							}
+
+						}
+
+					}
+
+				}
+
+			}
+
+			if (best.device.kind != dspace::axis_mode::absolute)
+				continue;
+
+			auto st{ dspace::encode_axis(best, samples[bad], state.exact_text(), n / 2) };
+
+			if (device_cost(state, best, st, samples[bad].dt, bad) < device_cost(state, *pa[bad], ws[bad], samples[bad].dt, bad)) {
+
+				*pa[bad] = best;
+				ws[bad] = std::move(st);
+
+			}
+
+		}
+
+	}
+
+	inline bool detect_device_model(orz_state& state, const dspace::_axis_samples (&samples)[2], const _shared_streams& shared, dspace::_model_info& info, _positions& best) {
 
 		// whole replay, one model per axis
 		dspace::_model_info whole{};
@@ -1119,29 +1698,30 @@ namespace standard {
 
 			dspace::axis_params px, py;
 
-			px = detect_axis_model(state, vals[0], dt, 0, nullptr, ws[0]);
+			px = detect_axis_model(state, samples[0], 0, nullptr, ws[0]);
 
 			// y's own search only when x's device does not fit it (not osu!catch, whose y is the catcher's fixed height)
-			if (px.device.kind != dspace::axis_mode::none) {
+			if (px.device.kind != dspace::axis_mode::internal_none) {
 
-				if (game_mode(state.mode()) == 2 || !device_from_x(state, vals[1], dt, px, py, ws[1]))
-					py = detect_axis_model(state, vals[1], dt, 1, &px, ws[1]);
+				if (game_mode(state.mode()) == 2 || !device_from_x(state, samples[1], px, py, ws[1]))
+					py = detect_axis_model(state, samples[1], 1, &px, ws[1]);
 
 			} else {
 
 				// x found nothing: detect y on its own, then retry x with y's mapping
-				py = detect_axis_model(state, vals[1], dt, 1, nullptr, ws[1]);
+				py = detect_axis_model(state, samples[1], 1, nullptr, ws[1]);
 
 				if (py.device.kind == dspace::axis_mode::absolute)
-					px = detect_axis_model(state, vals[0], dt, 0, &py, ws[0]);
+					px = detect_axis_model(state, samples[0], 0, &py, ws[0]);
 
 			}
 
-			if (px.device.kind != dspace::axis_mode::none || py.device.kind != dspace::axis_mode::none)
-				refine_window(state, vals, dt, px, py, ws);
+			if (px.device.kind != dspace::axis_mode::internal_none || py.device.kind != dspace::axis_mode::internal_none)
+				refine_window(state, samples, px, py, ws);
 
-			try_other_mouse(state, vals, dt, px, py, ws);
-			share_mouse(state, vals, dt, px, py, ws);
+			try_other_mouse(state, samples, px, py, ws);
+			share_mouse(state, samples, px, py, ws);
+			fit_from_clean(state, samples, px, py, ws);
 
 			whole.axis[0] = dspace::axis_model{ px };
 			whole.axis[1] = dspace::axis_model{ py };
@@ -1154,7 +1734,7 @@ namespace standard {
 		bool try_segments{ !whole_ok };
 
 		for (int a{}; a < 2 && whole_ok; ++a)
-			try_segments |= (ws[a].escapes.size() + ws[a].repeats) * 100 > vals[a].size() * 3;
+			try_segments |= (ws[a].escapes.size() + ws[a].repeats) * 100 > samples[a].size() * 3;
 
 		// shortest round-trip text (osu!lazer) dont gain from segments
 		// lazer will need to be handled properly in the future if we want higher gain
@@ -1166,7 +1746,7 @@ namespace standard {
 		if (whole_any) {
 
 			info = text_filled(whole);
-			best = position_streams(info, vals, dt, shared, state);
+			best = position_streams(info, samples, shared, state);
 			found = true;
 
 		}
@@ -1180,14 +1760,14 @@ namespace standard {
 				return whole.axis[a].seg[0].p.device.kind != dspace::axis_mode::mouse;
 			};
 
-			seg.axis[0] = segment_axis(state, vals[0], dt, 0, nullptr, whole.axis[0].all_none(), desktops(0));
-			seg.axis[1] = segment_axis(state, vals[1], dt, 1, &seg.axis[0], whole.axis[1].all_none(), desktops(1));
+			seg.axis[0] = segment_axis(state, samples[0], 0, nullptr, whole.axis[0].all_none(), desktops(0));
+			seg.axis[1] = segment_axis(state, samples[1], 1, &seg.axis[0], whole.axis[1].all_none(), desktops(1));
 
 			if (!seg.axis[0].all_none() || !seg.axis[1].all_none()) {
 
 				const auto filled{ text_filled(seg) };
 
-				auto p{ position_streams(filled, vals, dt, shared, state) };
+				auto p{ position_streams(filled, samples, shared, state, found ? best.size() : SIZE_MAX) };
 
 				if (!found || p.size() < best.size()) {
 
@@ -1202,6 +1782,43 @@ namespace standard {
 		}
 
 		return found;
+	}
+
+	inline bool repeats_its_path(const std::vector<float> (&vals)[2]) {
+
+		constexpr size_t W{ 32 };
+
+		const size_t n{ vals[0].size() };
+
+		const auto at = [&](size_t i) {
+
+			return (((u64)std::bit_cast<u32>(vals[0][i]) << 32) | std::bit_cast<u32>(vals[1][i])) * 0x9E3779B97F4A7C15ull;
+		};
+
+		std::vector<u64> runs;
+
+		for (size_t i{}; i + W <= n; ++i) {
+
+			if ((at(i) >> 60) != 0)
+				continue;
+
+			u64 h{};
+
+			for (size_t k{}; k < W; ++k)
+				h = (h ^ at(i + k)) * 0x100000001b3ull;
+
+			runs.push_back(h);
+
+		}
+
+		if (runs.size() < 16)
+			return false;
+
+		std::sort(runs.begin(), runs.end());
+
+		const size_t distinct{ (size_t)(std::unique(runs.begin(), runs.end()) - runs.begin()) };
+
+		return (runs.size() - distinct) * 4 > runs.size();
 	}
 
 	inline void encode(const _osr& original, orz_state& state) {
@@ -1228,6 +1845,9 @@ namespace standard {
 
 		const _shared_streams shared{ shared_streams(r, std_default_pos, std_default_time) };
 
+		// the .osr's mods say the play rate; bare replay data leaves it to the device search (report_rates)
+		state.play_rate = state.header_rate > 0.f ? state.header_rate : 1.f;
+
 		const bool relax{ is_relax(state.mode()) };
 
 		const std::vector<int> dt{ repeat::sample_dt(shared.delta, shared.repeated) };
@@ -1244,18 +1864,43 @@ namespace standard {
 
 		}
 
+		// each sample's text bounds, once per replay: detection and every candidate share them
+		std::vector<dotnet::text_bounds> bounds[2];
+
+		for (int a{}; a < 2; ++a) {
+
+			bounds[a].reserve(vals[a].size());
+
+			for (const float v : vals[a])
+				bounds[a].push_back(dotnet::text_bounds{ v, state.exact_text() });
+
+		}
+
+		const dspace::_axis_samples samples[2]{ { vals[0], bounds[0], dt }, { vals[1], bounds[1], dt } };
+
 		dspace::_model_info info{ all_text() };
 		_positions best{};
 
-		// autopilot: clearly autopilot replays skip the device models, others that have none try it against text. Relax
-		// and autopilot do not go together.
-		const auto ap_samples{ autopilot_samples(r, shared, state.exact_text()) };
+		// autopilot (autoplay's start only): clearly autopilot replays skip the device models, others that have none try it
+		// against text. Relax and autopilot do not go together.
+		const bool try_autopilot{ !relax && check_if_AP(original) };
 
-		if (const auto ap{ relax ? autopilot::_params{} : autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) }; ap.on)
-			best = autopilot_streams(ap_samples, ap, vals, dt, shared, state);
+		const auto ap_samples{ try_autopilot ? autopilot_samples(r, shared, state.exact_text()) : std::vector<autopilot::sample>{} };
+
+		if (const auto ap{ try_autopilot ? autopilot::detect(ap_samples, AUTOPILOT_WINDOWS, std::size(AUTOPILOT_WINDOWS)) : autopilot::_params{} }; ap.on)
+			best = autopilot_streams(ap_samples, ap, samples, shared, state);
 		else {
 
-			const bool has_model{ !state.debug.disable_device && dt.size() >= 64 && detect_device_model(state, vals, dt, shared, info, best) };
+			// a forced hint's device is the model, with no search
+			const bool forced{ forced_model(state, info) };
+
+			if (forced)
+				best = position_streams(info, samples, shared, state);
+
+			// osu!'s cursor only: other modes' positions repeat by nature
+			const bool search{ dt.size() >= 64 && !(game_mode(state.mode()) == 0 && repeats_its_path(vals)) };
+
+			const bool has_model{ forced || ((state.options & ORZ_OPTION::ENCODE_NO_DEVICE) == 0 && !state.debug.disable_device && search && detect_device_model(state, samples, shared, info, best)) };
 
 			// both axes as text, only tried when the model misses 5% or more of an axis's frames
 			const auto misses = [&](int a) {
@@ -1263,9 +1908,9 @@ namespace standard {
 				return (best.st[a].escapes.size() + best.st[a].repeats) * 20 >= dt.size();
 			};
 
-			if (!has_model || misses(0) || misses(1)) {
+			if (!forced && (!has_model || misses(0) || misses(1))) {
 
-				auto text{ position_streams(all_text(), vals, dt, shared, state) };
+				auto text{ position_streams(all_text(), samples, shared, state, has_model ? best.size() + 1 : SIZE_MAX) };
 
 				if (!has_model || text.size() <= best.size()) {
 
@@ -1283,9 +1928,9 @@ namespace standard {
 
 			if (text_only(0) && text_only(1)) {
 
-				if (const auto search{ relax ? autopilot::_params{} : search_autopilot(ap_samples) }; search.on) {
+				if (const auto search{ try_autopilot ? search_autopilot(ap_samples) : autopilot::_params{} }; search.on) {
 
-					auto moves{ autopilot_streams(ap_samples, search, vals, dt, shared, state) };
+					auto moves{ autopilot_streams(ap_samples, search, samples, shared, state, best.size()) };
 
 					if (moves.size() < best.size())
 						best = std::move(moves);
@@ -1295,6 +1940,14 @@ namespace standard {
 			}
 
 		}
+
+		float missed[2];
+
+		for (int a{}; a < 2; ++a)
+			missed[a] = vals[a].empty() ? 0.f : (float)((double)best.st[a].escapes.size() / (double)vals[a].size());
+
+		state.setup = setup::of(info, best.fitted, missed);
+		state.clock_rate = frame_time::clock_rate(shared.tick_rate, state.header_rate, (double)shared.period().num / (double)shared.period().den);
 
 		write_orz(r, best, shared, state);
 
@@ -1345,7 +1998,8 @@ namespace standard {
 		return true;
 	}
 
-	inline bool decode(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+	template<typename Reader>
+	inline bool decode_profile(u32 encode_info, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
 
 		_frames_head head{};
 
@@ -1365,12 +2019,10 @@ namespace standard {
 		side.std_default_time = head.std_default_time;
 
 		frames::_frame_data fd{};
-		frames::_reader reader{ tables.standard, head.rest, fd, side, R.size() };
-
-		const auto sample{ repeat::sample_of(fd.repeated) };
+		Reader reader{ tables.frames, head.rest, fd, side, R.size() };
 
 		// tablet grid indices back to values
-		for (int a{}; a < 2; ++a)
+		for (size_t a{}; a < 2; ++a)
 			if (grid_of[a].on)
 				for (auto& k : fd.K[a])
 					k = grid_value(grid_of[a], k);
@@ -1379,7 +2031,7 @@ namespace standard {
 
 		std::vector<float> out;
 
-		for (int a{}; a < 2; ++a) {
+		for (size_t a{}; a < 2; ++a) {
 
 			size_t n{};
 
@@ -1397,15 +2049,36 @@ namespace standard {
 			if (!dspace::decode_axis(info.axis[a], fd.K[a], fd.slack[a], fd.escaped[a], fd.dt, exact_text, out, escape_value))
 				return false;
 
-			for (size_t i{}; i < R.size(); ++i)
-				(&R[i].x)[a] = out[sample[i]];
+			size_t sample{};
 
-		}
+			// x pass also populates time and keys, second pass only populates y.
 
-		for (size_t i{}; i < R.size(); ++i) {
+			if (a == 0) {
 
-			R[i].delta = fd.delta[i];
-			R[i].keys = fold_keys(fd.keys[i]);
+				for (size_t i{}; i < R.size(); ++i) {
+
+					if (i && !fd.repeated[i])
+						++sample;
+
+					R[i].x = out[sample];
+
+					R[i].delta = fd.delta[i];
+					R[i].keys = fold_keys(fd.keys[i]);
+
+				}
+
+			} else {
+
+				for (size_t i{}; i < R.size(); ++i) {
+
+					if (i && !fd.repeated[i])
+						++sample;
+
+					R[i].y = out[sample];
+
+				}
+
+			}
 
 		}
 
@@ -1417,6 +2090,21 @@ namespace standard {
 		}
 
 		return true;
+	}
+
+	inline bool decode(const _orz_file& file, std::span<const u8> data, std::vector<_osr_frame>& R, _table_memory& tables) {
+
+		switch (file.frame_profile()) {
+
+			case _frame_profile::speed:
+				return decode_profile<frames::_fastest_reader>(file.encode_info, data, R, tables);
+
+			case _frame_profile::balanced:
+				return decode_profile<frames::_balanced_reader>(file.encode_info, data, R, tables);
+
+			default: return decode_profile<frames::_reader>(file.encode_info, data, R, tables);
+		}
+
 	}
 
 }

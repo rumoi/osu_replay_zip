@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" viewBox="0 0 600 200" font-family='"trebuchet ms", verdana, arial, sans-serif'>
+<text x="365.0" y="20" font-size="16" fill="#1f2328" text-anchor="middle">Encode (ms per replay)</text>
+<path d="M140 58H590M140 58V196" stroke="#8c959f" stroke-width="2" fill="none"/>
+<path d="M140.0 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="140.0" y="48" font-size="12" fill="#1f2328" text-anchor="middle">0</text>
+<path d="M204.3 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="204.3" y="48" font-size="12" fill="#1f2328" text-anchor="middle">10</text>
+<path d="M268.6 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="268.6" y="48" font-size="12" fill="#1f2328" text-anchor="middle">20</text>
+<path d="M332.9 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="332.9" y="48" font-size="12" fill="#1f2328" text-anchor="middle">30</text>
+<path d="M397.1 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="397.1" y="48" font-size="12" fill="#1f2328" text-anchor="middle">40</text>
+<path d="M461.4 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="461.4" y="48" font-size="12" fill="#1f2328" text-anchor="middle">50</text>
+<path d="M525.7 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="525.7" y="48" font-size="12" fill="#1f2328" text-anchor="middle">60</text>
+<path d="M590.0 58v-5" stroke="#8c959f" stroke-width="2"/>
+<text x="590.0" y="48" font-size="12" fill="#1f2328" text-anchor="middle">70</text>
+<path d="M140 75.2h-5" stroke="#8c959f" stroke-width="2"/>
+<text x="130" y="75.2" font-size="13" fill="#1f2328" text-anchor="end" dominant-baseline="central">.osr</text>
+<rect x="141" y="64.9" width="398.2" height="20.7" fill="#3b6ea8"/>
+<path d="M140 109.8h-5" stroke="#8c959f" stroke-width="2"/>
+<text x="130" y="109.8" font-size="13" fill="#1f2328" text-anchor="end" dominant-baseline="central">.orz (size)</text>
+<rect x="141" y="99.4" width="177.7" height="20.7" fill="#3b6ea8"/>
+<path d="M140 144.2h-5" stroke="#8c959f" stroke-width="2"/>
+<text x="130" y="144.2" font-size="13" fill="#1f2328" text-anchor="end" dominant-baseline="central">.orz (balanced)</text>
+<rect x="141" y="133.9" width="148.1" height="20.7" fill="#3b6ea8"/>
+<path d="M140 178.8h-5" stroke="#8c959f" stroke-width="2"/>
+<text x="130" y="178.8" font-size="13" fill="#1f2328" text-anchor="end" dominant-baseline="central">.orz (speed)</text>
+<rect x="141" y="168.4" width="130.1" height="20.7" fill="#3b6ea8"/>
+</svg>

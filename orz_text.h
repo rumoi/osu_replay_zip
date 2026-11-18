@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "orz_dotnet.h"
+#include "orz_minify.h"
 
 namespace orz {
 
