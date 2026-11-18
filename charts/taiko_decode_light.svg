@@ -20,7 +20,7 @@
 <rect x="141" y="64.9" width="126.5" height="20.7" fill="#3b6ea8"/>
 <path d="M140 109.8h-5" stroke="#8c959f" stroke-width="2"/>
 <text x="130" y="109.8" font-size="13" fill="#1f2328" text-anchor="end" dominant-baseline="central">SIZE 2.9 ms</text>
-<rect x="141" y="99.4" width="426.5" height="20.7" fill="#3b6ea8"/>
+<rect x="141" y="99.4" width="434.0" height="20.7" fill="#3b6ea8"/>
 <path d="M140 144.2h-5" stroke="#8c959f" stroke-width="2"/>
 <text x="130" y="144.2" font-size="13" fill="#1f2328" text-anchor="end" dominant-baseline="central">BALANCED 1.4 ms</text>
 <rect x="141" y="133.9" width="209.0" height="20.7" fill="#3b6ea8"/>

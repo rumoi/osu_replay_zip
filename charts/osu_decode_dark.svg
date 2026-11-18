@@ -19,14 +19,14 @@
 <text x="590.0" y="48" font-size="12" fill="#f0f6fc" text-anchor="middle">14</text>
 <path d="M140 75.2h-5" stroke="#8c959f" stroke-width="2"/>
 <text x="130" y="75.2" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">.osr</text>
-<rect x="141" y="64.9" width="115.7" height="20.7" fill="#3b6ea8"/>
+<rect x="141" y="64.9" width="113.4" height="20.7" fill="#3b6ea8"/>
 <path d="M140 109.8h-5" stroke="#8c959f" stroke-width="2"/>
-<text x="130" y="109.8" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">SIZE 13.2 ms</text>
-<rect x="141" y="99.4" width="424.9" height="20.7" fill="#3b6ea8"/>
+<text x="130" y="109.8" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">SIZE 12.1 ms</text>
+<rect x="141" y="99.4" width="387.0" height="20.7" fill="#3b6ea8"/>
 <path d="M140 144.2h-5" stroke="#8c959f" stroke-width="2"/>
-<text x="130" y="144.2" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">BALANCED 7.7 ms</text>
-<rect x="141" y="133.9" width="246.5" height="20.7" fill="#3b6ea8"/>
+<text x="130" y="144.2" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">BALANCED 7.2 ms</text>
+<rect x="141" y="133.9" width="229.1" height="20.7" fill="#3b6ea8"/>
 <path d="M140 178.8h-5" stroke="#8c959f" stroke-width="2"/>
-<text x="130" y="178.8" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">SPEED 4.3 ms</text>
-<rect x="141" y="168.4" width="137.5" height="20.7" fill="#3b6ea8"/>
+<text x="130" y="178.8" font-size="13" fill="#f0f6fc" text-anchor="end" dominant-baseline="central">SPEED 4.2 ms</text>
+<rect x="141" y="168.4" width="135.6" height="20.7" fill="#3b6ea8"/>
 </svg>
