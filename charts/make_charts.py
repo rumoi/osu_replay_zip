@@ -8,7 +8,7 @@ MODES = {
     "fruit": ([100, 44.64, 47.52, 52.82], [45.4, 6.5, 4.3, 2.9], [2.32, 5.75, 3.35, 1.87]),
     "total": ([100, 29.27, 32.32, 36.52], [61.2, 19.1, 15.5, 13.5], [2.81, 8.95, 5.23, 3.02]),
 }
-NAMES = [".osr", "SIZE", "BALANCED", "SPEED"]
+NAMES = [".osr", ".orz (size)", ".orz (balanced)", ".orz (speed)"]
 THEMES = {"dark": "#f0f6fc", "light": "#1f2328"}
 AXIS = "#8c959f"
 BAR = "#3b6ea8"
@@ -22,7 +22,7 @@ def ticks(vmax):
         if vmax / step <= 10:
             return step, math.ceil(vmax / step - 1e-9) * step
 
-def svg(title, vals, unit, text, fixed_max=None):
+def svg(title, vals, text, fixed_max=None):
     step, vmax = (10, fixed_max) if fixed_max else ticks(max(vals))
     sx = lambda v: PLOT_X0 + (PLOT_X1 - PLOT_X0) * v / vmax
     band = (PLOT_Y1 - AXIS_Y) / len(vals)
@@ -37,9 +37,8 @@ def svg(title, vals, unit, text, fixed_max=None):
         out.append(f'<text x="{x:.1f}" y="{AXIS_Y - 10}" font-size="12" fill="{text}" text-anchor="middle">{v:g}</text>')
     for i, (name, v) in enumerate(zip(NAMES, vals)):
         y = AXIS_Y + band * (i + 0.5)
-        label = name if i == 0 else f"{name} {v:.1f}{unit}"
         out.append(f'<path d="M{PLOT_X0} {y:.1f}h-5" stroke="{AXIS}" stroke-width="2"/>')
-        out.append(f'<text x="{PLOT_X0 - 10}" y="{y:.1f}" font-size="13" fill="{text}" text-anchor="end" dominant-baseline="central">{label}</text>')
+        out.append(f'<text x="{PLOT_X0 - 10}" y="{y:.1f}" font-size="13" fill="{text}" text-anchor="end" dominant-baseline="central">{name}</text>')
         out.append(f'<rect x="{PLOT_X0 + 1}" y="{y - band * 0.3:.1f}" width="{sx(v) - PLOT_X0 - 1:.1f}" height="{band * 0.6:.1f}" fill="{BAR}"/>')
     return "\n".join(out + ["</svg>", ""])
 
@@ -47,9 +46,9 @@ def main(out_dir):
     os.makedirs(out_dir, exist_ok=True)
     for mode, (size, enc, dec) in MODES.items():
         for theme, text in THEMES.items():
-            charts = {"size": svg("Size, % of .osr", size, "%", text, 100),
-                      "encode": svg("Encode, ms per replay", enc, " ms", text),
-                      "decode": svg("Decode, ms per replay", dec, " ms", text)}
+            charts = {"size": svg("Size (% of .osr)", size, text, 100),
+                      "encode": svg("Encode (ms per replay)", enc, text),
+                      "decode": svg("Decode (ms per replay)", dec, text)}
             for what, body in charts.items():
                 open(os.path.join(out_dir, f"{mode}_{what}_{theme}.svg"), "w", encoding="utf-8", newline="\n").write(body)
 
