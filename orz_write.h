@@ -54,7 +54,8 @@ inline void write_verbatim(orz_state& state);
 inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 
 	// degenerate cases could exist, if the .orz frame stream is larger than the input LZMA stream, fall back to verbatim
-	if (!(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim)) {
+	// (an encode from frames has no LZMA stream to fall back on)
+	if (!(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim) && state.lzma.size()) {
 
 		for (const auto& c : state.file.container)
 			if (c.tag == orz_tag::frames && c.data.size() >= state.lzma.size())
@@ -402,6 +403,82 @@ bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state)
 			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
 
 			encode_replay_data(h.replay_data, state);
+
+		}
+
+	} catch (const std::exception&) {
+		state.output.clear();
+	}
+
+	out = std::move(state.output);
+
+	return !out.empty();
+}
+
+bool osr_frames_to_orz(std::span<const u8> osr, std::span<const _osr_frame> frames, std::vector<u8>& out, orz_state& state) {
+
+	no_FMA_check();
+
+	try {
+
+		state.reset_volatile();
+
+		const u32 compression_priority{ (state.options & ENCODE_COMPRESSION_PRIORITY_MASK) >> 3 };
+
+		_osr_header h{};
+
+		if (compression_priority != 3 && frames.size() <= ORZ_MAX_FRAMES && read_osr_header(osr, h) && h.replay_data.empty()) {
+
+			state.osr_header.assign(h.before_life.begin(), h.before_life.end());
+			state.after_life.assign(h.after_life.begin(), h.after_life.end());
+			state.tail.assign(h.tail.begin(), h.tail.end());
+			state.life = std::move(h.life);
+
+			state.header_rate = h.rate;
+
+			state.file.version = ORZ_VERSION;
+			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
+			state.file.encode_info |= compression_priority << 6;
+			state.file.encode_info |= ORZ_ENCODE_INFO::trailing_comma;
+
+			_osr replay_stream(frames.begin(), frames.end());
+
+			const float x_limit{ h.mode == e_mode::mania ? 16777216.f : 131072.f };
+
+			bool in_range{ true };
+
+			for (auto& f : replay_stream) {
+
+				in_range &= std::abs(f.x) <= x_limit && std::abs(f.y) <= 131072.f; // catches NaN too
+
+				// each coordinate as its 7 digit text reads back
+				f.x = dotnet::g7_float(f.x);
+				f.y = dotnet::g7_float(f.y);
+
+			}
+
+			if (in_range) {
+
+				state.input = replay_stream;
+
+				state.seed = {};
+
+				if (replay_stream.size()) {
+
+					const auto& b{ replay_stream.back() };
+
+					if (b.delta == -12345 && b.x == 0.f && b.y == 0.f) {
+
+						state.seed = { true, b.keys };
+						replay_stream.pop_back();
+
+					}
+
+				}
+
+				encode_replay(replay_stream, state);
+
+			}
 
 		}
 

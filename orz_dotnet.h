@@ -348,6 +348,17 @@ namespace dotnet {
 		return layout_digits(d, n, e, out);
 	}
 
+	// the float osu!stable reads back from v's 7 digit text: what a replay's frames are once written and read
+	inline float g7_float(float v) {
+
+		if (!std::isfinite(v))
+			return v;
+
+		const auto [m, e] { digits7(v) };
+
+		return m == 0 ? 0.f : orz_decimal::to_float(m, e - 6);
+	}
+
 	// osu!lazers shortest digit round-trip
 	inline char* to_string_shortest(float v, char* out) {
 
